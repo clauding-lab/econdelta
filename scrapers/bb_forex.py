@@ -11,6 +11,7 @@ from pathlib import Path
 
 from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright
+from playwright_stealth import Stealth
 
 from utils.anomaly import check_threshold, load_thresholds
 from utils.notifier import notify
@@ -29,33 +30,62 @@ class ParseError(Exception):
     """Raised when page HTML does not match the expected structure."""
 
 
-def fetch_rendered_html(url: str, timeout_ms: int = 30000) -> str:
-    """Launch Chromium headless, wait for networkidle, return page HTML.
+def fetch_rendered_html(
+    url: str,
+    timeout_ms: int = 45000,
+    wait_for_selector: str | None = None,
+) -> str:
+    """Launch stealth Chromium, pass the Radware bot challenge, return page HTML.
 
-    Falls back to domcontentloaded + 5 s pause if networkidle times out,
-    which is necessary for the BB reserves page that never fires networkidle.
+    Strategy:
+      1. Launch headless Chromium with playwright-stealth patches
+         (navigator.webdriver removed, plugins/languages/platform spoofed, etc.)
+      2. Navigate via domcontentloaded (the challenge page itself fires
+         domcontentloaded; we let JS run afterwards to solve the challenge)
+      3. Optionally wait for a specific selector to verify the real page
+         has loaded (bypassing the challenge page)
+      4. If the selector never appears, reload once — challenge cookies
+         set on first visit typically let the second visit through
+      5. Fall back to raw content() if no selector is provided
     """
+    stealth = Stealth()
     with sync_playwright() as pw:
-        browser = pw.chromium.launch(headless=True)
+        browser = pw.chromium.launch(
+            headless=True,
+            args=[
+                "--disable-blink-features=AutomationControlled",
+                "--disable-features=IsolateOrigins,site-per-process",
+            ],
+        )
         context = browser.new_context(
             user_agent=(
                 "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
                 "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0 Safari/537.36"
             ),
-            viewport={"width": 1280, "height": 800},
+            viewport={"width": 1440, "height": 900},
             locale="en-US",
+            timezone_id="Asia/Dhaka",
         )
         page = context.new_page()
+        stealth.apply_stealth_sync(page)
+
         try:
-            try:
-                page.goto(url, wait_until="networkidle", timeout=timeout_ms)
-            except Exception:
-                # networkidle timed out — fall back to domcontentloaded + delay
-                logger.warning(
-                    "networkidle timed out for %s — retrying with domcontentloaded", url
-                )
-                page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
-                page.wait_for_timeout(5000)
+            page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+            # Let challenge JS run; 10 s is enough for Radware TSPD
+            page.wait_for_timeout(10000)
+
+            if wait_for_selector is not None:
+                try:
+                    page.wait_for_selector(wait_for_selector, timeout=15000)
+                except Exception:
+                    logger.warning(
+                        "selector %s not found on first load — reloading (challenge cookies should now be set)",
+                        wait_for_selector,
+                    )
+                    page.reload(wait_until="domcontentloaded", timeout=timeout_ms)
+                    page.wait_for_timeout(5000)
+                    page.wait_for_selector(wait_for_selector, timeout=20000)
+
             html = page.content()
         finally:
             browser.close()
@@ -324,12 +354,16 @@ def main() -> int:
 
     try:
         logger.info("Fetching exchange rates from %s", rates_url)
-        rates_html = fetch_rendered_html(rates_url)
+        rates_html = fetch_rendered_html(
+            rates_url, wait_for_selector="section.content table"
+        )
         rates = parse_exchange_rates(rates_html)
         rates = rates.model_copy(update={"source_url": rates_url})
 
         logger.info("Fetching reserves from %s", reserves_url)
-        reserves_html = fetch_rendered_html(reserves_url)
+        reserves_html = fetch_rendered_html(
+            reserves_url, wait_for_selector="table#sortableTable"
+        )
         reserves = parse_reserves(reserves_html)
         reserves = reserves.model_copy(update={"source_url": reserves_url})
     except (ParseError, Exception) as e:

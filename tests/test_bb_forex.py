@@ -290,7 +290,7 @@ RESERVES_HTML = _read_fixture("bb_forex_reserves.html")
 def mock_fetch():
     """Patch fetch_rendered_html to return fixture HTML for both URLs."""
 
-    def side_effect(url: str, timeout_ms: int = 30000) -> str:
+    def side_effect(url: str, *args, **kwargs) -> str:
         if "exchangerate" in url:
             return RATES_HTML
         if "intreserve" in url:
