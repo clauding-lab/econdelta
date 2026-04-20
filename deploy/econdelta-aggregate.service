@@ -1,0 +1,37 @@
+[Unit]
+Description=EconDelta — Aggregate latest data across scrapers
+Documentation=https://github.com/clauding-lab/econdelta
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=adnan
+Group=adnan
+WorkingDirectory=/home/adnan/Projects/clauding-lab/econdelta
+EnvironmentFile=/etc/econdelta.env
+ExecStart=/home/adnan/Projects/clauding-lab/econdelta/.venv/bin/python -m aggregate_latest
+
+# Resource limits — aggregator is light
+MemoryMax=250M
+MemoryHigh=200M
+CPUQuota=50%
+TasksMax=64
+
+# Hardening
+PrivateTmp=true
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/adnan/Projects/clauding-lab/econdelta/data /home/adnan/Projects/clauding-lab/econdelta/logs
+
+# Timeouts
+TimeoutStartSec=30
+
+# Logging — systemd journal + append to file
+StandardOutput=append:/home/adnan/Projects/clauding-lab/econdelta/logs/aggregate-systemd.log
+StandardError=append:/home/adnan/Projects/clauding-lab/econdelta/logs/aggregate-systemd.log
+SyslogIdentifier=econdelta-aggregate
+
+[Install]
+WantedBy=multi-user.target

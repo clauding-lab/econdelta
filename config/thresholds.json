@@ -1,0 +1,20 @@
+{
+  "_meta": {
+    "description": "Per-metric anomaly thresholds as fractional daily change. >0.10 = 10%. If a scraped value deviates from previous by more than threshold, write is SKIPPED and Discord alert fires.",
+    "tune_after": "2 weeks of live data",
+    "schema_version": "1.0"
+  },
+  "dsex": 0.05,
+  "ds30": 0.05,
+  "dses": 0.05,
+  "usd_bdt_mid": 0.02,
+  "usd_bdt_buy": 0.02,
+  "usd_bdt_sell": 0.02,
+  "eur_bdt": 0.03,
+  "gbp_bdt": 0.03,
+  "gross_reserves_usd_bn": 0.03,
+  "brent_crude": 0.08,
+  "wti_crude": 0.08,
+  "gold": 0.06,
+  "palm_oil": 0.10
+}

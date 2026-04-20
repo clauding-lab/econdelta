@@ -1,0 +1,17 @@
+{
+  "_meta": {
+    "country": "Bangladesh",
+    "year": 2026,
+    "last_reviewed": "2026-04-20",
+    "note": "Religious holidays (Eid-ul-Fitr, Eid-ul-Adha, Durga Puja) depend on moon sighting. Update annually. Verify against DSE trading calendar."
+  },
+  "holidays": [
+    { "date": "2026-01-01", "name": "New Year's Day" },
+    { "date": "2026-02-21", "name": "International Mother Language Day" },
+    { "date": "2026-03-26", "name": "Independence Day" },
+    { "date": "2026-05-01", "name": "May Day (International Workers Day)" },
+    { "date": "2026-08-15", "name": "National Mourning Day" },
+    { "date": "2026-12-16", "name": "Victory Day" },
+    { "date": "2026-12-25", "name": "Christmas Day" }
+  ]
+}

@@ -1,0 +1,48 @@
+{
+  "schema_version": "1.0",
+  "last_audited": "2026-04-20",
+  "auditor": "phase-0-subagent",
+  "sources": {
+    "bb_exchange_rates": {
+      "url": "https://www.bb.org.bd/en/index.php/econdata/exchangerate",
+      "method": "POST",
+      "renders": "js",
+      "selector": "section.content table:first-of-type (USD/BDT bid/ask/WAR) + table:nth-of-type(2) (cross rates: EUR, GBP, AUD, JPY, CAD, SEK, SGD, CNH, INR, LKR)",
+      "fields_available": ["usd_bdt_mid", "usd_bdt_buy", "usd_bdt_sell", "eur_bdt", "gbp_bdt"],
+      "robots_allowed": null,
+      "tos_concern": "warn",
+      "notes": "robots.txt unreachable during audit (CAPTCHA on all HTTP fetches). Page loads via Playwright: data IS present in DOM after JS execution. Table 0 has USD bid/ask/WAR (no distinct mid — WAR ≈ mid), Table 1 has EUR/GBP cross rates. Form #search-form POSTs to same URL with a datepicker date field (class: datepicker-here) to query historical data; current-day data loads without form submission. No stable id/class on tables — selector must use section.content table:nth-of-type(1) and section.content table:nth-of-type(2). Playwright required because plain HTTP GET returns CAPTCHA page."
+    },
+    "bb_forex_reserves": {
+      "url": "https://www.bb.org.bd/en/index.php/econdata/intreserve",
+      "method": "POST",
+      "renders": "js",
+      "selector": "table#sortableTable",
+      "fields_available": ["gross_reserves_usd_bn", "bpm6_reserves_usd_bn", "reserves_date"],
+      "update_frequency": "monthly",
+      "robots_allowed": null,
+      "tos_concern": "warn",
+      "notes": "robots.txt unreachable during audit (CAPTCHA on HTTP). Page loads cleanly via Playwright. Table id='sortableTable' contains Period / Gross / BPM6 columns in million USD. Latest data: March 2026 = 34116.6m gross, 29501.2m BPM6. Updated monthly. Import cover months NOT present on this page — not published here. Form POSTs period=monthly|yearly to same URL; default page load already shows monthly series. Playwright required."
+    },
+    "dse_market_summary": {
+      "url": "https://www.dse.com.bd/market-statistics.php",
+      "method": "GET",
+      "renders": "static",
+      "selector": "table > tbody > tr > td > code (plain-text preformatted block inside first <code> element)",
+      "fields_available": ["dsex", "ds30", "dses", "turnover_crore", "trades", "advancing", "declining", "unchanged"],
+      "robots_allowed": null,
+      "tos_concern": "warn",
+      "notes": "robots.txt returned 404. DSE terms page at /terms-of-use.php and /terms_condition.php both returned 404 — no ToS located during audit; flagged as warn (not blocker). Data is fully static HTML: a <code> element inside a <table><tbody><tr><td> contains preformatted plaintext with all market stats. DSEX/DS30/DSES index values are on the homepage (dse.com.bd/) as static HTML (confirmed: DSEX 5232.49, DSES 1059.70, DS30 1980.01). The market-statistics.php page holds advancing/declining/unchanged + trades + turnover. Turnover on page is in Tk (not crore) — 8247602308.40 Tk = 824.76 crore approx. Index values come from homepage, not market-statistics.php. Recommend scraping homepage for index levels + market-statistics.php for advancers/decliners. No JS rendering needed — requests + BeautifulSoup sufficient."
+    },
+    "commodity_prices": {
+      "provider": "yfinance",
+      "tickers": {
+        "brent": "BZ=F",
+        "wti": "CL=F",
+        "gold": "GC=F",
+        "palm_oil": "FCPO.KL"
+      },
+      "notes": "yfinance is unofficial but free, widely used, and requires no API key. Alpha Vantage free tier (25 calls/day) is an alternative but adds key-management overhead and a tighter rate limit. FCPO.KL is Bursa Malaysia crude palm oil futures — the most liquid palm oil contract available via yfinance. KPO=F (CME) has thinner liquidity; FCPO.KL preferred. Fallback = Alpha Vantage commodities endpoint if yfinance access degrades."
+    }
+  }
+}

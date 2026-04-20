@@ -1,0 +1,11 @@
+[Unit]
+Description=Run EconDelta commodity scraper daily at 00:08 UTC (06:08 BDT)
+Requires=econdelta-commodity.service
+
+[Timer]
+OnCalendar=*-*-* 00:08:00 UTC
+Persistent=true
+RandomizedDelaySec=60
+
+[Install]
+WantedBy=timers.target

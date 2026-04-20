@@ -1,0 +1,31 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+.pytest_cache/
+.coverage
+htmlcov/
+*.egg-info/
+dist/
+build/
+.env
+
+# Data and log snapshots — keep only .gitkeep sentinels
+data/*/
+logs/*/
+data/latest.json
+!data/.gitkeep
+!logs/.gitkeep
+!data/*/.gitkeep
+!logs/*/.gitkeep
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# macOS
+.DS_Store

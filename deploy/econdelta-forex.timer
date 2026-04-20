@@ -1,0 +1,11 @@
+[Unit]
+Description=Run EconDelta forex scraper daily at 00:05 UTC (06:05 BDT)
+Requires=econdelta-forex.service
+
+[Timer]
+OnCalendar=*-*-* 00:05:00 UTC
+Persistent=true
+RandomizedDelaySec=60
+
+[Install]
+WantedBy=timers.target

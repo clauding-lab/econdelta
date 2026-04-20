@@ -1,0 +1,37 @@
+[Unit]
+Description=EconDelta — Commodity prices scraper
+Documentation=https://github.com/clauding-lab/econdelta
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=adnan
+Group=adnan
+WorkingDirectory=/home/adnan/Projects/clauding-lab/econdelta
+EnvironmentFile=/etc/econdelta.env
+ExecStart=/home/adnan/Projects/clauding-lab/econdelta/.venv/bin/python -m scrapers.commodity_prices
+
+# Resource limits to protect Notifyr and Mission Control on the same VPS
+MemoryMax=500M
+MemoryHigh=400M
+CPUQuota=50%
+TasksMax=64
+
+# Hardening
+PrivateTmp=true
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/adnan/Projects/clauding-lab/econdelta/data /home/adnan/Projects/clauding-lab/econdelta/logs
+
+# Timeouts
+TimeoutStartSec=120
+
+# Logging — systemd journal + append to file
+StandardOutput=append:/home/adnan/Projects/clauding-lab/econdelta/logs/commodity_prices-systemd.log
+StandardError=append:/home/adnan/Projects/clauding-lab/econdelta/logs/commodity_prices-systemd.log
+SyslogIdentifier=econdelta-commodity
+
+[Install]
+WantedBy=multi-user.target

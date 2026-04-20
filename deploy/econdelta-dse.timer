@@ -1,0 +1,11 @@
+[Unit]
+Description=Run EconDelta DSE scraper daily at 10:30 UTC (16:30 BDT)
+Requires=econdelta-dse.service
+
+[Timer]
+OnCalendar=*-*-* 10:30:00 UTC
+Persistent=true
+RandomizedDelaySec=60
+
+[Install]
+WantedBy=timers.target
