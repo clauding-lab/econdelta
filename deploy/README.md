@@ -4,10 +4,10 @@
 
 ```bash
 # On VPS, as adnan:
-cd ~/Projects/clauding-lab
+cd ~
 git clone git@github.com:clauding-lab/econdelta.git
 cd econdelta
-python3.11 -m venv .venv
+python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 python -m playwright install chromium
@@ -35,7 +35,7 @@ cat data/bb_forex/$(date -u +%F).json
 ## Update deployment
 
 ```bash
-cd ~/Projects/clauding-lab/econdelta
+cd ~/econdelta
 git pull
 source .venv/bin/activate && pip install -r requirements.txt   # if requirements changed
 sudo bash deploy/install.sh   # re-install units if any changed

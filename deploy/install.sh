@@ -5,7 +5,7 @@
 
 set -euo pipefail
 
-REPO_ROOT="${REPO_ROOT:-/home/adnan/Projects/clauding-lab/econdelta}"
+REPO_ROOT="${REPO_ROOT:-/home/adnan/econdelta}"
 ENV_FILE="/etc/econdelta.env"
 SERVICE_USER="${SERVICE_USER:-adnan}"
 
@@ -21,9 +21,18 @@ fi
 
 if [[ ! -x "$REPO_ROOT/.venv/bin/python" ]]; then
   echo "ERROR: venv not found at $REPO_ROOT/.venv — create it first:" >&2
-  echo "       python3.11 -m venv $REPO_ROOT/.venv" >&2
+  echo "       python3 -m venv $REPO_ROOT/.venv   # requires Python 3.11+" >&2
   echo "       source $REPO_ROOT/.venv/bin/activate && pip install -r requirements.txt" >&2
   echo "       $REPO_ROOT/.venv/bin/python -m playwright install chromium" >&2
+  exit 1
+fi
+
+# Version check: Python must be 3.11+
+PY_VERSION=$("$REPO_ROOT/.venv/bin/python" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+PY_MAJOR=$(echo "$PY_VERSION" | cut -d. -f1)
+PY_MINOR=$(echo "$PY_VERSION" | cut -d. -f2)
+if [[ "$PY_MAJOR" -lt 3 ]] || { [[ "$PY_MAJOR" -eq 3 ]] && [[ "$PY_MINOR" -lt 11 ]]; }; then
+  echo "ERROR: venv Python is $PY_VERSION — requires 3.11+." >&2
   exit 1
 fi
 

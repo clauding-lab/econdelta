@@ -8,9 +8,9 @@ Wants=network-online.target
 Type=oneshot
 User=adnan
 Group=adnan
-WorkingDirectory=/home/adnan/Projects/clauding-lab/econdelta
+WorkingDirectory=/home/adnan/econdelta
 EnvironmentFile=/etc/econdelta.env
-ExecStart=/home/adnan/Projects/clauding-lab/econdelta/.venv/bin/python -m scrapers.bb_forex
+ExecStart=/home/adnan/econdelta/.venv/bin/python -m scrapers.bb_forex
 
 # Resource limits to protect Notifyr and Mission Control on the same VPS
 MemoryMax=500M
@@ -23,14 +23,14 @@ PrivateTmp=true
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=/home/adnan/Projects/clauding-lab/econdelta/data /home/adnan/Projects/clauding-lab/econdelta/logs
+ReadWritePaths=/home/adnan/econdelta/data /home/adnan/econdelta/logs
 
 # Timeouts
 TimeoutStartSec=300
 
 # Logging — systemd journal + append to file
-StandardOutput=append:/home/adnan/Projects/clauding-lab/econdelta/logs/bb_forex-systemd.log
-StandardError=append:/home/adnan/Projects/clauding-lab/econdelta/logs/bb_forex-systemd.log
+StandardOutput=append:/home/adnan/econdelta/logs/bb_forex-systemd.log
+StandardError=append:/home/adnan/econdelta/logs/bb_forex-systemd.log
 SyslogIdentifier=econdelta-forex
 
 [Install]
