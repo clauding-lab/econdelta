@@ -24,6 +24,7 @@
 
 - `holidays_2026.json` (~204 tok)
 - `sources.json` — Declares on (~1120 tok)
+- `sources-v2.json` — Backlog: 48-indicator source map from HoSME xlsx; drives EconDelta v2 scraper expansion (monthly BB PDFs, BBS, MoF, gsom HTML). Status: backlog (~5800 tok)
 - `thresholds.json` (~161 tok)
 
 ## data/

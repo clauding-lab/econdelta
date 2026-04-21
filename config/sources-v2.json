@@ -1,0 +1,742 @@
+{
+  "version": "2.0",
+  "status": "backlog",
+  "last_updated": "2026-04-21",
+  "source": "For HoSME.xlsx (manual source inventory by adnan)",
+  "description": "Bangladesh economic indicator source map — primary/alternate/fallback URLs with exact parse instructions. Drives EconDelta v2 scraper expansion beyond the MVP 3 sources (bb_forex/dse_market/commodity_prices).",
+  "scraping_policy": "Option 1 (laptop+Starlink+stealth for daily) + Option 8 (monthly PDF fetch for publications). Option 4 (residential proxy) to be evaluated post Brief-migration Phase 4.",
+  "top_publications": {
+    "bb_major_economic_indicators": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
+    "bb_monthly_economic_indicators": "https://www.bb.org.bd/en/index.php/publication/publictn/5/27",
+    "bb_govt_securities_annex": "https://www.bb.org.bd/en/index.php/publication/publictn/3/58",
+    "bbs_inflation": "https://bbs.gov.bd/pages/static-pages/6922de7a933eb65569e1ae8f",
+    "mof_budget": "https://mof.gov.bd/pages/static-pages/6940329635ce18e1c055ef1a"
+  },
+  "notes": [
+    "BOP, Revenue Collection, and Bank Borrowing data: publications lag; prefer news sources.",
+    "Fetching monthly PDFs once per month tolerates Radware WAF; daily scraping needs BD residential IP."
+  ],
+  "indicators": [
+    {
+      "id": "point_to_point_inflation",
+      "name": "Point to Point Inflation",
+      "cadence": "monthly",
+      "primary": {
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
+        "type": "pdf",
+        "task": "Go to page 15 of the doc, first table"
+      },
+      "alternate": {
+        "url": "https://bbs.gov.bd/pages/static-pages/6922de7a933eb65569e1ae8f",
+        "type": "pdf",
+        "task": "Go to the latest available PDF,  Page 13 of the doc, table 1.1"
+      },
+      "fallback": {
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/5/27",
+        "type": "pdf",
+        "task": "Go to latest available PDF, Component 14"
+      }
+    },
+    {
+      "id": "general_inflation",
+      "name": "General Inflation",
+      "cadence": "monthly",
+      "primary": {
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
+        "type": "pdf",
+        "task": "Go to page 15 of the doc, first table"
+      },
+      "alternate": {
+        "url": "https://bbs.gov.bd/pages/static-pages/6922de7a933eb65569e1ae8f",
+        "type": "pdf",
+        "task": "Go to the latest available PDF,  Page 13 of the doc, table 1.1"
+      },
+      "fallback": {
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/5/27",
+        "type": "pdf",
+        "task": "Go to latest available PDF, Component 14"
+      }
+    },
+    {
+      "id": "food_inflation",
+      "name": "Food Inflation",
+      "cadence": "monthly",
+      "primary": {
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
+        "type": "pdf",
+        "task": "Go to page 15 of the doc, first table"
+      },
+      "alternate": {
+        "url": "https://bbs.gov.bd/pages/static-pages/6922de7a933eb65569e1ae8f",
+        "type": "pdf",
+        "task": "Go to the latest available PDF,  Page 13 of the doc, table 1.1"
+      },
+      "fallback": null
+    },
+    {
+      "id": "non_food_inflation",
+      "name": "Non-Food Inflation",
+      "cadence": "monthly",
+      "primary": {
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
+        "type": "pdf",
+        "task": "Go to page 15 of the doc, first table"
+      },
+      "alternate": {
+        "url": "https://bbs.gov.bd/pages/static-pages/6922de7a933eb65569e1ae8f",
+        "type": "pdf",
+        "task": "Go to the latest available PDF,  Page 13 of the doc, table 1.1"
+      },
+      "fallback": null
+    },
+    {
+      "id": "budget_opex_of_the_fy_vs_utilization",
+      "name": "Budget OpEx of the FY vs Utilization",
+      "cadence": "fiscal_year",
+      "primary": {
+        "type": "news",
+        "note": "Better to source from news"
+      },
+      "alternate": {
+        "url": "https://mof.gov.bd/pages/static-pages/6940329635ce18e1c055ef1a",
+        "type": "pdf",
+        "task": "Pick latest PDF, Page 5 of doc, table 1, last row"
+      },
+      "fallback": null
+    },
+    {
+      "id": "budget_adpex_of_the_fy_vs_utilization",
+      "name": "Budget ADPEx of the FY vs Utilization",
+      "cadence": "fiscal_year",
+      "primary": {
+        "type": "news",
+        "note": "Better to source from news"
+      },
+      "alternate": {
+        "url": "https://mof.gov.bd/pages/static-pages/6940329635ce18e1c055ef1a",
+        "type": "pdf",
+        "task": "Page 8 of doc, table 3, last row"
+      },
+      "fallback": null
+    },
+    {
+      "id": "tax_revenue",
+      "name": "Tax Revenue",
+      "cadence": "monthly",
+      "primary": {
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/5/27",
+        "type": "pdf",
+        "task": "Go to latest available PDF, Component 9"
+      },
+      "alternate": {
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
+        "type": "pdf",
+        "task": "Page 11 of doc, first table"
+      },
+      "fallback": {
+        "url": "https://mof.gov.bd/pages/static-pages/6940329635ce18e1c055ef1a",
+        "type": "pdf",
+        "task": "Page 9 of doc, table 4"
+      }
+    },
+    {
+      "id": "non_tax_revenue",
+      "name": "Non-Tax Revenue",
+      "cadence": "monthly",
+      "primary": {
+        "type": "news",
+        "note": "Better to source from news"
+      },
+      "alternate": {
+        "url": "https://mof.gov.bd/pages/static-pages/6940329635ce18e1c055ef1a",
+        "type": "pdf",
+        "task": "Page 9 of doc, table 4"
+      },
+      "fallback": null
+    },
+    {
+      "id": "total_revenue_budget_vs_actual",
+      "name": "Total Revenue Budget vs Actual",
+      "cadence": "monthly",
+      "primary": {
+        "type": "news",
+        "note": "Better to source from news"
+      },
+      "alternate": {
+        "url": "https://mof.gov.bd/pages/static-pages/6940329635ce18e1c055ef1a",
+        "type": "pdf",
+        "task": "Page 9 of doc, table 4"
+      },
+      "fallback": null
+    },
+    {
+      "id": "tax_gdp_ratio",
+      "name": "Tax-GDP Ratio",
+      "cadence": "quarterly",
+      "primary": {
+        "type": "news",
+        "note": "Better to source from news"
+      },
+      "alternate": {
+        "url": "https://mof.gov.bd/pages/static-pages/6940329635ce18e1c055ef1a",
+        "type": "pdf",
+        "task": "Page 9 of doc, table 4"
+      },
+      "fallback": null
+    },
+    {
+      "id": "rev_gdp_ratio",
+      "name": "Rev-GDP Ratio",
+      "cadence": "quarterly",
+      "primary": {
+        "type": "news",
+        "note": "Better to source from news"
+      },
+      "alternate": {
+        "url": "https://mof.gov.bd/pages/static-pages/6940329635ce18e1c055ef1a",
+        "type": "pdf",
+        "task": "Page 9 of doc, table 4"
+      },
+      "fallback": null
+    },
+    {
+      "id": "foreign_borrowing_for_budget_deficit",
+      "name": "Foreign Borrowing for Budget Deficit",
+      "cadence": "monthly",
+      "primary": {
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
+        "type": "pdf",
+        "task": "Page 14 of doc, first table"
+      },
+      "alternate": {
+        "url": "https://mof.gov.bd/pages/static-pages/6940329635ce18e1c055ef1a",
+        "type": "pdf",
+        "task": "Page 11 of doc, table 6"
+      },
+      "fallback": null
+    },
+    {
+      "id": "domestic_borrowing_for_bidget_deficit",
+      "name": "Domestic Borrowing for Bidget Deficit",
+      "cadence": "monthly",
+      "primary": {
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
+        "type": "pdf",
+        "task": "Page 14 of doc, first table"
+      },
+      "alternate": {
+        "url": "https://mof.gov.bd/pages/static-pages/6940329635ce18e1c055ef1a",
+        "type": "pdf",
+        "task": "Page 11 of doc, table 6"
+      },
+      "fallback": null
+    },
+    {
+      "id": "bank_borrowing_for_deficit_financing",
+      "name": "Bank Borrowing for Deficit Financing",
+      "cadence": "monthly",
+      "primary": {
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
+        "type": "pdf",
+        "task": "Page 14 of doc, first table"
+      },
+      "alternate": {
+        "url": "https://mof.gov.bd/pages/static-pages/6940329635ce18e1c055ef1a",
+        "type": "pdf",
+        "task": "Page 11 of doc, table 6"
+      },
+      "fallback": null
+    },
+    {
+      "id": "non_bank_borrowing_for_deficit_financing",
+      "name": "Non-bank borrowing for Deficit Financing",
+      "cadence": "monthly",
+      "primary": {
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
+        "type": "pdf",
+        "task": "Page 14 of doc, first table"
+      },
+      "alternate": {
+        "url": "https://mof.gov.bd/pages/static-pages/6940329635ce18e1c055ef1a",
+        "type": "pdf",
+        "task": "Page 11 of doc, table 6"
+      },
+      "fallback": null
+    },
+    {
+      "id": "treasury_bill_outstanding",
+      "name": "Treasury Bill Outstanding",
+      "cadence": "monthly",
+      "primary": {
+        "url": "https://gsom.bb.org.bd/mtm-bill.php",
+        "type": "html",
+        "task": "Last total of the page"
+      },
+      "alternate": {
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/58",
+        "type": "pdf",
+        "task": "Go to the latest available PDF, Annex 1, table component B1"
+      },
+      "fallback": null
+    },
+    {
+      "id": "treasury_bond_outstabnding",
+      "name": "Treasury Bond Outstabnding",
+      "cadence": "monthly",
+      "primary": {
+        "url": "https://gsom.bb.org.bd/mtm.php",
+        "type": "html",
+        "task": "Last total of the page"
+      },
+      "alternate": {
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/58",
+        "type": "pdf",
+        "task": "Go to the latest available PDF, Annex 1, table component B2"
+      },
+      "fallback": null
+    },
+    {
+      "id": "bill_bond_rates",
+      "name": "Bill/Bond Rates",
+      "cadence": "daily",
+      "primary": {
+        "url": "https://www.bb.org.bd/en/index.php/monetaryactivity/treasury",
+        "type": "html",
+        "task": "Cut off graph for bill, standard tenor graph for bonds"
+      },
+      "alternate": {
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
+        "type": "pdf",
+        "task": "Go to page 7 of the doc, first table"
+      },
+      "fallback": null
+    },
+    {
+      "id": "policy_rate_slf_sdf",
+      "name": "Policy Rate, SLF, SDF",
+      "cadence": "daily",
+      "primary": {
+        "url": "https://www.bb.org.bd/en/",
+        "type": "html",
+        "task": "last end of the webpage"
+      },
+      "alternate": {
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
+        "type": "pdf",
+        "task": "Go to page 7 of the doc, first table"
+      },
+      "fallback": null
+    },
+    {
+      "id": "call_money_rate",
+      "name": "Call money rate",
+      "cadence": "daily",
+      "primary": {
+        "url": "https://www.bb.org.bd/en/index.php/monetaryactivity/call_money_market",
+        "type": "html",
+        "task": "Rates everyday of 1D, 7D, 14D and 90D MM trades"
+      },
+      "alternate": {
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
+        "type": "pdf",
+        "task": "Go to page 7 of the doc, first table, Avg Call Rate"
+      },
+      "fallback": null
+    },
+    {
+      "id": "usd_bdt_exchange_rate",
+      "name": "USD/BDT Exchange Rate",
+      "cadence": "daily",
+      "primary": {
+        "url": "https://www.bb.org.bd/en/",
+        "type": "html",
+        "task": "last end of the webpage"
+      },
+      "alternate": {
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/5/27",
+        "type": "pdf",
+        "task": "Go to latest available PDF, Component 2"
+      },
+      "fallback": {
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
+        "type": "pdf",
+        "task": "Go to page 29 of the doc, first table"
+      }
+    },
+    {
+      "id": "fx_buy_sale_from_market",
+      "name": "FX Buy/Sale from Market",
+      "cadence": "monthly",
+      "primary": {
+        "type": "news",
+        "note": "Better to source from news"
+      },
+      "alternate": {
+        "url": "https://www.bb.org.bd/en/index.php/fxmarket/fx_auction_result",
+        "type": "html",
+        "task": "Accepted bid and WAR of EXR"
+      },
+      "fallback": null
+    },
+    {
+      "id": "gsec_auction",
+      "name": "GSEC Auction",
+      "cadence": "daily",
+      "primary": {
+        "url": "https://www.bb.org.bd/en/index.php/monetaryactivity/auc_calendar",
+        "type": "html",
+        "task": "Self explanatory"
+      },
+      "alternate": {
+        "url": "News FOR Special Auction",
+        "type": "html",
+        "task": null
+      },
+      "fallback": null
+    },
+    {
+      "id": "gsec_mautiry",
+      "name": "GSEC Mautiry",
+      "cadence": "monthly",
+      "primary": {
+        "url": "Own Data Hub",
+        "type": "html",
+        "task": null
+      },
+      "alternate": null,
+      "fallback": null
+    },
+    {
+      "id": "fx_reserve_gross_and_bpm6",
+      "name": "FX Reserve Gross and BPM6",
+      "cadence": "weekly",
+      "primary": {
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/5/27",
+        "type": "pdf",
+        "task": "Go to latest available PDF, Component 1"
+      },
+      "alternate": {
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
+        "type": "pdf",
+        "task": "Go to page 28 of the doc, first table"
+      },
+      "fallback": null
+    },
+    {
+      "id": "private_sector_credit",
+      "name": "Private Sector Credit",
+      "cadence": "monthly",
+      "primary": {
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/5/27",
+        "type": "pdf",
+        "task": "Go to latest available PDF, Component 12c"
+      },
+      "alternate": {
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
+        "type": "pdf",
+        "task": "Go to page 3 of the doc, first table"
+      },
+      "fallback": null
+    },
+    {
+      "id": "deposits_of_the_system",
+      "name": "Deposits of the system",
+      "cadence": "monthly",
+      "primary": {
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
+        "type": "pdf",
+        "task": "Go to page 3 of the doc, first table"
+      },
+      "alternate": null,
+      "fallback": null
+    },
+    {
+      "id": "currency_outside_bank",
+      "name": "Currency Outside Bank",
+      "cadence": "monthly",
+      "primary": {
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
+        "type": "pdf",
+        "task": "Go to page 3 of the doc, first table"
+      },
+      "alternate": null,
+      "fallback": null
+    },
+    {
+      "id": "broad_money",
+      "name": "Broad Money",
+      "cadence": "monthly",
+      "primary": {
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/5/27",
+        "type": "pdf",
+        "task": "Go to latest available PDF, Component 11a"
+      },
+      "alternate": {
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
+        "type": "pdf",
+        "task": "Go to page 3 of the doc, first table"
+      },
+      "fallback": null
+    },
+    {
+      "id": "reserve_money",
+      "name": "Reserve Money",
+      "cadence": "weekly",
+      "primary": {
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/5/27",
+        "type": "pdf",
+        "task": "Go to latest available PDF, Component 11b"
+      },
+      "alternate": {
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
+        "type": "pdf",
+        "task": "Go to page 4 of the doc, first table"
+      },
+      "fallback": null
+    },
+    {
+      "id": "deposits_held_with_bb_crr",
+      "name": "Deposits held with BB (CRR)",
+      "cadence": "monthly",
+      "primary": {
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
+        "type": "pdf",
+        "task": "Go to page 4 of the doc, first table"
+      },
+      "alternate": null,
+      "fallback": null
+    },
+    {
+      "id": "money_multiplier",
+      "name": "Money Multiplier",
+      "cadence": "monthly",
+      "primary": {
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
+        "type": "pdf",
+        "task": "Go to page 4 of the doc, first table"
+      },
+      "alternate": null,
+      "fallback": null
+    },
+    {
+      "id": "excess_liquid_asset_total_minimum",
+      "name": "Excess Liquid Asset (Total-Minimum)",
+      "cadence": "monthly",
+      "primary": {
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
+        "type": "pdf",
+        "task": "Go to page 5 of the doc, first table, last two columns"
+      },
+      "alternate": null,
+      "fallback": null
+    },
+    {
+      "id": "nsc_outstanding",
+      "name": "NSC outstanding",
+      "cadence": "monthly",
+      "primary": {
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/5/27",
+        "type": "pdf",
+        "task": "Go to latest available PDF, Component 10b"
+      },
+      "alternate": {
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
+        "type": "pdf",
+        "task": "Go to page 12 of the doc, second table"
+      },
+      "fallback": null
+    },
+    {
+      "id": "monthly_export",
+      "name": "Monthly Export",
+      "cadence": "monthly",
+      "primary": {
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/5/27",
+        "type": "pdf",
+        "task": "Go to latest available PDF, Component 7a"
+      },
+      "alternate": {
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
+        "type": "pdf",
+        "task": "Go to page 22 of the doc, first table"
+      },
+      "fallback": null
+    },
+    {
+      "id": "fy_export",
+      "name": "FY Export",
+      "cadence": "fiscal_year",
+      "primary": {
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/5/27",
+        "type": "pdf",
+        "task": "Go to latest available PDF, Component 7a"
+      },
+      "alternate": null,
+      "fallback": null
+    },
+    {
+      "id": "categorywise_export",
+      "name": "Categorywise Export",
+      "cadence": "fiscal_year",
+      "primary": {
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
+        "type": "pdf",
+        "task": "Go to page 22 of the doc, second table"
+      },
+      "alternate": null,
+      "fallback": null
+    },
+    {
+      "id": "monthly_import",
+      "name": "Monthly Import",
+      "cadence": "monthly",
+      "primary": {
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/5/27",
+        "type": "pdf",
+        "task": "Go to latest available PDF, Component 6b"
+      },
+      "alternate": null,
+      "fallback": null
+    },
+    {
+      "id": "monthly_import_lc_opening",
+      "name": "Monthly Import LC Opening",
+      "cadence": "monthly",
+      "primary": {
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
+        "type": "pdf",
+        "task": "Go to page 23 of the doc, first table"
+      },
+      "alternate": null,
+      "fallback": null
+    },
+    {
+      "id": "monthly_import_lc_settlement",
+      "name": "Monthly Import LC Settlement",
+      "cadence": "monthly",
+      "primary": {
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
+        "type": "pdf",
+        "task": "Go to page 23 of the doc, first table"
+      },
+      "alternate": null,
+      "fallback": null
+    },
+    {
+      "id": "fy_import_lc",
+      "name": "FY Import LC",
+      "cadence": "fiscal_year",
+      "primary": {
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/5/27",
+        "type": "pdf",
+        "task": "Go to latest available PDF, Component 13"
+      },
+      "alternate": {
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
+        "type": "pdf",
+        "task": null
+      },
+      "fallback": null
+    },
+    {
+      "id": "categorywise_fy_import_breakdown",
+      "name": "Categorywise FY Import Breakdown",
+      "cadence": "fiscal_year",
+      "primary": {
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
+        "type": "pdf",
+        "task": "Go to latest available PDF, Component 13"
+      },
+      "alternate": {
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
+        "type": "pdf",
+        "task": "Go to page 24 of the doc, first table"
+      },
+      "fallback": null
+    },
+    {
+      "id": "monthly_remittance",
+      "name": "Monthly Remittance",
+      "cadence": "monthly",
+      "primary": {
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/5/27",
+        "type": "pdf",
+        "task": "Go to latest available PDF, Component 5a"
+      },
+      "alternate": {
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
+        "type": "pdf",
+        "task": "Go to page 26 of the doc, first table"
+      },
+      "fallback": null
+    },
+    {
+      "id": "fy_remittance",
+      "name": "FY Remittance",
+      "cadence": "fiscal_year",
+      "primary": {
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/5/27",
+        "type": "pdf",
+        "task": "Go to latest available PDF, Component 5a"
+      },
+      "alternate": {
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
+        "type": "pdf",
+        "task": "Go to page 26 of the doc, first table"
+      },
+      "fallback": null
+    },
+    {
+      "id": "remittance_by_country",
+      "name": "Remittance by country",
+      "cadence": "monthly",
+      "primary": {
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
+        "type": "pdf",
+        "task": "Go to page 27 of the doc, first table"
+      },
+      "alternate": null,
+      "fallback": null
+    },
+    {
+      "id": "bop_summary",
+      "name": "BOP Summary",
+      "cadence": "monthly",
+      "primary": {
+        "url": "https://www.bb.org.bd/en/index.php/econdata/bop",
+        "type": "html",
+        "task": "Entire Table"
+      },
+      "alternate": {
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
+        "type": "pdf",
+        "task": "Go to page 31 of the doc"
+      },
+      "fallback": null
+    },
+    {
+      "id": "interbank_repo_data",
+      "name": "Interbank Repo Data",
+      "cadence": "daily",
+      "primary": {
+        "url": "https://www.bb.org.bd/en/index.php/financialactivity/interbankrepo",
+        "type": "html",
+        "task": "Self explanatory"
+      },
+      "alternate": null,
+      "fallback": null
+    },
+    {
+      "id": "gdp",
+      "name": "GDP",
+      "cadence": "quarterly",
+      "primary": {
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/5/27",
+        "type": "pdf",
+        "task": "Go to latest available PDF, Component 19"
+      },
+      "alternate": null,
+      "fallback": null
+    }
+  ]
+}

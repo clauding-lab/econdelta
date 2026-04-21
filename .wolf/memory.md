@@ -16,3 +16,5 @@
 | 23:14 | BB Radware challenge started hitting laptop Starlink IP too (was rate-limit-free this morning). Scraper bot-check-failed with 0 tables in section.content | — | required stealth fix | ~0.5k tok |
 | 23:19 | Wired playwright-stealth into scrapers/bb_forex.py: Stealth().apply_stealth_sync(page), timezone_id="Asia/Dhaka", viewport 1440x900, disable-blink-features=AutomationControlled, wait_for_selector with reload-on-miss retry. Test mock updated to accept **kwargs | scrapers/bb_forex.py, tests/test_bb_forex.py | 122/122 tests green; live fetch successful via stealth (USD 122.70, reserves 34.12bn) | ~2k tok |
 | 23:24 | End-to-end verified: laptop launchctl start → scraper (stealth) → rsync to VPS → ssh trigger aggregator → latest.json refreshed. Both bb_forex and dse_market launchd jobs operational | logs/launchd-{bb_forex,dse_market}.log | VPS latest.json: all 3 sources status=ok, bb_forex age=0.0h | ~1k tok |
+
+| 16:25 | added config/sources-v2.json from HoSME xlsx (48 indicators, 30 monthly/7 FY/6 daily) | config/sources-v2.json | ok | ~5800 |
