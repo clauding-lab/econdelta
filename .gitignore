@@ -15,11 +15,18 @@ build/
 # Data and log snapshots — keep only .gitkeep sentinels
 data/*/
 logs/*/
+logs/*.log
+logs/*.stderr
+logs/*.stdout
 data/latest.json
 !data/.gitkeep
 !logs/.gitkeep
 !data/*/.gitkeep
 !logs/*/.gitkeep
+
+# Graphify outputs
+.graphifyignore
+graphify-out/
 
 # IDE
 .idea/

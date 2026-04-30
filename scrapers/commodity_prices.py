@@ -27,7 +27,6 @@ COMMODITY_SPEC: dict[str, tuple[str, str, str, str]] = {
     "brent_crude": ("BZ=F", "USD", "barrel", "brent_crude"),
     "wti_crude":   ("CL=F", "USD", "barrel", "wti_crude"),
     "gold":        ("GC=F", "USD", "oz",     "gold"),
-    "palm_oil":    ("FCPO.KL", "MYR", "ton", "palm_oil"),
 }
 
 

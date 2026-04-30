@@ -107,7 +107,7 @@ class CommodityPrice(BaseModel):
 class CommoditySnapshot(BaseModel):
     """Full commodity prices scrape payload.
 
-    Keys for 'prices': brent_crude, wti_crude, gold, palm_oil
+    Keys for 'prices': brent_crude, wti_crude, gold
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)

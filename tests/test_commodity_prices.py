@@ -135,13 +135,12 @@ def _make_ticker_mock(last: float, prev: float) -> MagicMock:
 def test_main_writes_snapshot_with_all_commodities(
     mock_ticker_cls, mock_notify, mock_write, mock_prev
 ):
-    """All 4 tickers succeed -> snapshot written with 4 prices, exit 0."""
+    """All 3 tickers succeed -> snapshot written with 3 prices, exit 0."""
     # Arrange: each ticker returns a distinct price
     prices = {
         "BZ=F": (85.0, 84.0),
         "CL=F": (80.0, 79.0),
         "GC=F": (2300.0, 2290.0),
-        "FCPO.KL": (3800.0, 3750.0),
     }
 
     def _side_effect(ticker_sym):
@@ -158,11 +157,10 @@ def test_main_writes_snapshot_with_all_commodities(
     assert result == 0
     mock_write.assert_called_once()
     snapshot_arg: CommoditySnapshot = mock_write.call_args[0][0]
-    assert len(snapshot_arg.prices) == 4
+    assert len(snapshot_arg.prices) == 3
     assert "brent_crude" in snapshot_arg.prices
     assert "wti_crude" in snapshot_arg.prices
     assert "gold" in snapshot_arg.prices
-    assert "palm_oil" in snapshot_arg.prices
     mock_notify.assert_not_called()
 
 
@@ -173,13 +171,13 @@ def test_main_writes_snapshot_with_all_commodities(
 def test_main_partial_fetch_still_succeeds_with_warning(
     mock_ticker_cls, mock_notify, mock_write, mock_prev
 ):
-    """1 of 4 tickers fails -> snapshot written with 3 prices, exit 0, warning fired."""
+    """1 of 3 tickers fails -> snapshot written with 2 prices, exit 0, warning fired."""
     # Arrange
     call_count = {"n": 0}
 
     def _side_effect(ticker_sym):
         call_count["n"] += 1
-        if ticker_sym == "FCPO.KL":
+        if ticker_sym == "GC=F":
             # This ticker will fail
             bad = MagicMock()
             bad.fast_info = _FastInfoDict({})
@@ -197,8 +195,8 @@ def test_main_partial_fetch_still_succeeds_with_warning(
     assert result == 0
     mock_write.assert_called_once()
     snapshot_arg: CommoditySnapshot = mock_write.call_args[0][0]
-    assert len(snapshot_arg.prices) == 3
-    assert "palm_oil" not in snapshot_arg.prices
+    assert len(snapshot_arg.prices) == 2
+    assert "gold" not in snapshot_arg.prices
     # Warning should fire for the failed ticker
     mock_notify.assert_called_once()
     call_args = mock_notify.call_args[0]
@@ -212,7 +210,7 @@ def test_main_partial_fetch_still_succeeds_with_warning(
 def test_main_all_fetches_fail_exits_1(
     mock_ticker_cls, mock_notify, mock_write, mock_prev
 ):
-    """All 4 tickers fail -> exit 1, error notification, no write."""
+    """All 3 tickers fail -> exit 1, error notification, no write."""
     # Arrange
     def _fail(_ticker_sym):
         bad = MagicMock()
@@ -243,7 +241,6 @@ def test_main_anomaly_skips_write(mock_ticker_cls, mock_notify, mock_write, tmp_
         "brent_crude": CommodityPrice(price=50.0, prev_close=49.0, change_pct=0.02, currency="USD", unit="barrel"),
         "wti_crude": CommodityPrice(price=78.0, prev_close=77.0, change_pct=0.013, currency="USD", unit="barrel"),
         "gold": CommodityPrice(price=2300.0, prev_close=2290.0, change_pct=0.004, currency="USD", unit="oz"),
-        "palm_oil": CommodityPrice(price=3800.0, prev_close=3750.0, change_pct=0.013, currency="MYR", unit="ton"),
     }
     prev_snapshot = _make_snapshot(prev_prices)
 
@@ -253,7 +250,6 @@ def test_main_anomaly_skips_write(mock_ticker_cls, mock_notify, mock_write, tmp_
             "BZ=F": (60.0, 59.0),   # 20% jump from prev 50
             "CL=F": (79.0, 78.0),
             "GC=F": (2310.0, 2300.0),
-            "FCPO.KL": (3820.0, 3800.0),
         }
         last, prev = price_map[ticker_sym]
         return _make_ticker_mock(last, prev)

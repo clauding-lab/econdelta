@@ -39,10 +39,9 @@
       "tickers": {
         "brent": "BZ=F",
         "wti": "CL=F",
-        "gold": "GC=F",
-        "palm_oil": "FCPO.KL"
+        "gold": "GC=F"
       },
-      "notes": "yfinance is unofficial but free, widely used, and requires no API key. Alpha Vantage free tier (25 calls/day) is an alternative but adds key-management overhead and a tighter rate limit. FCPO.KL is Bursa Malaysia crude palm oil futures — the most liquid palm oil contract available via yfinance. KPO=F (CME) has thinner liquidity; FCPO.KL preferred. Fallback = Alpha Vantage commodities endpoint if yfinance access degrades."
+      "notes": "yfinance is unofficial but free, widely used, and requires no API key. Alpha Vantage free tier (25 calls/day) is an alternative but adds key-management overhead and a tighter rate limit. Palm oil (FCPO.KL) was excluded 2026-04-30 — Yahoo Finance returns 404 for the symbol and Bursa Malaysia data is no longer accessible via yfinance. Fallback = Alpha Vantage commodities endpoint if yfinance access degrades."
     }
   }
 }

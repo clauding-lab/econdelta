@@ -34,7 +34,7 @@ from utils.schema import (
 # Helpers / factories
 # ---------------------------------------------------------------------------
 
-_NOW = datetime(2026, 4, 20, 16, 0, 0, tzinfo=timezone.utc)
+_NOW = datetime.now(timezone.utc)
 
 
 def _forex_snapshot(scraped_at: datetime = _NOW) -> ForexSnapshot:
@@ -186,7 +186,7 @@ def test_compute_status_missing_when_none() -> None:
 
 def test_compute_status_handles_naive_scraped_at() -> None:
     """Snapshot with naive datetime (no tzinfo) should still compute correctly."""
-    naive_dt = datetime(2026, 4, 20, 15, 0, 0)  # 1 hour before _NOW, naive
+    naive_dt = (_NOW - timedelta(hours=1)).replace(tzinfo=None)  # 1 hour before _NOW, naive
     snapshot = _forex_snapshot(scraped_at=naive_dt)
     status = agg.compute_status(snapshot, None, _NOW)
     assert status.status == "ok"
