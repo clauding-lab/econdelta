@@ -1,0 +1,37 @@
+[Unit]
+Description=EconDelta — Stage 1 fetch (HTML + PDF artifacts)
+Documentation=https://github.com/clauding-lab/econdelta
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=adnan
+Group=adnan
+WorkingDirectory=/home/adnan/econdelta
+EnvironmentFile=/etc/econdelta.env
+ExecStart=/home/adnan/econdelta/.venv/bin/python -m fetch_all
+
+# Resource limits — playwright Chromium peaks ~700M
+MemoryMax=1500M
+MemoryHigh=1200M
+CPUQuota=200%
+TasksMax=512
+
+# Hardening
+PrivateTmp=true
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/adnan/econdelta/data /home/adnan/econdelta/logs
+
+# Timeouts — full fetch across ~45 indicators may take several minutes
+TimeoutStartSec=900
+
+# Logging
+StandardOutput=append:/home/adnan/econdelta/logs/fetch-systemd.log
+StandardError=append:/home/adnan/econdelta/logs/fetch-systemd.log
+SyslogIdentifier=econdelta-fetch
+
+[Install]
+WantedBy=multi-user.target

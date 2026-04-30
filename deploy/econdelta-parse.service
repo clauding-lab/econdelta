@@ -1,0 +1,39 @@
+[Unit]
+Description=EconDelta — Stage 2 parse (deterministic + Sonnet hybrid)
+Documentation=https://github.com/clauding-lab/econdelta
+After=econdelta-fetch.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=adnan
+Group=adnan
+WorkingDirectory=/home/adnan/econdelta
+EnvironmentFile=/etc/econdelta.env
+# CLAUDE_BINARY lets parse_all find `claude` from cron/systemd PATH
+Environment="CLAUDE_BINARY=/home/adnan/.npm-global/bin/claude"
+ExecStart=/home/adnan/econdelta/.venv/bin/python -m parse_all
+
+# Resource limits — pdfplumber + claude -p subprocess
+MemoryMax=1500M
+MemoryHigh=1200M
+CPUQuota=200%
+TasksMax=512
+
+# Hardening
+PrivateTmp=true
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/adnan/econdelta/data /home/adnan/econdelta/logs
+
+# Timeouts — Sonnet round-trips for ~45 indicators may take 5-15 min
+TimeoutStartSec=1800
+
+# Logging
+StandardOutput=append:/home/adnan/econdelta/logs/parse-systemd.log
+StandardError=append:/home/adnan/econdelta/logs/parse-systemd.log
+SyslogIdentifier=econdelta-parse
+
+[Install]
+WantedBy=multi-user.target

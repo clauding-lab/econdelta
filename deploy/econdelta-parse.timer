@@ -1,0 +1,11 @@
+[Unit]
+Description=Run EconDelta Stage 2 parse daily at 00:15 UTC (06:15 BDT)
+Requires=econdelta-parse.service
+
+[Timer]
+OnCalendar=*-*-* 00:15:00 UTC
+Persistent=true
+RandomizedDelaySec=120
+
+[Install]
+WantedBy=timers.target
