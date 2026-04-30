@@ -36,3 +36,6 @@ graphify-out/
 
 # macOS
 .DS_Store
+
+# Git worktrees
+.worktrees/
