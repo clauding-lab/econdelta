@@ -1,0 +1,1235 @@
+{
+  "version": "3.0",
+  "generated_from": "2.0",
+  "indicators": [
+    {
+      "id": "point_to_point_inflation",
+      "name": "Point to Point Inflation",
+      "domain": "inflation",
+      "cadence": "monthly",
+      "fetch": {
+        "type": "pdf",
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
+        "task": "Go to page 15 of the doc, first table",
+        "discover": "latest_pdf_link"
+      },
+      "parse": {
+        "deterministic": "pdf_table_row",
+        "llm_prompt": "pdf_table_row.txt",
+        "value_type": "percent",
+        "valid_range": [
+          0.0,
+          50.0
+        ]
+      },
+      "anomaly_threshold": 1.0,
+      "alternate": {
+        "url": "https://bbs.gov.bd/pages/static-pages/6922de7a933eb65569e1ae8f",
+        "type": "pdf",
+        "task": "Go to the latest available PDF,  Page 13 of the doc, table 1.1"
+      },
+      "fallback": {
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/5/27",
+        "type": "pdf",
+        "task": "Go to latest available PDF, Component 14"
+      }
+    },
+    {
+      "id": "general_inflation",
+      "name": "General Inflation",
+      "domain": "inflation",
+      "cadence": "monthly",
+      "fetch": {
+        "type": "pdf",
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
+        "task": "Go to page 15 of the doc, first table",
+        "discover": "latest_pdf_link"
+      },
+      "parse": {
+        "deterministic": "pdf_table_row",
+        "llm_prompt": "pdf_table_row.txt",
+        "value_type": "percent",
+        "valid_range": [
+          0.0,
+          50.0
+        ]
+      },
+      "anomaly_threshold": 1.0,
+      "alternate": {
+        "url": "https://bbs.gov.bd/pages/static-pages/6922de7a933eb65569e1ae8f",
+        "type": "pdf",
+        "task": "Go to the latest available PDF,  Page 13 of the doc, table 1.1"
+      },
+      "fallback": {
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/5/27",
+        "type": "pdf",
+        "task": "Go to latest available PDF, Component 14"
+      }
+    },
+    {
+      "id": "food_inflation",
+      "name": "Food Inflation",
+      "domain": "inflation",
+      "cadence": "monthly",
+      "fetch": {
+        "type": "pdf",
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
+        "task": "Go to page 15 of the doc, first table",
+        "discover": "latest_pdf_link"
+      },
+      "parse": {
+        "deterministic": "pdf_table_row",
+        "llm_prompt": "pdf_table_row.txt",
+        "value_type": "percent",
+        "valid_range": [
+          0.0,
+          50.0
+        ]
+      },
+      "anomaly_threshold": 1.0,
+      "alternate": {
+        "url": "https://bbs.gov.bd/pages/static-pages/6922de7a933eb65569e1ae8f",
+        "type": "pdf",
+        "task": "Go to the latest available PDF,  Page 13 of the doc, table 1.1"
+      }
+    },
+    {
+      "id": "non_food_inflation",
+      "name": "Non-Food Inflation",
+      "domain": "inflation",
+      "cadence": "monthly",
+      "fetch": {
+        "type": "pdf",
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
+        "task": "Go to page 15 of the doc, first table",
+        "discover": "latest_pdf_link"
+      },
+      "parse": {
+        "deterministic": "pdf_table_row",
+        "llm_prompt": "pdf_table_row.txt",
+        "value_type": "percent",
+        "valid_range": [
+          0.0,
+          50.0
+        ]
+      },
+      "anomaly_threshold": 1.0,
+      "alternate": {
+        "url": "https://bbs.gov.bd/pages/static-pages/6922de7a933eb65569e1ae8f",
+        "type": "pdf",
+        "task": "Go to the latest available PDF,  Page 13 of the doc, table 1.1"
+      }
+    },
+    {
+      "id": "budget_opex_of_the_fy_vs_utilization",
+      "name": "Budget OpEx of the FY vs Utilization",
+      "domain": "government_finance",
+      "cadence": "fiscal_year",
+      "fetch": {
+        "type": "news",
+        "url": "",
+        "task": ""
+      },
+      "parse": {
+        "deterministic": "pdf_table_total",
+        "llm_prompt": "pdf_table_total.txt",
+        "value_type": "amount_bdt_crore",
+        "valid_range": [
+          0.0,
+          1000000.0
+        ]
+      },
+      "anomaly_threshold": 0.1,
+      "alternate": {
+        "url": "https://mof.gov.bd/pages/static-pages/6940329635ce18e1c055ef1a",
+        "type": "pdf",
+        "task": "Pick latest PDF, Page 5 of doc, table 1, last row"
+      }
+    },
+    {
+      "id": "budget_adpex_of_the_fy_vs_utilization",
+      "name": "Budget ADPEx of the FY vs Utilization",
+      "domain": "government_finance",
+      "cadence": "fiscal_year",
+      "fetch": {
+        "type": "news",
+        "url": "",
+        "task": ""
+      },
+      "parse": {
+        "deterministic": "pdf_table_total",
+        "llm_prompt": "pdf_table_total.txt",
+        "value_type": "amount_bdt_crore",
+        "valid_range": [
+          0.0,
+          500000.0
+        ]
+      },
+      "anomaly_threshold": 0.1,
+      "alternate": {
+        "url": "https://mof.gov.bd/pages/static-pages/6940329635ce18e1c055ef1a",
+        "type": "pdf",
+        "task": "Page 8 of doc, table 3, last row"
+      }
+    },
+    {
+      "id": "tax_revenue",
+      "name": "Tax Revenue",
+      "domain": "government_finance",
+      "cadence": "monthly",
+      "fetch": {
+        "type": "pdf",
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/5/27",
+        "task": "Go to latest available PDF, Component 9",
+        "discover": "latest_pdf_link"
+      },
+      "parse": {
+        "deterministic": "pdf_component",
+        "llm_prompt": "pdf_component.txt",
+        "value_type": "amount_bdt_crore",
+        "valid_range": [
+          0.0,
+          500000.0
+        ]
+      },
+      "anomaly_threshold": 0.05,
+      "alternate": {
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
+        "type": "pdf",
+        "task": "Page 11 of doc, first table"
+      },
+      "fallback": {
+        "url": "https://mof.gov.bd/pages/static-pages/6940329635ce18e1c055ef1a",
+        "type": "pdf",
+        "task": "Page 9 of doc, table 4"
+      }
+    },
+    {
+      "id": "non_tax_revenue",
+      "name": "Non-Tax Revenue",
+      "domain": "government_finance",
+      "cadence": "monthly",
+      "fetch": {
+        "type": "news",
+        "url": "",
+        "task": ""
+      },
+      "parse": {
+        "deterministic": "pdf_table_row",
+        "llm_prompt": "pdf_table_row.txt",
+        "value_type": "amount_bdt_crore",
+        "valid_range": [
+          0.0,
+          100000.0
+        ]
+      },
+      "anomaly_threshold": 0.05,
+      "alternate": {
+        "url": "https://mof.gov.bd/pages/static-pages/6940329635ce18e1c055ef1a",
+        "type": "pdf",
+        "task": "Page 9 of doc, table 4"
+      }
+    },
+    {
+      "id": "total_revenue_budget_vs_actual",
+      "name": "Total Revenue Budget vs Actual",
+      "domain": "government_finance",
+      "cadence": "monthly",
+      "fetch": {
+        "type": "news",
+        "url": "",
+        "task": ""
+      },
+      "parse": {
+        "deterministic": "pdf_table_row",
+        "llm_prompt": "pdf_table_row.txt",
+        "value_type": "amount_bdt_crore",
+        "valid_range": [
+          0.0,
+          600000.0
+        ]
+      },
+      "anomaly_threshold": 0.05,
+      "alternate": {
+        "url": "https://mof.gov.bd/pages/static-pages/6940329635ce18e1c055ef1a",
+        "type": "pdf",
+        "task": "Page 9 of doc, table 4"
+      }
+    },
+    {
+      "id": "tax_gdp_ratio",
+      "name": "Tax-GDP Ratio",
+      "domain": "government_finance",
+      "cadence": "quarterly",
+      "fetch": {
+        "type": "news",
+        "url": "",
+        "task": ""
+      },
+      "parse": {
+        "deterministic": "pdf_table_row",
+        "llm_prompt": "pdf_table_row.txt",
+        "value_type": "percent",
+        "valid_range": [
+          0.0,
+          30.0
+        ]
+      },
+      "anomaly_threshold": 0.5,
+      "alternate": {
+        "url": "https://mof.gov.bd/pages/static-pages/6940329635ce18e1c055ef1a",
+        "type": "pdf",
+        "task": "Page 9 of doc, table 4"
+      }
+    },
+    {
+      "id": "rev_gdp_ratio",
+      "name": "Rev-GDP Ratio",
+      "domain": "government_finance",
+      "cadence": "quarterly",
+      "fetch": {
+        "type": "news",
+        "url": "",
+        "task": ""
+      },
+      "parse": {
+        "deterministic": "pdf_table_row",
+        "llm_prompt": "pdf_table_row.txt",
+        "value_type": "percent",
+        "valid_range": [
+          0.0,
+          40.0
+        ]
+      },
+      "anomaly_threshold": 0.5,
+      "alternate": {
+        "url": "https://mof.gov.bd/pages/static-pages/6940329635ce18e1c055ef1a",
+        "type": "pdf",
+        "task": "Page 9 of doc, table 4"
+      }
+    },
+    {
+      "id": "foreign_borrowing_for_budget_deficit",
+      "name": "Foreign Borrowing for Budget Deficit",
+      "domain": "government_finance",
+      "cadence": "monthly",
+      "fetch": {
+        "type": "pdf",
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
+        "task": "Page 14 of doc, first table",
+        "discover": "latest_pdf_link"
+      },
+      "parse": {
+        "deterministic": "pdf_table_row",
+        "llm_prompt": "pdf_table_row.txt",
+        "value_type": "amount_bdt_crore",
+        "valid_range": [
+          0.0,
+          200000.0
+        ]
+      },
+      "anomaly_threshold": 0.1,
+      "alternate": {
+        "url": "https://mof.gov.bd/pages/static-pages/6940329635ce18e1c055ef1a",
+        "type": "pdf",
+        "task": "Page 11 of doc, table 6"
+      }
+    },
+    {
+      "id": "domestic_borrowing_for_bidget_deficit",
+      "name": "Domestic Borrowing for Bidget Deficit",
+      "domain": "government_finance",
+      "cadence": "monthly",
+      "fetch": {
+        "type": "pdf",
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
+        "task": "Page 14 of doc, first table",
+        "discover": "latest_pdf_link"
+      },
+      "parse": {
+        "deterministic": "pdf_table_row",
+        "llm_prompt": "pdf_table_row.txt",
+        "value_type": "amount_bdt_crore",
+        "valid_range": [
+          0.0,
+          400000.0
+        ]
+      },
+      "anomaly_threshold": 0.1,
+      "alternate": {
+        "url": "https://mof.gov.bd/pages/static-pages/6940329635ce18e1c055ef1a",
+        "type": "pdf",
+        "task": "Page 11 of doc, table 6"
+      }
+    },
+    {
+      "id": "bank_borrowing_for_deficit_financing",
+      "name": "Bank Borrowing for Deficit Financing",
+      "domain": "government_finance",
+      "cadence": "monthly",
+      "fetch": {
+        "type": "pdf",
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
+        "task": "Page 14 of doc, first table",
+        "discover": "latest_pdf_link"
+      },
+      "parse": {
+        "deterministic": "pdf_table_row",
+        "llm_prompt": "pdf_table_row.txt",
+        "value_type": "amount_bdt_crore",
+        "valid_range": [
+          0.0,
+          400000.0
+        ]
+      },
+      "anomaly_threshold": 0.1,
+      "alternate": {
+        "url": "https://mof.gov.bd/pages/static-pages/6940329635ce18e1c055ef1a",
+        "type": "pdf",
+        "task": "Page 11 of doc, table 6"
+      }
+    },
+    {
+      "id": "non_bank_borrowing_for_deficit_financing",
+      "name": "Non-bank borrowing for Deficit Financing",
+      "domain": "government_finance",
+      "cadence": "monthly",
+      "fetch": {
+        "type": "pdf",
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
+        "task": "Page 14 of doc, first table",
+        "discover": "latest_pdf_link"
+      },
+      "parse": {
+        "deterministic": "pdf_table_row",
+        "llm_prompt": "pdf_table_row.txt",
+        "value_type": "amount_bdt_crore",
+        "valid_range": [
+          0.0,
+          200000.0
+        ]
+      },
+      "anomaly_threshold": 0.1,
+      "alternate": {
+        "url": "https://mof.gov.bd/pages/static-pages/6940329635ce18e1c055ef1a",
+        "type": "pdf",
+        "task": "Page 11 of doc, table 6"
+      }
+    },
+    {
+      "id": "treasury_bill_outstanding",
+      "name": "Treasury Bill Outstanding",
+      "domain": "money_market",
+      "cadence": "monthly",
+      "fetch": {
+        "type": "html",
+        "url": "https://gsom.bb.org.bd/mtm-bill.php",
+        "task": "Last total of the page"
+      },
+      "parse": {
+        "deterministic": "html_table_row",
+        "llm_prompt": "html_table_row.txt",
+        "value_type": "amount_bdt_crore",
+        "valid_range": [
+          0.0,
+          500000.0
+        ]
+      },
+      "anomaly_threshold": 0.05,
+      "alternate": {
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/58",
+        "type": "pdf",
+        "task": "Go to the latest available PDF, Annex 1, table component B1"
+      }
+    },
+    {
+      "id": "treasury_bond_outstabnding",
+      "name": "Treasury Bond Outstabnding",
+      "domain": "money_market",
+      "cadence": "monthly",
+      "fetch": {
+        "type": "html",
+        "url": "https://gsom.bb.org.bd/mtm.php",
+        "task": "Last total of the page"
+      },
+      "parse": {
+        "deterministic": "html_table_row",
+        "llm_prompt": "html_table_row.txt",
+        "value_type": "amount_bdt_crore",
+        "valid_range": [
+          0.0,
+          2000000.0
+        ]
+      },
+      "anomaly_threshold": 0.05,
+      "alternate": {
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/58",
+        "type": "pdf",
+        "task": "Go to the latest available PDF, Annex 1, table component B2"
+      }
+    },
+    {
+      "id": "bill_bond_rates",
+      "name": "Bill/Bond Rates",
+      "domain": "money_market",
+      "cadence": "daily",
+      "fetch": {
+        "type": "html",
+        "url": "https://www.bb.org.bd/en/index.php/monetaryactivity/treasury",
+        "task": "Cut off graph for bill, standard tenor graph for bonds"
+      },
+      "parse": {
+        "deterministic": "html_table_row",
+        "llm_prompt": "html_table_row.txt",
+        "value_type": "percent",
+        "valid_range": [
+          0.0,
+          25.0
+        ]
+      },
+      "anomaly_threshold": 1.0,
+      "alternate": {
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
+        "type": "pdf",
+        "task": "Go to page 7 of the doc, first table"
+      }
+    },
+    {
+      "id": "policy_rate_slf_sdf",
+      "name": "Policy Rate, SLF, SDF",
+      "domain": "money_market",
+      "cadence": "daily",
+      "fetch": {
+        "type": "html",
+        "url": "https://www.bb.org.bd/en/",
+        "task": "last end of the webpage"
+      },
+      "parse": {
+        "deterministic": "html_footer_ticker",
+        "llm_prompt": "html_footer_ticker.txt",
+        "value_type": "percent",
+        "valid_range": [
+          0.5,
+          25.0
+        ]
+      },
+      "anomaly_threshold": 1.0,
+      "alternate": {
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
+        "type": "pdf",
+        "task": "Go to page 7 of the doc, first table"
+      }
+    },
+    {
+      "id": "call_money_rate",
+      "name": "Call money rate",
+      "domain": "money_market",
+      "cadence": "daily",
+      "fetch": {
+        "type": "html",
+        "url": "https://www.bb.org.bd/en/index.php/monetaryactivity/call_money_market",
+        "task": "Rates everyday of 1D, 7D, 14D and 90D MM trades"
+      },
+      "parse": {
+        "deterministic": "html_call_money",
+        "llm_prompt": "html_call_money.txt",
+        "value_type": "percent",
+        "valid_range": [
+          0.0,
+          25.0
+        ]
+      },
+      "anomaly_threshold": 2.0,
+      "alternate": {
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
+        "type": "pdf",
+        "task": "Go to page 7 of the doc, first table, Avg Call Rate"
+      }
+    },
+    {
+      "id": "usd_bdt_exchange_rate",
+      "name": "USD/BDT Exchange Rate",
+      "domain": "forex_and_reserves",
+      "cadence": "daily",
+      "fetch": {
+        "type": "html",
+        "url": "https://www.bb.org.bd/en/",
+        "task": "last end of the webpage"
+      },
+      "parse": {
+        "deterministic": "html_footer_ticker",
+        "llm_prompt": "html_footer_ticker.txt",
+        "value_type": "rate",
+        "valid_range": [
+          80.0,
+          200.0
+        ]
+      },
+      "anomaly_threshold": 0.02,
+      "alternate": {
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/5/27",
+        "type": "pdf",
+        "task": "Go to latest available PDF, Component 2"
+      },
+      "fallback": {
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
+        "type": "pdf",
+        "task": "Go to page 29 of the doc, first table"
+      }
+    },
+    {
+      "id": "fx_buy_sale_from_market",
+      "name": "FX Buy/Sale from Market",
+      "domain": "forex_and_reserves",
+      "cadence": "monthly",
+      "fetch": {
+        "type": "news",
+        "url": "",
+        "task": ""
+      },
+      "parse": {
+        "deterministic": "html_table_row",
+        "llm_prompt": "html_table_row.txt",
+        "value_type": "amount_usd_bn",
+        "valid_range": [
+          0.0,
+          5.0
+        ]
+      },
+      "anomaly_threshold": 0.05,
+      "alternate": {
+        "url": "https://www.bb.org.bd/en/index.php/fxmarket/fx_auction_result",
+        "type": "html",
+        "task": "Accepted bid and WAR of EXR"
+      }
+    },
+    {
+      "id": "gsec_auction",
+      "name": "GSEC Auction",
+      "domain": "money_market",
+      "cadence": "daily",
+      "fetch": {
+        "type": "html",
+        "url": "https://www.bb.org.bd/en/index.php/monetaryactivity/auc_calendar",
+        "task": "Self explanatory"
+      },
+      "parse": {
+        "deterministic": "html_table_row",
+        "llm_prompt": "html_table_row.txt",
+        "value_type": "amount_bdt_crore",
+        "valid_range": [
+          0.0,
+          50000.0
+        ]
+      },
+      "anomaly_threshold": 0.05,
+      "alternate": {
+        "url": "News FOR Special Auction",
+        "type": "html",
+        "task": null
+      }
+    },
+    {
+      "id": "gsec_mautiry",
+      "name": "GSEC Mautiry",
+      "domain": "money_market",
+      "cadence": "monthly",
+      "fetch": {
+        "type": "html",
+        "url": "Own Data Hub",
+        "task": ""
+      },
+      "parse": {
+        "deterministic": "html_table_row",
+        "llm_prompt": "html_table_row.txt",
+        "value_type": "amount_bdt_crore",
+        "valid_range": [
+          0.0,
+          200000.0
+        ]
+      },
+      "anomaly_threshold": 0.05
+    },
+    {
+      "id": "fx_reserve_gross_and_bpm6",
+      "name": "FX Reserve Gross and BPM6",
+      "domain": "forex_and_reserves",
+      "cadence": "weekly",
+      "fetch": {
+        "type": "pdf",
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/5/27",
+        "task": "Go to latest available PDF, Component 1",
+        "discover": "latest_pdf_link"
+      },
+      "parse": {
+        "deterministic": "pdf_component",
+        "llm_prompt": "pdf_component.txt",
+        "value_type": "amount_usd_bn",
+        "valid_range": [
+          0.0,
+          100.0
+        ]
+      },
+      "anomaly_threshold": 0.05,
+      "alternate": {
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
+        "type": "pdf",
+        "task": "Go to page 28 of the doc, first table"
+      }
+    },
+    {
+      "id": "private_sector_credit",
+      "name": "Private Sector Credit",
+      "domain": "monetary_aggregates",
+      "cadence": "monthly",
+      "fetch": {
+        "type": "pdf",
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/5/27",
+        "task": "Go to latest available PDF, Component 12c",
+        "discover": "latest_pdf_link"
+      },
+      "parse": {
+        "deterministic": "pdf_component",
+        "llm_prompt": "pdf_component.txt",
+        "value_type": "amount_bdt_crore",
+        "valid_range": [
+          0.0,
+          20000000.0
+        ]
+      },
+      "anomaly_threshold": 0.05,
+      "alternate": {
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
+        "type": "pdf",
+        "task": "Go to page 3 of the doc, first table"
+      }
+    },
+    {
+      "id": "deposits_of_the_system",
+      "name": "Deposits of the system",
+      "domain": "monetary_aggregates",
+      "cadence": "monthly",
+      "fetch": {
+        "type": "pdf",
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
+        "task": "Go to page 3 of the doc, first table",
+        "discover": "latest_pdf_link"
+      },
+      "parse": {
+        "deterministic": "pdf_table_row",
+        "llm_prompt": "pdf_table_row.txt",
+        "value_type": "amount_bdt_crore",
+        "valid_range": [
+          0.0,
+          30000000.0
+        ]
+      },
+      "anomaly_threshold": 0.05
+    },
+    {
+      "id": "currency_outside_bank",
+      "name": "Currency Outside Bank",
+      "domain": "monetary_aggregates",
+      "cadence": "monthly",
+      "fetch": {
+        "type": "pdf",
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
+        "task": "Go to page 3 of the doc, first table",
+        "discover": "latest_pdf_link"
+      },
+      "parse": {
+        "deterministic": "pdf_table_row",
+        "llm_prompt": "pdf_table_row.txt",
+        "value_type": "amount_bdt_crore",
+        "valid_range": [
+          0.0,
+          5000000.0
+        ]
+      },
+      "anomaly_threshold": 0.05
+    },
+    {
+      "id": "broad_money",
+      "name": "Broad Money",
+      "domain": "monetary_aggregates",
+      "cadence": "monthly",
+      "fetch": {
+        "type": "pdf",
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/5/27",
+        "task": "Go to latest available PDF, Component 11a",
+        "discover": "latest_pdf_link"
+      },
+      "parse": {
+        "deterministic": "pdf_component",
+        "llm_prompt": "pdf_component.txt",
+        "value_type": "amount_bdt_crore",
+        "valid_range": [
+          0.0,
+          30000000.0
+        ]
+      },
+      "anomaly_threshold": 0.05,
+      "alternate": {
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
+        "type": "pdf",
+        "task": "Go to page 3 of the doc, first table"
+      }
+    },
+    {
+      "id": "reserve_money",
+      "name": "Reserve Money",
+      "domain": "monetary_aggregates",
+      "cadence": "weekly",
+      "fetch": {
+        "type": "pdf",
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/5/27",
+        "task": "Go to latest available PDF, Component 11b",
+        "discover": "latest_pdf_link"
+      },
+      "parse": {
+        "deterministic": "pdf_component",
+        "llm_prompt": "pdf_component.txt",
+        "value_type": "amount_bdt_crore",
+        "valid_range": [
+          0.0,
+          10000000.0
+        ]
+      },
+      "anomaly_threshold": 0.05,
+      "alternate": {
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
+        "type": "pdf",
+        "task": "Go to page 4 of the doc, first table"
+      }
+    },
+    {
+      "id": "deposits_held_with_bb_crr",
+      "name": "Deposits held with BB (CRR)",
+      "domain": "monetary_aggregates",
+      "cadence": "monthly",
+      "fetch": {
+        "type": "pdf",
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
+        "task": "Go to page 4 of the doc, first table",
+        "discover": "latest_pdf_link"
+      },
+      "parse": {
+        "deterministic": "pdf_table_row",
+        "llm_prompt": "pdf_table_row.txt",
+        "value_type": "amount_bdt_crore",
+        "valid_range": [
+          0.0,
+          5000000.0
+        ]
+      },
+      "anomaly_threshold": 0.05
+    },
+    {
+      "id": "money_multiplier",
+      "name": "Money Multiplier",
+      "domain": "monetary_aggregates",
+      "cadence": "monthly",
+      "fetch": {
+        "type": "pdf",
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
+        "task": "Go to page 4 of the doc, first table",
+        "discover": "latest_pdf_link"
+      },
+      "parse": {
+        "deterministic": "pdf_table_row",
+        "llm_prompt": "pdf_table_row.txt",
+        "value_type": "ratio",
+        "valid_range": [
+          1.0,
+          20.0
+        ]
+      },
+      "anomaly_threshold": 0.05
+    },
+    {
+      "id": "excess_liquid_asset_total_minimum",
+      "name": "Excess Liquid Asset (Total-Minimum)",
+      "domain": "monetary_aggregates",
+      "cadence": "monthly",
+      "fetch": {
+        "type": "pdf",
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
+        "task": "Go to page 5 of the doc, first table, last two columns",
+        "discover": "latest_pdf_link"
+      },
+      "parse": {
+        "deterministic": "pdf_table_row",
+        "llm_prompt": "pdf_table_row.txt",
+        "value_type": "amount_bdt_crore",
+        "valid_range": [
+          0.0,
+          5000000.0
+        ]
+      },
+      "anomaly_threshold": 0.05
+    },
+    {
+      "id": "nsc_outstanding",
+      "name": "NSC outstanding",
+      "domain": "monetary_aggregates",
+      "cadence": "monthly",
+      "fetch": {
+        "type": "pdf",
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/5/27",
+        "task": "Go to latest available PDF, Component 10b",
+        "discover": "latest_pdf_link"
+      },
+      "parse": {
+        "deterministic": "pdf_component",
+        "llm_prompt": "pdf_component.txt",
+        "value_type": "amount_bdt_crore",
+        "valid_range": [
+          0.0,
+          5000000.0
+        ]
+      },
+      "anomaly_threshold": 0.05,
+      "alternate": {
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
+        "type": "pdf",
+        "task": "Go to page 12 of the doc, second table"
+      }
+    },
+    {
+      "id": "monthly_export",
+      "name": "Monthly Export",
+      "domain": "external_sector",
+      "cadence": "monthly",
+      "fetch": {
+        "type": "pdf",
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/5/27",
+        "task": "Go to latest available PDF, Component 7a",
+        "discover": "latest_pdf_link"
+      },
+      "parse": {
+        "deterministic": "pdf_component",
+        "llm_prompt": "pdf_component.txt",
+        "value_type": "amount_usd_bn",
+        "valid_range": [
+          0.0,
+          10.0
+        ]
+      },
+      "anomaly_threshold": 0.05,
+      "alternate": {
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
+        "type": "pdf",
+        "task": "Go to page 22 of the doc, first table"
+      }
+    },
+    {
+      "id": "fy_export",
+      "name": "FY Export",
+      "domain": "external_sector",
+      "cadence": "fiscal_year",
+      "fetch": {
+        "type": "pdf",
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/5/27",
+        "task": "Go to latest available PDF, Component 7a",
+        "discover": "latest_pdf_link"
+      },
+      "parse": {
+        "deterministic": "pdf_component",
+        "llm_prompt": "pdf_component.txt",
+        "value_type": "amount_usd_bn",
+        "valid_range": [
+          0.0,
+          60.0
+        ]
+      },
+      "anomaly_threshold": 0.1
+    },
+    {
+      "id": "categorywise_export",
+      "name": "Categorywise Export",
+      "domain": "external_sector",
+      "cadence": "fiscal_year",
+      "fetch": {
+        "type": "pdf",
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
+        "task": "Go to page 22 of the doc, second table",
+        "discover": "latest_pdf_link"
+      },
+      "parse": {
+        "deterministic": "pdf_table_row",
+        "llm_prompt": "pdf_table_row.txt",
+        "value_type": "amount_usd_bn",
+        "valid_range": [
+          0.0,
+          60.0
+        ]
+      },
+      "anomaly_threshold": 0.1
+    },
+    {
+      "id": "monthly_import",
+      "name": "Monthly Import",
+      "domain": "external_sector",
+      "cadence": "monthly",
+      "fetch": {
+        "type": "pdf",
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/5/27",
+        "task": "Go to latest available PDF, Component 6b",
+        "discover": "latest_pdf_link"
+      },
+      "parse": {
+        "deterministic": "pdf_component",
+        "llm_prompt": "pdf_component.txt",
+        "value_type": "amount_usd_bn",
+        "valid_range": [
+          0.0,
+          10.0
+        ]
+      },
+      "anomaly_threshold": 0.05
+    },
+    {
+      "id": "monthly_import_lc_opening",
+      "name": "Monthly Import LC Opening",
+      "domain": "external_sector",
+      "cadence": "monthly",
+      "fetch": {
+        "type": "pdf",
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
+        "task": "Go to page 23 of the doc, first table",
+        "discover": "latest_pdf_link"
+      },
+      "parse": {
+        "deterministic": "pdf_table_row",
+        "llm_prompt": "pdf_table_row.txt",
+        "value_type": "amount_usd_bn",
+        "valid_range": [
+          0.0,
+          10.0
+        ]
+      },
+      "anomaly_threshold": 0.05
+    },
+    {
+      "id": "monthly_import_lc_settlement",
+      "name": "Monthly Import LC Settlement",
+      "domain": "external_sector",
+      "cadence": "monthly",
+      "fetch": {
+        "type": "pdf",
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
+        "task": "Go to page 23 of the doc, first table",
+        "discover": "latest_pdf_link"
+      },
+      "parse": {
+        "deterministic": "pdf_table_row",
+        "llm_prompt": "pdf_table_row.txt",
+        "value_type": "amount_usd_bn",
+        "valid_range": [
+          0.0,
+          10.0
+        ]
+      },
+      "anomaly_threshold": 0.05
+    },
+    {
+      "id": "fy_import_lc",
+      "name": "FY Import LC",
+      "domain": "external_sector",
+      "cadence": "fiscal_year",
+      "fetch": {
+        "type": "pdf",
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/5/27",
+        "task": "Go to latest available PDF, Component 13",
+        "discover": "latest_pdf_link"
+      },
+      "parse": {
+        "deterministic": "pdf_component",
+        "llm_prompt": "pdf_component.txt",
+        "value_type": "amount_usd_bn",
+        "valid_range": [
+          0.0,
+          100.0
+        ]
+      },
+      "anomaly_threshold": 0.1,
+      "alternate": {
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
+        "type": "pdf",
+        "task": null
+      }
+    },
+    {
+      "id": "categorywise_fy_import_breakdown",
+      "name": "Categorywise FY Import Breakdown",
+      "domain": "external_sector",
+      "cadence": "fiscal_year",
+      "fetch": {
+        "type": "pdf",
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
+        "task": "Go to latest available PDF, Component 13",
+        "discover": "latest_pdf_link"
+      },
+      "parse": {
+        "deterministic": "pdf_table_row",
+        "llm_prompt": "pdf_table_row.txt",
+        "value_type": "amount_usd_bn",
+        "valid_range": [
+          0.0,
+          100.0
+        ]
+      },
+      "anomaly_threshold": 0.1,
+      "alternate": {
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
+        "type": "pdf",
+        "task": "Go to page 24 of the doc, first table"
+      }
+    },
+    {
+      "id": "monthly_remittance",
+      "name": "Monthly Remittance",
+      "domain": "external_sector",
+      "cadence": "monthly",
+      "fetch": {
+        "type": "pdf",
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/5/27",
+        "task": "Go to latest available PDF, Component 5a",
+        "discover": "latest_pdf_link"
+      },
+      "parse": {
+        "deterministic": "pdf_component",
+        "llm_prompt": "pdf_component.txt",
+        "value_type": "amount_usd_bn",
+        "valid_range": [
+          0.0,
+          5.0
+        ]
+      },
+      "anomaly_threshold": 0.05,
+      "alternate": {
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
+        "type": "pdf",
+        "task": "Go to page 26 of the doc, first table"
+      }
+    },
+    {
+      "id": "fy_remittance",
+      "name": "FY Remittance",
+      "domain": "external_sector",
+      "cadence": "fiscal_year",
+      "fetch": {
+        "type": "pdf",
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/5/27",
+        "task": "Go to latest available PDF, Component 5a",
+        "discover": "latest_pdf_link"
+      },
+      "parse": {
+        "deterministic": "pdf_component",
+        "llm_prompt": "pdf_component.txt",
+        "value_type": "amount_usd_bn",
+        "valid_range": [
+          0.0,
+          30.0
+        ]
+      },
+      "anomaly_threshold": 0.1,
+      "alternate": {
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
+        "type": "pdf",
+        "task": "Go to page 26 of the doc, first table"
+      }
+    },
+    {
+      "id": "remittance_by_country",
+      "name": "Remittance by country",
+      "domain": "external_sector",
+      "cadence": "monthly",
+      "fetch": {
+        "type": "pdf",
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
+        "task": "Go to page 27 of the doc, first table",
+        "discover": "latest_pdf_link"
+      },
+      "parse": {
+        "deterministic": "pdf_table_row",
+        "llm_prompt": "pdf_table_row.txt",
+        "value_type": "amount_usd_bn",
+        "valid_range": [
+          0.0,
+          10.0
+        ]
+      },
+      "anomaly_threshold": 0.05
+    },
+    {
+      "id": "bop_summary",
+      "name": "BOP Summary",
+      "domain": "external_sector",
+      "cadence": "monthly",
+      "fetch": {
+        "type": "html",
+        "url": "https://www.bb.org.bd/en/index.php/econdata/bop",
+        "task": "Entire Table"
+      },
+      "parse": {
+        "deterministic": "html_table_row",
+        "llm_prompt": "html_table_row.txt",
+        "value_type": "amount_usd_bn",
+        "valid_range": [
+          -20.0,
+          20.0
+        ]
+      },
+      "anomaly_threshold": 0.05,
+      "alternate": {
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
+        "type": "pdf",
+        "task": "Go to page 31 of the doc"
+      }
+    },
+    {
+      "id": "interbank_repo_data",
+      "name": "Interbank Repo Data",
+      "domain": "money_market",
+      "cadence": "daily",
+      "fetch": {
+        "type": "html",
+        "url": "https://www.bb.org.bd/en/index.php/financialactivity/interbankrepo",
+        "task": "Self explanatory"
+      },
+      "parse": {
+        "deterministic": "html_table_row",
+        "llm_prompt": "html_table_row.txt",
+        "value_type": "amount_bdt_crore",
+        "valid_range": [
+          0.0,
+          100000.0
+        ]
+      },
+      "anomaly_threshold": 0.05
+    },
+    {
+      "id": "gdp",
+      "name": "GDP",
+      "domain": "macro",
+      "cadence": "quarterly",
+      "fetch": {
+        "type": "pdf",
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/5/27",
+        "task": "Go to latest available PDF, Component 19",
+        "discover": "latest_pdf_link"
+      },
+      "parse": {
+        "deterministic": "pdf_component",
+        "llm_prompt": "pdf_component.txt",
+        "value_type": "amount_bdt_crore",
+        "valid_range": [
+          0.0,
+          100000000.0
+        ]
+      },
+      "anomaly_threshold": 0.05
+    }
+  ]
+}
