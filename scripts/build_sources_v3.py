@@ -140,7 +140,7 @@ META: dict[str, dict[str, Any]] = {
         "llm_prompt": "pdf_table_row.txt",
         "anomaly_threshold": 0.10,
     },
-    "domestic_borrowing_for_bidget_deficit": {
+    "domestic_borrowing_for_budget_deficit": {
         "domain": "government_finance",
         "deterministic": "pdf_table_row",
         "value_type": "amount_bdt_crore",
@@ -175,7 +175,7 @@ META: dict[str, dict[str, Any]] = {
         "llm_prompt": "html_table_row.txt",
         "anomaly_threshold": 0.05,
     },
-    "treasury_bond_outstabnding": {
+    "treasury_bond_outstanding": {
         "domain": "money_market",
         "deterministic": "html_table_row",
         "value_type": "amount_bdt_crore",
@@ -215,7 +215,7 @@ META: dict[str, dict[str, Any]] = {
         "llm_prompt": "html_table_row.txt",
         "anomaly_threshold": 0.05,
     },
-    "gsec_mautiry": {
+    "gsec_maturity": {
         "domain": "money_market",
         "deterministic": "html_table_row",
         "value_type": "amount_bdt_crore",
@@ -265,7 +265,7 @@ META: dict[str, dict[str, Any]] = {
         "domain": "monetary_aggregates",
         "deterministic": "pdf_component",
         "value_type": "amount_bdt_crore",
-        "valid_range": [0.0, 20_000_000.0],
+        "valid_range": [0.0, 100_000_000.0],
         "llm_prompt": "pdf_component.txt",
         "anomaly_threshold": 0.05,
     },
@@ -461,8 +461,10 @@ def _build_fetch(primary: dict[str, Any]) -> dict[str, Any]:
     fetch: dict[str, Any] = {
         "type": primary.get("type", "html"),
         "url": primary.get("url", ""),
-        "task": primary.get("task") or "",
     }
+    task = primary.get("task")
+    if task:
+        fetch["task"] = task
     if _needs_discover(fetch["url"]):
         fetch["discover"] = "latest_pdf_link"
     return fetch

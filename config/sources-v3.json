@@ -127,8 +127,7 @@
       "cadence": "fiscal_year",
       "fetch": {
         "type": "news",
-        "url": "",
-        "task": ""
+        "url": ""
       },
       "parse": {
         "deterministic": "pdf_table_total",
@@ -153,8 +152,7 @@
       "cadence": "fiscal_year",
       "fetch": {
         "type": "news",
-        "url": "",
-        "task": ""
+        "url": ""
       },
       "parse": {
         "deterministic": "pdf_table_total",
@@ -211,8 +209,7 @@
       "cadence": "monthly",
       "fetch": {
         "type": "news",
-        "url": "",
-        "task": ""
+        "url": ""
       },
       "parse": {
         "deterministic": "pdf_table_row",
@@ -237,8 +234,7 @@
       "cadence": "monthly",
       "fetch": {
         "type": "news",
-        "url": "",
-        "task": ""
+        "url": ""
       },
       "parse": {
         "deterministic": "pdf_table_row",
@@ -263,8 +259,7 @@
       "cadence": "quarterly",
       "fetch": {
         "type": "news",
-        "url": "",
-        "task": ""
+        "url": ""
       },
       "parse": {
         "deterministic": "pdf_table_row",
@@ -289,8 +284,7 @@
       "cadence": "quarterly",
       "fetch": {
         "type": "news",
-        "url": "",
-        "task": ""
+        "url": ""
       },
       "parse": {
         "deterministic": "pdf_table_row",
@@ -336,8 +330,8 @@
       }
     },
     {
-      "id": "domestic_borrowing_for_bidget_deficit",
-      "name": "Domestic Borrowing for Bidget Deficit",
+      "id": "domestic_borrowing_for_budget_deficit",
+      "name": "Domestic Borrowing for Budget Deficit",
       "domain": "government_finance",
       "cadence": "monthly",
       "fetch": {
@@ -443,8 +437,8 @@
       }
     },
     {
-      "id": "treasury_bond_outstabnding",
-      "name": "Treasury Bond Outstabnding",
+      "id": "treasury_bond_outstanding",
+      "name": "Treasury Bond Outstanding",
       "domain": "money_market",
       "cadence": "monthly",
       "fetch": {
@@ -584,8 +578,7 @@
       "cadence": "monthly",
       "fetch": {
         "type": "news",
-        "url": "",
-        "task": ""
+        "url": ""
       },
       "parse": {
         "deterministic": "html_table_row",
@@ -630,14 +623,13 @@
       }
     },
     {
-      "id": "gsec_mautiry",
-      "name": "GSEC Mautiry",
+      "id": "gsec_maturity",
+      "name": "GSEC Maturity",
       "domain": "money_market",
       "cadence": "monthly",
       "fetch": {
         "type": "html",
-        "url": "Own Data Hub",
-        "task": ""
+        "url": "Own Data Hub"
       },
       "parse": {
         "deterministic": "html_table_row",
@@ -694,7 +686,7 @@
         "value_type": "amount_bdt_crore",
         "valid_range": [
           0.0,
-          20000000.0
+          100000000.0
         ]
       },
       "anomaly_threshold": 0.05,
