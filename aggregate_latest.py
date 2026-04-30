@@ -15,9 +15,12 @@ from pydantic import ValidationError
 
 from utils.notifier import notify
 from utils.schema import (
+    Alert,
     CommoditySnapshot,
     DseSnapshot,
     ForexSnapshot,
+    FreshnessByCadence,
+    FreshnessSummary,
     LatestBundle,
     SourceStatus,
 )
@@ -26,8 +29,17 @@ REPO_ROOT = Path(__file__).resolve().parent
 DATA_DIR = REPO_ROOT / "data"
 LATEST_PATH = DATA_DIR / "latest.json"
 CONFIG_PATH = REPO_ROOT / "config" / "sources.json"
+SOURCES_V3_PATH = REPO_ROOT / "config" / "sources-v3.json"
 
 STALE_THRESHOLD_HOURS = 24.0
+
+STALE_THRESHOLDS_HOURS_BY_CADENCE: dict[str, float] = {
+    "daily": 24.0,
+    "weekly": 8 * 24.0,       # 192h
+    "monthly": 35 * 24.0,     # 840h
+    "quarterly": 100 * 24.0,  # 2400h
+    "fy": 400 * 24.0,         # 9600h
+}
 
 logger = logging.getLogger("aggregate_latest")
 
@@ -137,6 +149,135 @@ def flatten_data(snapshots: dict[str, Any]) -> dict[str, Any]:
     return data
 
 
+def _load_v3_registry() -> list[dict]:
+    """Load the v3 indicator registry from config/sources-v3.json.
+
+    Returns an empty list if the file does not exist (pre-v3 installs).
+    """
+    if not SOURCES_V3_PATH.exists():
+        return []
+    try:
+        return json.loads(SOURCES_V3_PATH.read_text()).get("indicators", [])
+    except (json.JSONDecodeError, OSError) as e:
+        logger.warning("failed to load v3 registry: %s", e)
+        return []
+
+
+def _load_v3_snapshot(indicator_id: str) -> dict | None:
+    """Return the latest per-indicator snapshot dict, or None if unavailable."""
+    d = DATA_DIR / indicator_id
+    if not d.exists():
+        return None
+    candidates = sorted(d.glob("*.json"), reverse=True)
+    if not candidates:
+        return None
+    try:
+        return json.loads(candidates[0].read_text())
+    except (json.JSONDecodeError, OSError) as e:
+        logger.warning("failed to load v3 snapshot for %s: %s", indicator_id, e)
+        return None
+
+
+def _is_fresh(snapshot: dict, now: datetime) -> bool:
+    """Return True if the snapshot is within its cadence staleness threshold."""
+    cadence = snapshot.get("cadence", "daily")
+    threshold = STALE_THRESHOLDS_HOURS_BY_CADENCE.get(cadence, 24.0)
+    try:
+        scraped_at = datetime.fromisoformat(snapshot["scraped_at"].replace("Z", "+00:00"))
+        if scraped_at.tzinfo is None:
+            scraped_at = scraped_at.replace(tzinfo=timezone.utc)
+        age_hours = (now - scraped_at).total_seconds() / 3600.0
+        return age_hours <= threshold
+    except (KeyError, ValueError):
+        return False
+
+
+def _build_v3_blocks(
+    now: datetime,
+) -> tuple[dict[str, Any], dict[str, dict[str, Any]], FreshnessSummary, list[Alert]]:
+    """Build the v3 data additions, domains, freshness summary, and alerts.
+
+    Returns:
+        data_additions: flat {indicator_id: value} dict to merge into data
+        domains:        nested {domain: {indicator_id: snapshot}} dict
+        freshness:      FreshnessSummary with per-cadence counts
+        alerts:         list of Alert objects for anomalous indicators
+    """
+    registry = _load_v3_registry()
+    data_additions: dict[str, Any] = {}
+    domains: dict[str, dict[str, Any]] = {}
+    cadence_buckets: dict[str, dict] = {}
+    indicators_total = 0
+    indicators_fresh = 0
+    indicators_stale = 0
+    indicators_failed = 0
+    alerts: list[Alert] = []
+
+    for ind in registry:
+        indicator_id = ind["id"]
+        domain = ind.get("domain", "macro")
+        cadence = ind.get("cadence", "daily")
+        cadence_buckets.setdefault(cadence, {"fresh": 0, "expected": 0, "stale_ids": []})
+        cadence_buckets[cadence]["expected"] += 1
+        indicators_total += 1
+
+        snapshot = _load_v3_snapshot(indicator_id)
+        if snapshot is None:
+            indicators_failed += 1
+            continue
+
+        provenance = snapshot.get("_provenance")
+        if provenance == "needs_review" or snapshot.get("_parse_strategy") == "extract_failed":
+            indicators_failed += 1
+
+        fresh = _is_fresh(snapshot, now)
+        if fresh:
+            indicators_fresh += 1
+            cadence_buckets[cadence]["fresh"] += 1
+        else:
+            indicators_stale += 1
+            cadence_buckets[cadence]["stale_ids"].append(indicator_id)
+
+        # Add to flat data dict (for The Brief — opportunistic read with no code changes)
+        value = snapshot.get("value")
+        if isinstance(value, (int, float, str, dict)):
+            data_additions[indicator_id] = value
+
+        # Add to domains block grouped by domain
+        domains.setdefault(domain, {})[indicator_id] = snapshot
+
+        # Anomaly detection: alert when change_pct exceeds the per-indicator threshold
+        change_pct = snapshot.get("change_pct")
+        threshold = ind.get("anomaly_threshold")
+        if change_pct is not None and threshold is not None and abs(change_pct) >= threshold:
+            alerts.append(
+                Alert(
+                    indicator_id=indicator_id,
+                    type="anomaly",
+                    severity="warn",
+                    value=snapshot.get("value"),
+                    previous=snapshot.get("previous_value"),
+                    change_pct=change_pct,
+                )
+            )
+
+    freshness = FreshnessSummary(
+        indicators_total=indicators_total,
+        indicators_fresh=indicators_fresh,
+        indicators_stale=indicators_stale,
+        indicators_failed=indicators_failed,
+        by_cadence={
+            c: FreshnessByCadence(
+                fresh=v["fresh"],
+                expected=v["expected"],
+                stale_ids=v["stale_ids"],
+            )
+            for c, v in cadence_buckets.items()
+        },
+    )
+    return data_additions, domains, freshness, alerts
+
+
 def write_latest(bundle: LatestBundle) -> None:
     """Atomic write: .tmp -> os.replace."""
     DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -171,12 +312,20 @@ def main() -> int:
 
     data = flatten_data(snapshots)
 
+    # v3 expansion: registry-driven domain blocks, freshness, alerts;
+    # v3 indicator values also land in the flat `data` dict for The Brief.
+    data_additions, domains, freshness, alerts = _build_v3_blocks(now)
+    data.update(data_additions)
+
     try:
         bundle = LatestBundle(
-            schema_version="1.0",
+            schema_version="3.0",
             updated_at=now,
             sources_status=sources_status,
             data=data,
+            domains=domains,
+            freshness=freshness,
+            alerts=alerts,
         )
     except ValidationError as e:
         logger.exception("bundle validation failed")

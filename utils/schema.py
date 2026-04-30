@@ -6,6 +6,41 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict
 
 
+class FreshnessByCadence(BaseModel):
+    """Fresh/expected counts for a single cadence bucket."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    fresh: int
+    expected: int
+    stale_ids: list[str] = []
+
+
+class FreshnessSummary(BaseModel):
+    """Aggregated freshness counters across all v3 indicators."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    indicators_total: int = 0
+    indicators_fresh: int = 0
+    indicators_stale: int = 0
+    indicators_failed: int = 0
+    by_cadence: dict[str, FreshnessByCadence] = {}
+
+
+class Alert(BaseModel):
+    """Anomaly or staleness alert for a single indicator."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    indicator_id: str
+    type: str
+    severity: str
+    value: float | int | str | None = None
+    previous: float | int | str | None = None
+    change_pct: float | None = None
+
+
 class SourceStatus(BaseModel):
     """Freshness and error state for a single data source."""
 
@@ -122,13 +157,21 @@ class CommoditySnapshot(BaseModel):
 class LatestBundle(BaseModel):
     """Top-level latest.json structure consumed by The Brief agent.
 
+    Legacy shape (v1): updated_at, sources_status, data (flat dict)
+    v3 additions: schema_version bumped to "3.0", plus domains, freshness, alerts.
+
     'data' is intentionally typed as dict[str, Any] because the flat merge
     shape varies by run — schema enforcement happens at the scraper layer.
+    v3 indicators also land in 'data' as flat keys so The Brief can use them
+    via snapshot.get("<id>") with no Brief code changes.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: str = "1.0"
+    schema_version: str = "3.0"
     updated_at: datetime
     sources_status: dict[str, SourceStatus]
     data: dict[str, Any]
+    domains: dict[str, dict[str, Any]] = {}
+    freshness: FreshnessSummary | None = None
+    alerts: list[Alert] = []
