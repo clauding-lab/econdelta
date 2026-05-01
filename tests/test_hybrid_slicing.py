@@ -48,6 +48,18 @@ def test_extract_pdf_text_with_page_hint_returns_window(tmp_path):
     assert "PAGE_MARKER_5" not in text
 
 
+def test_extract_pdf_text_default_window_is_3(tmp_path):
+    """Default window=3 catches typical 1-3 page front-matter offset."""
+    pdf = tmp_path / "doc.pdf"
+    _make_multipage_pdf(pdf, page_count=20)
+    text = _extract_pdf_text(pdf, page_hint=10)  # no window kwarg
+    # Default window=3 around page 10 → pages 7..13
+    for i in range(7, 14):
+        assert f"PAGE_MARKER_{i}" in text, f"page {i} missing from default window"
+    assert "PAGE_MARKER_6" not in text
+    assert "PAGE_MARKER_14" not in text
+
+
 def test_extract_pdf_text_no_hint_returns_all_pages(tmp_path):
     pdf = tmp_path / "doc.pdf"
     _make_multipage_pdf(pdf, page_count=5)

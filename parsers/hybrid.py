@@ -43,14 +43,16 @@ def _extract_pdf_text(
     pdf_path: Path,
     page_hint: int | None,
     *,
-    window: int = 1,
+    window: int = 3,
     indicator_id: str = "",
 ) -> str:
     """Extract text from a PDF, optionally limited to a window around `page_hint`.
 
     `page_hint` is 1-indexed. When set, returns text from pages
     [page_hint - window .. page_hint + window], clamped to doc bounds.
-    When None, returns text for the whole doc.
+    Default window=3 absorbs the typical 1-3 page cover/TOC offset between
+    a PDF's printed page numbers and pdfplumber's 0-indexed positions.
+    When `page_hint` is None, returns text for the whole doc.
 
     Emits a debug line when ECONDELTA_DEBUG_PDF=1 is set.
     """
