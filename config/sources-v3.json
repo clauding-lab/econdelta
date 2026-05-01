@@ -1034,7 +1034,7 @@
       "fetch": {
         "type": "pdf",
         "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
-        "task": "Go to latest available PDF, Component 13",
+        "task": "Go to page 24 of the doc, Component 13 (Category-wise breakdown of custom-based import)",
         "discover": "latest_pdf_link"
       },
       "parse": {

@@ -453,13 +453,24 @@ def _needs_discover(url: str | None) -> bool:
     return any(url.rstrip("/").endswith(suffix) for suffix in _PDF_INDEX_SUFFIXES)
 
 
-def _build_fetch(primary: dict[str, Any]) -> dict[str, Any]:
+# Per-indicator task override for cases where v2's free-text instruction
+# lacks a `page N` hint that the LLM-fallback page-window slicer needs.
+# Keys are indicator ids; values replace the v2 task string verbatim.
+TASK_OVERRIDES: dict[str, str] = {
+    "categorywise_fy_import_breakdown": (
+        "Go to page 24 of the doc, Component 13 "
+        "(Category-wise breakdown of custom-based import)"
+    ),
+}
+
+
+def _build_fetch(ind_id: str, primary: dict[str, Any]) -> dict[str, Any]:
     """Construct the v3 fetch block from a v2 primary source entry."""
     fetch: dict[str, Any] = {
         "type": primary.get("type", "html"),
         "url": primary.get("url", ""),
     }
-    task = primary.get("task")
+    task = TASK_OVERRIDES.get(ind_id) or primary.get("task")
     if task:
         fetch["task"] = task
     if _needs_discover(fetch["url"]):
@@ -481,7 +492,7 @@ def _augment(ind: dict[str, Any]) -> dict[str, Any]:
         "name": ind["name"],
         "domain": meta["domain"],
         "cadence": ind.get("cadence", "monthly"),
-        "fetch": _build_fetch(primary),
+        "fetch": _build_fetch(ind_id, primary),
         "parse": {
             "deterministic": meta["deterministic"],
             "llm_prompt": meta["llm_prompt"],
