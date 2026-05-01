@@ -35,10 +35,59 @@ _NOISE_RE = re.compile(
     r"<(" + "|".join(_HTML_NOISE_TAGS) + r")\b[^>]*>.*?</\1>",
     re.IGNORECASE | re.DOTALL,
 )
+# OCR fallback fires when pdfplumber's text extraction returns less than this.
+# 200 chars catches scanned PDFs (text=0) and minimal-text PDFs that won't help Sonnet.
+_OCR_THRESHOLD_CHARS = 200
 
 
 def _load_prompt(name: str) -> str:
     return (PROMPTS_DIR / name).read_text()
+
+
+def _should_ocr(text: str) -> bool:
+    """Decide whether to fall back to OCR after pdfplumber text extraction.
+
+    True when the extracted text is empty or below `_OCR_THRESHOLD_CHARS`
+    (typical signature of a scanned-image PDF with no text layer).
+    """
+    return len(text.strip()) < _OCR_THRESHOLD_CHARS
+
+
+def _ocr_pdf_pages(
+    pdf_path: Path,
+    page_indices: list[int],
+    *,
+    indicator_id: str = "",
+) -> str:
+    """Run OCR over the given 0-indexed pages of `pdf_path` and return text.
+
+    Requires `pytesseract` + `pdf2image` Python libs and `tesseract` +
+    `poppler-utils` system binaries. Raises ImportError with a clear
+    install hint when missing — never silently returns empty.
+    """
+    try:
+        import pytesseract  # type: ignore[import-not-found]
+        from pdf2image import convert_from_path  # type: ignore[import-not-found]
+    except ImportError as e:
+        raise ImportError(
+            "OCR fallback requires pytesseract + pdf2image (pip) and "
+            "tesseract-ocr + poppler-utils (apt). Install or set "
+            "ECONDELTA_DISABLE_OCR=1 to skip."
+        ) from e
+
+    if not page_indices:
+        return ""
+    # convert_from_path uses 1-indexed pages.
+    first = min(page_indices) + 1
+    last = max(page_indices) + 1
+    images = convert_from_path(str(pdf_path), first_page=first, last_page=last, dpi=200)
+    chunks = [pytesseract.image_to_string(img) for img in images]
+    text = "\n".join(chunks)
+    logger.info(
+        "ocr_fallback indicator=%s pages=%d-%d ocr_len=%d",
+        indicator_id or "?", first, last, len(text),
+    )
+    return text
 
 
 def _clean_html(text: str) -> str:
@@ -92,6 +141,10 @@ def _extract_pdf_text(
             pages = pdf.pages
             start, end = 0, total
         text = "\n".join((p.extract_text() or "") for p in pages)
+
+    if _should_ocr(text) and not os.environ.get("ECONDELTA_DISABLE_OCR"):
+        page_indices = list(range(start, end))
+        text = _ocr_pdf_pages(pdf_path, page_indices, indicator_id=indicator_id)
 
     if os.environ.get("ECONDELTA_DEBUG_PDF"):
         logger.info(

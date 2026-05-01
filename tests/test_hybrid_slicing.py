@@ -10,6 +10,12 @@ from reportlab.pdfgen import canvas
 from parsers.hybrid import _extract_pdf_text, _parse_page_hint
 
 
+@pytest.fixture(autouse=True)
+def _disable_ocr_by_default(monkeypatch):
+    """Test fixtures use brief text well under the OCR threshold; opt-in per-test."""
+    monkeypatch.setenv("ECONDELTA_DISABLE_OCR", "1")
+
+
 def _make_multipage_pdf(path, page_count: int = 5) -> None:
     c = canvas.Canvas(str(path), pagesize=letter)
     for i in range(1, page_count + 1):
@@ -162,3 +168,78 @@ def test_clean_html_handles_case_insensitive_style():
     out = _clean_html(raw)
     assert "noise" not in out
     assert "DATA" in out
+
+
+# ---------------- OCR fallback tests (Category A) ----------------
+from unittest.mock import patch  # noqa: E402
+
+from parsers.hybrid import _should_ocr  # noqa: E402
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("", True),
+        ("   \n  \t  ", True),
+        ("a" * 199, True),
+        ("a" * 200, False),
+        ("Major Economic Indicators: Monthly Update " * 10, False),
+    ],
+)
+def test_should_ocr_threshold(text, expected):
+    """OCR fires when extracted text is empty or sub-200-char (likely scanned)."""
+    assert _should_ocr(text) is expected
+
+
+def test_extract_pdf_text_falls_back_to_ocr_when_text_empty(tmp_path, monkeypatch):
+    """When pdfplumber returns nothing, OCR helper is called and its output is used."""
+    pdf = tmp_path / "scanned.pdf"
+    _make_multipage_pdf(pdf, page_count=2)  # has text — but we'll mock pdfplumber to return ''
+    monkeypatch.delenv("ECONDELTA_DISABLE_OCR", raising=False)  # override autouse
+
+    fake_ocr_text = "OCR_RECOVERED_TABLE_DATA: 1234.56"
+    with patch("parsers.hybrid._ocr_pdf_pages", return_value=fake_ocr_text) as mock_ocr, \
+         patch("pdfplumber.open") as mock_open:
+        mock_open.return_value.__enter__.return_value.pages = [
+            type("P", (), {"extract_text": lambda self: ""})() for _ in range(2)
+        ]
+        result = _extract_pdf_text(pdf, page_hint=None, indicator_id="scanned_test")
+
+    assert mock_ocr.called, "OCR should be invoked when extracted text is empty"
+    assert "OCR_RECOVERED_TABLE_DATA" in result
+
+
+def test_extract_pdf_text_skips_ocr_when_text_present(tmp_path, monkeypatch):
+    """When pdfplumber returns real text, OCR helper must NOT be called."""
+    pdf = tmp_path / "text_pdf.pdf"
+    _make_multipage_pdf(pdf, page_count=2)
+    monkeypatch.delenv("ECONDELTA_DISABLE_OCR", raising=False)  # override autouse
+
+    # Use enough fake text to clear the 200-char OCR threshold
+    long_text = "x" * 300
+    with patch("parsers.hybrid._ocr_pdf_pages") as mock_ocr, \
+         patch("pdfplumber.open") as mock_open:
+        mock_open.return_value.__enter__.return_value.pages = [
+            type("P", (), {"extract_text": lambda self: long_text})() for _ in range(2)
+        ]
+        result = _extract_pdf_text(pdf, page_hint=None, indicator_id="text_test")
+
+    assert not mock_ocr.called, "OCR must not run when pdfplumber returns text"
+    assert long_text in result
+
+
+def test_extract_pdf_text_disable_ocr_env_skips_fallback(tmp_path, monkeypatch):
+    """ECONDELTA_DISABLE_OCR=1 disables the OCR fallback even on empty PDFs."""
+    pdf = tmp_path / "scanned.pdf"
+    _make_multipage_pdf(pdf, page_count=1)
+    monkeypatch.setenv("ECONDELTA_DISABLE_OCR", "1")
+
+    with patch("parsers.hybrid._ocr_pdf_pages") as mock_ocr, \
+         patch("pdfplumber.open") as mock_open:
+        mock_open.return_value.__enter__.return_value.pages = [
+            type("P", (), {"extract_text": lambda self: ""})()
+        ]
+        result = _extract_pdf_text(pdf, page_hint=None, indicator_id="scanned_test")
+
+    assert not mock_ocr.called, "OCR must be disabled when env var set"
+    assert result == ""
