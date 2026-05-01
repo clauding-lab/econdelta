@@ -4,6 +4,11 @@ Documentation=https://github.com/clauding-lab/econdelta
 After=network-online.target
 Wants=network-online.target
 
+# Retry on transient failures (BB.org.bd Akamai challenges, network blips).
+# Up to 3 starts per 30-min window — initial fire plus 2 retries.
+StartLimitIntervalSec=1800
+StartLimitBurst=3
+
 [Service]
 Type=oneshot
 User=adnan
@@ -25,8 +30,10 @@ ProtectSystem=strict
 ProtectHome=read-only
 ReadWritePaths=/home/adnan/econdelta/data /home/adnan/econdelta/logs
 
-# Timeouts — full fetch across ~45 indicators may take several minutes
+# Timeouts + retry on transient failures
 TimeoutStartSec=900
+Restart=on-failure
+RestartSec=300
 
 # Logging
 StandardOutput=append:/home/adnan/econdelta/logs/fetch-systemd.log

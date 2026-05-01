@@ -4,6 +4,12 @@ Documentation=https://github.com/clauding-lab/econdelta
 After=econdelta-fetch.service network-online.target
 Wants=network-online.target
 
+# Retry on transient failures (Sonnet API hiccups, network blips). Up to 3
+# starts per 30-min window — initial fire plus 2 retries. Note: parse needs
+# fetched artifacts; if fetch failed, parse will run on the prior day's cache.
+StartLimitIntervalSec=1800
+StartLimitBurst=3
+
 [Service]
 Type=oneshot
 User=adnan
@@ -27,8 +33,10 @@ ProtectSystem=strict
 ProtectHome=read-only
 ReadWritePaths=/home/adnan/econdelta/data /home/adnan/econdelta/logs
 
-# Timeouts — Sonnet round-trips for ~45 indicators may take 5-15 min
+# Timeouts + retry on transient failures
 TimeoutStartSec=1800
+Restart=on-failure
+RestartSec=300
 
 # Logging
 StandardOutput=append:/home/adnan/econdelta/logs/parse-systemd.log
