@@ -625,7 +625,7 @@
       "fetch": {
         "type": "pdf",
         "url": "https://www.bb.org.bd/en/index.php/publication/publictn/5/27",
-        "task": "Go to latest available PDF, Component 1",
+        "task": "WSEI page 1, row 'Foreign Exchange Reserve (in million USS)', latest date column. Take the BPM6 value (the parenthesised one). Convert from million USD to USD billion (divide by 1000).",
         "discover": "latest_pdf_link"
       },
       "parse": {
@@ -941,7 +941,7 @@
       "fetch": {
         "type": "pdf",
         "url": "https://www.bb.org.bd/en/index.php/publication/publictn/5/27",
-        "task": "Go to latest available PDF, Component 6b",
+        "task": "WSEI page 1, row labelled 'Import(f.o.b.) (in million USS)' specifically (NOT 'Import (C&F)'), latest single-month column. Convert from million USD to USD billion (divide by 1000).",
         "discover": "latest_pdf_link"
       },
       "parse": {
@@ -1007,7 +1007,7 @@
       "fetch": {
         "type": "pdf",
         "url": "https://www.bb.org.bd/en/index.php/publication/publictn/5/27",
-        "task": "Go to latest available PDF, Component 13",
+        "task": "WSEI page 1, row 13 'L/C Opening and Settlement (in million USS)', sub-row 'Total', column 'July-November FY26 Opening' (or latest fiscal-year YTD opening total). Convert from million USD to USD billion.",
         "discover": "latest_pdf_link"
       },
       "parse": {
@@ -1088,7 +1088,7 @@
       "fetch": {
         "type": "pdf",
         "url": "https://www.bb.org.bd/en/index.php/publication/publictn/5/27",
-        "task": "Go to latest available PDF, Component 5a",
+        "task": "WSEI page 1, row 5a 'Wage Earners' Remittances (in million USS)', latest complete fiscal year column (e.g. 'FY25'). Convert from million USD to USD billion.",
         "discover": "latest_pdf_link"
       },
       "parse": {
@@ -1097,7 +1097,7 @@
         "value_type": "amount_usd_bn",
         "valid_range": [
           0.0,
-          30.0
+          50.0
         ]
       },
       "anomaly_threshold": 0.1,

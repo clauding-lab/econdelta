@@ -406,10 +406,11 @@ META: dict[str, dict[str, Any]] = {
         "anomaly_threshold": 0.05,
     },
     "fy_remittance": {
+        # BD annual remittance was 30.33 USD bn (FY25); old upper 30.0 rejected it.
         "domain": "external_sector",
         "deterministic": "pdf_component",
         "value_type": "amount_usd_bn",
-        "valid_range": [0.0, 30.0],
+        "valid_range": [0.0, 50.0],
         "llm_prompt": "pdf_component.txt",
         "anomaly_threshold": 0.10,
     },
@@ -454,12 +455,36 @@ def _needs_discover(url: str | None) -> bool:
 
 
 # Per-indicator task override for cases where v2's free-text instruction
-# lacks a `page N` hint that the LLM-fallback page-window slicer needs.
+# is too vague for the LLM extractor (no page hint, ambiguous label, etc.).
 # Keys are indicator ids; values replace the v2 task string verbatim.
 TASK_OVERRIDES: dict[str, str] = {
     "categorywise_fy_import_breakdown": (
         "Go to page 24 of the doc, Component 13 "
         "(Category-wise breakdown of custom-based import)"
+    ),
+    # The 4 indicators below all source from the BB Weekly Selected Economic
+    # Indicators (WSEI) PDF — a one-page summary with row labels different
+    # from the BB MEI 'Component N' convention. Sharper task text + WSEI's
+    # actual labels keeps Sonnet from second-guessing.
+    "fx_reserve_gross_and_bpm6": (
+        "WSEI page 1, row 'Foreign Exchange Reserve (in million USS)', "
+        "latest date column. Take the BPM6 value (the parenthesised one). "
+        "Convert from million USD to USD billion (divide by 1000)."
+    ),
+    "monthly_import": (
+        "WSEI page 1, row labelled 'Import(f.o.b.) (in million USS)' specifically "
+        "(NOT 'Import (C&F)'), latest single-month column. Convert from "
+        "million USD to USD billion (divide by 1000)."
+    ),
+    "fy_import_lc": (
+        "WSEI page 1, row 13 'L/C Opening and Settlement (in million USS)', "
+        "sub-row 'Total', column 'July-November FY26 Opening' (or latest "
+        "fiscal-year YTD opening total). Convert from million USD to USD billion."
+    ),
+    "fy_remittance": (
+        "WSEI page 1, row 5a 'Wage Earners' Remittances (in million USS)', "
+        "latest complete fiscal year column (e.g. 'FY25'). Convert from "
+        "million USD to USD billion."
     ),
 }
 
