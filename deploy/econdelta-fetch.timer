@@ -1,9 +1,9 @@
 [Unit]
-Description=Run EconDelta Stage 1 fetch daily at 00:00 UTC (06:00 BDT)
+Description=Run EconDelta Stage 1 fetch daily at 23:00 UTC (05:00 BDT next day)
 Requires=econdelta-fetch.service
 
 [Timer]
-OnCalendar=*-*-* 00:00:00 UTC
+OnCalendar=*-*-* 23:00:00 UTC
 Persistent=true
 RandomizedDelaySec=120
 
