@@ -118,10 +118,13 @@ def test_debug_log_silent_when_env_unset(tmp_path, monkeypatch, caplog):
 from parsers.hybrid import _clean_html  # noqa: E402
 
 
-def test_clean_html_strips_script_blocks():
-    raw = "<html><body><script>var x=1;</script><table>DATA</table></body></html>"
+def test_clean_html_PRESERVES_script_blocks():
+    """BB.org.bd embeds real table data inside inline <script> JSON / JS arrays.
+    Stripping scripts regressed bill_bond_rates, policy_rate_slf_sdf, etc."""
+    raw = "<html><body><script>var data = [11.99, 8.5];</script><table>DATA</table></body></html>"
     out = _clean_html(raw)
-    assert "var x" not in out
+    assert "var data" in out
+    assert "11.99" in out
     assert "DATA" in out
 
 
@@ -154,9 +157,8 @@ def test_clean_html_preserves_table_content():
     assert "456" in out
 
 
-def test_clean_html_handles_case_insensitive_tags():
-    raw = "<html><body><SCRIPT>noise</SCRIPT><STYLE>noise2</STYLE>DATA</body></html>"
+def test_clean_html_handles_case_insensitive_style():
+    raw = "<html><body><STYLE>noise</STYLE>DATA</body></html>"
     out = _clean_html(raw)
     assert "noise" not in out
-    assert "noise2" not in out
     assert "DATA" in out

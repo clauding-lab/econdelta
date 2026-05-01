@@ -20,14 +20,17 @@ PROMPTS_DIR = Path(__file__).resolve().parent.parent / "claude_max" / "prompts"
 # Sonnet sees this many chars from the artifact. Old value was 6000 which
 # truncated multi-page PDFs to TOC + first page of exec summary.
 LLM_TEXT_CAP = 30000
-# HTML pages from BB.org.bd have heavy <style>/<script> noise (e.g.
-# treasury_bill_outstanding is 96KB raw, ~30KB after cleaning). The cleaner
-# strips noise first, then a generous HTML cap absorbs remaining table data.
-LLM_HTML_CAP = 60000
+# HTML pages from BB.org.bd vary widely (some have heavy inline CSS, some
+# embed table data inside <script> JSON). Strip only definitely-noise blocks
+# (style, noscript) and raise the cap so multi-table pages fit whole.
+# DO NOT strip <script> — BB injects data into inline scripts that the page's
+# JS later renders into visible tables. Stripping scripts caused regressions
+# in bill_bond_rates, policy_rate_slf_sdf, and interbank_repo_data.
+LLM_HTML_CAP = 90000
 
 _PAGE_HINT_RE = re.compile(r"pages?\s+(\d+)", re.IGNORECASE)
 # Block-level noise tags whose contents are never useful to Sonnet.
-_HTML_NOISE_TAGS = ("script", "style", "noscript")
+_HTML_NOISE_TAGS = ("style", "noscript")
 _NOISE_RE = re.compile(
     r"<(" + "|".join(_HTML_NOISE_TAGS) + r")\b[^>]*>.*?</\1>",
     re.IGNORECASE | re.DOTALL,
