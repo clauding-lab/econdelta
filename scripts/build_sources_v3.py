@@ -215,14 +215,9 @@ META: dict[str, dict[str, Any]] = {
         "llm_prompt": "html_table_row.txt",
         "anomaly_threshold": 0.05,
     },
-    "gsec_maturity": {
-        "domain": "money_market",
-        "deterministic": "html_table_row",
-        "value_type": "amount_bdt_crore",
-        "valid_range": [0.0, 200_000.0],
-        "llm_prompt": "html_table_row.txt",
-        "anomaly_threshold": 0.05,
-    },
+    # gsec_maturity removed: source URL was placeholder "Own Data Hub"
+    # (data was meant to come from an internal data hub not yet built).
+    # Re-add when an internal source or BB URL is identified.
     "interbank_repo_data": {
         "domain": "money_market",
         "deterministic": "html_table_row",

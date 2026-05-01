@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import logging
+import os
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -15,9 +17,70 @@ from parsers.registry import get_parser
 logger = logging.getLogger("hybrid")
 PROMPTS_DIR = Path(__file__).resolve().parent.parent / "claude_max" / "prompts"
 
+# Sonnet sees this many chars from the artifact. Old value was 6000 which
+# truncated multi-page PDFs to TOC + first page of exec summary.
+LLM_TEXT_CAP = 30000
+
+_PAGE_HINT_RE = re.compile(r"pages?\s+(\d+)", re.IGNORECASE)
+
 
 def _load_prompt(name: str) -> str:
     return (PROMPTS_DIR / name).read_text()
+
+
+def _parse_page_hint(instruction: str) -> int | None:
+    """Extract a 1-indexed page number from English like 'Go to page 15 of the doc'.
+
+    Returns None when no `page N` / `pages N-M` token is present.
+    """
+    if not instruction:
+        return None
+    m = _PAGE_HINT_RE.search(instruction)
+    return int(m.group(1)) if m else None
+
+
+def _extract_pdf_text(
+    pdf_path: Path,
+    page_hint: int | None,
+    *,
+    window: int = 1,
+    indicator_id: str = "",
+) -> str:
+    """Extract text from a PDF, optionally limited to a window around `page_hint`.
+
+    `page_hint` is 1-indexed. When set, returns text from pages
+    [page_hint - window .. page_hint + window], clamped to doc bounds.
+    When None, returns text for the whole doc.
+
+    Emits a debug line when ECONDELTA_DEBUG_PDF=1 is set.
+    """
+    import pdfplumber
+
+    with pdfplumber.open(pdf_path) as pdf:
+        total = len(pdf.pages)
+        if page_hint is not None:
+            target = page_hint - 1
+            start = max(0, target - window)
+            end = min(total, target + window + 1)
+            pages = pdf.pages[start:end]
+        else:
+            pages = pdf.pages
+            start, end = 0, total
+        text = "\n".join((p.extract_text() or "") for p in pages)
+
+    if os.environ.get("ECONDELTA_DEBUG_PDF"):
+        logger.info(
+            "pdf_text indicator=%s len=%d pages=%d-%d/%d hint=%s first500=%r last500=%r",
+            indicator_id or "?",
+            len(text),
+            start + 1,
+            end,
+            total,
+            page_hint,
+            text[:500],
+            text[-500:],
+        )
+    return text
 
 
 def _sanity_check(*, indicator: dict, value: float, history: list[float]) -> Any:
@@ -36,25 +99,29 @@ def _sanity_check(*, indicator: dict, value: float, history: list[float]) -> Any
 
 def _llm_extract(*, indicator: dict, artifact: FetchResult) -> Any:
     template = _load_prompt(indicator["parse"]["llm_prompt"])
+    instruction = indicator["fetch"].get("task", "")
     if artifact.artifact_type == "pdf":
-        import pdfplumber
-        with pdfplumber.open(artifact.artifact_path) as pdf:
-            text = "\n".join((p.extract_text() or "") for p in pdf.pages)
+        page_hint = _parse_page_hint(instruction)
+        text = _extract_pdf_text(
+            artifact.artifact_path,
+            page_hint=page_hint,
+            indicator_id=indicator["id"],
+        )
         prompt = template.format(
             indicator_name=indicator["name"],
-            instruction=indicator["fetch"].get("task", ""),
+            instruction=instruction,
             value_type=indicator["parse"]["value_type"],
             valid_range=indicator["parse"]["valid_range"],
-            pdf_text=text[:6000],
+            pdf_text=text[:LLM_TEXT_CAP],
         )
     else:
         text = artifact.artifact_path.read_text()
         prompt = template.format(
             indicator_name=indicator["name"],
-            instruction=indicator["fetch"].get("task", ""),
+            instruction=instruction,
             value_type=indicator["parse"]["value_type"],
             valid_range=indicator["parse"]["valid_range"],
-            html_text=text[:6000],
+            html_text=text[:LLM_TEXT_CAP],
         )
     return run_max(prompt=prompt)
 

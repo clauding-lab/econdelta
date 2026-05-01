@@ -615,31 +615,6 @@
           50000.0
         ]
       },
-      "anomaly_threshold": 0.05,
-      "alternate": {
-        "url": "News FOR Special Auction",
-        "type": "html",
-        "task": null
-      }
-    },
-    {
-      "id": "gsec_maturity",
-      "name": "GSEC Maturity",
-      "domain": "money_market",
-      "cadence": "monthly",
-      "fetch": {
-        "type": "html",
-        "url": "Own Data Hub"
-      },
-      "parse": {
-        "deterministic": "html_table_row",
-        "llm_prompt": "html_table_row.txt",
-        "value_type": "amount_bdt_crore",
-        "valid_range": [
-          0.0,
-          200000.0
-        ]
-      },
       "anomaly_threshold": 0.05
     },
     {
