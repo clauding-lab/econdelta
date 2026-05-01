@@ -28,3 +28,12 @@ def test_values_match_floats_within_relative_tolerance():
 def test_values_match_int_strict_equality():
     assert values_match(5, 5, value_type="count")
     assert values_match(5, 6, value_type="count") is False
+
+
+def test_validate_value_accepts_amount_usd_mn():
+    # BB monthly Import LC opening typically lands in single-digit-thousands USD millions
+    validate_value(value=6346.29, value_type="amount_usd_mn", valid_range=(0.0, 20000.0))
+
+
+def test_values_match_amount_usd_mn_uses_float_tolerance():
+    assert values_match(6346.29, 6346.5, value_type="amount_usd_mn")

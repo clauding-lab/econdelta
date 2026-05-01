@@ -969,10 +969,10 @@
       "parse": {
         "deterministic": "pdf_table_row",
         "llm_prompt": "pdf_table_row.txt",
-        "value_type": "amount_usd_bn",
+        "value_type": "amount_usd_mn",
         "valid_range": [
           0.0,
-          10.0
+          20000.0
         ]
       },
       "anomaly_threshold": 0.05
@@ -991,10 +991,10 @@
       "parse": {
         "deterministic": "pdf_table_row",
         "llm_prompt": "pdf_table_row.txt",
-        "value_type": "amount_usd_bn",
+        "value_type": "amount_usd_mn",
         "valid_range": [
           0.0,
-          10.0
+          20000.0
         ]
       },
       "anomaly_threshold": 0.05

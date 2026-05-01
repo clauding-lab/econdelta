@@ -364,18 +364,20 @@ META: dict[str, dict[str, Any]] = {
         "anomaly_threshold": 0.05,
     },
     "monthly_import_lc_opening": {
+        # BB MEI Import Payments report values are USD millions, not billions.
+        # Sonnet correctly extracted 6346.29 (~$6.3B/mo); old config rejected it.
         "domain": "external_sector",
         "deterministic": "pdf_table_row",
-        "value_type": "amount_usd_bn",
-        "valid_range": [0.0, 10.0],
+        "value_type": "amount_usd_mn",
+        "valid_range": [0.0, 20_000.0],
         "llm_prompt": "pdf_table_row.txt",
         "anomaly_threshold": 0.05,
     },
     "monthly_import_lc_settlement": {
         "domain": "external_sector",
         "deterministic": "pdf_table_row",
-        "value_type": "amount_usd_bn",
-        "valid_range": [0.0, 10.0],
+        "value_type": "amount_usd_mn",
+        "valid_range": [0.0, 20_000.0],
         "llm_prompt": "pdf_table_row.txt",
         "anomaly_threshold": 0.05,
     },

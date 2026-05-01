@@ -112,3 +112,51 @@ def test_debug_log_silent_when_env_unset(tmp_path, monkeypatch, caplog):
         _extract_pdf_text(pdf, page_hint=None, indicator_id="test_ind")
     debug_lines = [r for r in caplog.records if "pdf_text" in r.getMessage()]
     assert not debug_lines, f"expected no debug logs, got: {[r.getMessage() for r in debug_lines]}"
+
+
+# ---------------- HTML cleaner tests (Category C) ----------------
+from parsers.hybrid import _clean_html  # noqa: E402
+
+
+def test_clean_html_strips_script_blocks():
+    raw = "<html><body><script>var x=1;</script><table>DATA</table></body></html>"
+    out = _clean_html(raw)
+    assert "var x" not in out
+    assert "DATA" in out
+
+
+def test_clean_html_strips_style_blocks():
+    raw = "<html><head><style>.t1{color:red}</style></head><body>DATA</body></html>"
+    out = _clean_html(raw)
+    assert ".t1" not in out
+    assert "color:red" not in out
+    assert "DATA" in out
+
+
+def test_clean_html_strips_noscript_and_meta():
+    raw = """<html><head>
+    <meta charset="utf-8">
+    <noscript>js required</noscript>
+    </head><body>DATA</body></html>"""
+    out = _clean_html(raw)
+    assert "js required" not in out
+    assert "DATA" in out
+
+
+def test_clean_html_preserves_table_content():
+    raw = """<html><body><table>
+    <tr><td>row1</td><td>123</td></tr>
+    <tr><td>total</td><td>456</td></tr>
+    </table></body></html>"""
+    out = _clean_html(raw)
+    assert "row1" in out
+    assert "total" in out
+    assert "456" in out
+
+
+def test_clean_html_handles_case_insensitive_tags():
+    raw = "<html><body><SCRIPT>noise</SCRIPT><STYLE>noise2</STYLE>DATA</body></html>"
+    out = _clean_html(raw)
+    assert "noise" not in out
+    assert "noise2" not in out
+    assert "DATA" in out

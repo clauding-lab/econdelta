@@ -8,7 +8,9 @@ from __future__ import annotations
 
 from typing import Final, Literal
 
-ValueType = Literal["percent", "amount_bdt_crore", "amount_usd_bn", "ratio", "count", "rate"]
+ValueType = Literal[
+    "percent", "amount_bdt_crore", "amount_usd_bn", "amount_usd_mn", "ratio", "count", "rate"
+]
 
 _FLOAT_RELATIVE_TOLERANCE: Final[float] = 0.005
 

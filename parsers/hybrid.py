@@ -20,12 +20,32 @@ PROMPTS_DIR = Path(__file__).resolve().parent.parent / "claude_max" / "prompts"
 # Sonnet sees this many chars from the artifact. Old value was 6000 which
 # truncated multi-page PDFs to TOC + first page of exec summary.
 LLM_TEXT_CAP = 30000
+# HTML pages from BB.org.bd have heavy <style>/<script> noise (e.g.
+# treasury_bill_outstanding is 96KB raw, ~30KB after cleaning). The cleaner
+# strips noise first, then a generous HTML cap absorbs remaining table data.
+LLM_HTML_CAP = 60000
 
 _PAGE_HINT_RE = re.compile(r"pages?\s+(\d+)", re.IGNORECASE)
+# Block-level noise tags whose contents are never useful to Sonnet.
+_HTML_NOISE_TAGS = ("script", "style", "noscript")
+_NOISE_RE = re.compile(
+    r"<(" + "|".join(_HTML_NOISE_TAGS) + r")\b[^>]*>.*?</\1>",
+    re.IGNORECASE | re.DOTALL,
+)
 
 
 def _load_prompt(name: str) -> str:
     return (PROMPTS_DIR / name).read_text()
+
+
+def _clean_html(text: str) -> str:
+    """Strip <script>, <style>, <noscript> blocks from raw HTML.
+
+    Reduces token bloat so the data table fits within LLM_HTML_CAP. Does not
+    parse the DOM — regex is sufficient for BB.org.bd's static markup and
+    avoids the bs4 dependency in the hot path.
+    """
+    return _NOISE_RE.sub("", text)
 
 
 def _parse_page_hint(instruction: str) -> int | None:
@@ -117,13 +137,14 @@ def _llm_extract(*, indicator: dict, artifact: FetchResult) -> Any:
             pdf_text=text[:LLM_TEXT_CAP],
         )
     else:
-        text = artifact.artifact_path.read_text()
+        raw = artifact.artifact_path.read_text()
+        text = _clean_html(raw)
         prompt = template.format(
             indicator_name=indicator["name"],
             instruction=instruction,
             value_type=indicator["parse"]["value_type"],
             valid_range=indicator["parse"]["valid_range"],
-            html_text=text[:LLM_TEXT_CAP],
+            html_text=text[:LLM_HTML_CAP],
         )
     return run_max(prompt=prompt)
 

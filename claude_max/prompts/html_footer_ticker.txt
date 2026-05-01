@@ -12,6 +12,9 @@ Numbers may use commas (1,234,567 = 1234567). Strip commas and return a single n
 {html_text}
 <<<END>>>
 
-Reply ONLY with strict JSON of the form:
+RULES:
+- If you locate a candidate number matching the instruction, RETURN IT as `value`. Never put a number inside `reason` while leaving value=null — commit to the best-fit number.
+- Only return value=null when the data is genuinely absent from the provided text (empty page, the labeled value not present, content is a CAPTCHA/bot-challenge page).
+- Reply ONLY with strict JSON of the form:
 
-{{"value": <number>, "reason": "<1 sentence on where you found it>"}}
+{{"value": <number-or-null>, "reason": "<1 sentence on where you found it OR why it is missing>"}}

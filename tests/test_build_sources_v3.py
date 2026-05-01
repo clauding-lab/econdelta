@@ -29,7 +29,8 @@ def test_build_sources_v3_preserves_all_v2_ids(tmp_path):
             "commodities", "equities", "macro",
         }, f"{ind['id']} has bad domain {ind['domain']}"
         assert ind["parse"]["value_type"] in {
-            "percent", "amount_bdt_crore", "amount_usd_bn", "ratio", "count", "rate"
+            "percent", "amount_bdt_crore", "amount_usd_bn", "amount_usd_mn",
+            "ratio", "count", "rate",
         }
         assert isinstance(ind["parse"]["valid_range"], list) and len(ind["parse"]["valid_range"]) == 2
         assert isinstance(ind["anomaly_threshold"], (int, float))
