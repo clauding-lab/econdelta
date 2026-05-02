@@ -18,6 +18,7 @@ from fetchers.base import FetchError, FetchResult
 from fetchers.html_fetcher import fetch_html
 from fetchers.pdf_discovery import discover_latest_pdf_link
 from fetchers.pdf_fetcher import fetch_pdf
+from fetchers.pdf_fetcher_stealth import fetch_pdf_stealth
 
 REPO_ROOT = Path(__file__).resolve().parent
 DEFAULT_CONFIG = REPO_ROOT / "config" / "sources-v3.json"
@@ -47,6 +48,14 @@ def _fetch_one(indicator: dict, data_root: Path) -> FetchResult | None:
             html = _download_index_html(url)
             url = discover_latest_pdf_link(html=html, base_url=url)
         as_of_month = datetime.now(timezone.utc).strftime("%Y-%m")
+        if fetch_block.get("stealth"):
+            return fetch_pdf_stealth(
+                url=url,
+                indicator_id=indicator_id,
+                snapshot_dir=data_root,
+                as_of_month=as_of_month,
+                prime_url=fetch_block.get("prime_url", "https://www.bb.org.bd/"),
+            )
         return fetch_pdf(
             url=url,
             indicator_id=indicator_id,

@@ -672,6 +672,174 @@
       }
     },
     {
+      "id": "food_rice_coarse",
+      "name": "Retail price — Aman coarse rice (BDT/kg)",
+      "domain": "commodities",
+      "cadence": "daily",
+      "fetch": {
+        "type": "html",
+        "url": "http://market.dam.gov.bd/market_daily_price_report",
+        "task": "আমন চাল - মোটা"
+      },
+      "parse": {
+        "deterministic": "dam_ticker",
+        "llm_prompt": "html_footer_ticker.txt",
+        "value_type": "rate",
+        "valid_range": [
+          20.0,
+          200.0
+        ]
+      },
+      "anomaly_threshold": 0.20
+    },
+    {
+      "id": "food_atta_packet",
+      "name": "Retail price — Atta packaged (BDT/kg)",
+      "domain": "commodities",
+      "cadence": "daily",
+      "fetch": {
+        "type": "html",
+        "url": "http://market.dam.gov.bd/market_daily_price_report",
+        "task": "আটা (প্যাকেটজাত)"
+      },
+      "parse": {
+        "deterministic": "dam_ticker",
+        "llm_prompt": "html_footer_ticker.txt",
+        "value_type": "rate",
+        "valid_range": [
+          20.0,
+          200.0
+        ]
+      },
+      "anomaly_threshold": 0.20
+    },
+    {
+      "id": "food_egg_red",
+      "name": "Retail price — Red farm egg (BDT/4 pcs)",
+      "domain": "commodities",
+      "cadence": "daily",
+      "fetch": {
+        "type": "html",
+        "url": "http://market.dam.gov.bd/market_daily_price_report",
+        "task": "ডিম ফার্ম - লাল"
+      },
+      "parse": {
+        "deterministic": "dam_ticker",
+        "llm_prompt": "html_footer_ticker.txt",
+        "value_type": "rate",
+        "valid_range": [
+          20.0,
+          150.0
+        ]
+      },
+      "anomaly_threshold": 0.20
+    },
+    {
+      "id": "food_chicken_farm",
+      "name": "Retail price — Farm chicken (BDT/kg)",
+      "domain": "commodities",
+      "cadence": "daily",
+      "fetch": {
+        "type": "html",
+        "url": "http://market.dam.gov.bd/market_daily_price_report",
+        "task": "খামারের মুরগী"
+      },
+      "parse": {
+        "deterministic": "dam_ticker",
+        "llm_prompt": "html_footer_ticker.txt",
+        "value_type": "rate",
+        "valid_range": [
+          80.0,
+          400.0
+        ]
+      },
+      "anomaly_threshold": 0.20
+    },
+    {
+      "id": "food_oil_soybean",
+      "name": "Retail price — Soybean oil (BDT/litre)",
+      "domain": "commodities",
+      "cadence": "daily",
+      "fetch": {
+        "type": "html",
+        "url": "http://market.dam.gov.bd/market_daily_price_report",
+        "task": "সয়াবিন তেল"
+      },
+      "parse": {
+        "deterministic": "dam_ticker",
+        "llm_prompt": "html_footer_ticker.txt",
+        "value_type": "rate",
+        "valid_range": [
+          80.0,
+          400.0
+        ]
+      },
+      "anomaly_threshold": 0.20
+    },
+    {
+      "id": "food_onion_local",
+      "name": "Retail price — Local onion (BDT/kg)",
+      "domain": "commodities",
+      "cadence": "daily",
+      "fetch": {
+        "type": "html",
+        "url": "http://market.dam.gov.bd/market_daily_price_report",
+        "task": "পেঁয়াজ - দেশী"
+      },
+      "parse": {
+        "deterministic": "dam_ticker",
+        "llm_prompt": "html_footer_ticker.txt",
+        "value_type": "rate",
+        "valid_range": [
+          20.0,
+          400.0
+        ]
+      },
+      "anomaly_threshold": 0.30
+    },
+    {
+      "id": "food_lentil_moong",
+      "name": "Retail price — Moong lentil (BDT/kg)",
+      "domain": "commodities",
+      "cadence": "daily",
+      "fetch": {
+        "type": "html",
+        "url": "http://market.dam.gov.bd/market_daily_price_report",
+        "task": "মুগ ডাল"
+      },
+      "parse": {
+        "deterministic": "dam_ticker",
+        "llm_prompt": "html_footer_ticker.txt",
+        "value_type": "rate",
+        "valid_range": [
+          50.0,
+          250.0
+        ]
+      },
+      "anomaly_threshold": 0.20
+    },
+    {
+      "id": "food_sugar_local",
+      "name": "Retail price — Sugar local (BDT/kg)",
+      "domain": "commodities",
+      "cadence": "daily",
+      "fetch": {
+        "type": "html",
+        "url": "http://market.dam.gov.bd/market_daily_price_report",
+        "task": "চিনি (দেশী)"
+      },
+      "parse": {
+        "deterministic": "dam_ticker",
+        "llm_prompt": "html_footer_ticker.txt",
+        "value_type": "rate",
+        "valid_range": [
+          50.0,
+          250.0
+        ]
+      },
+      "anomaly_threshold": 0.20
+    },
+    {
       "id": "fx_reserve_gross_and_bpm6",
       "name": "FX Reserve Gross and BPM6",
       "domain": "forex_and_reserves",
