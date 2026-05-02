@@ -45,10 +45,10 @@ class MaxCallResult:
 def run_max(
     *,
     prompt: str,
-    model: str = "claude-sonnet-4-6",
-    timeout_s: int = 300,
+    model: str = "claude-opus-4-6",
+    timeout_s: int = 1800,
     claude_binary: str | None = None,
-    effort: str = "medium",
+    effort: str = "high",
 ) -> MaxCallResult:
     if claude_binary is None:
         claude_binary = os.environ.get("CLAUDE_BINARY", "claude")

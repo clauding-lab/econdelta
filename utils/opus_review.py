@@ -95,8 +95,8 @@ def review_data(
     history: list[dict[str, Any]],
     *,
     binary: str | None = None,
-    model: str = "claude-opus-4-7",
-    timeout_s: int = 300,
+    model: str = "claude-opus-4-6",
+    timeout_s: int = 600,
 ) -> dict[str, Any]:
     """Submit today's data + history to Opus for review.
 

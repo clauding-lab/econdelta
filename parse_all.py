@@ -122,11 +122,11 @@ def _claude_preflight() -> bool:
     binary = os.environ.get("CLAUDE_BINARY", "claude")
     try:
         result = subprocess.run(
-            [binary, "--print", "--model", "sonnet"],
+            [binary, "--print", "--model", "claude-opus-4-6"],
             input="say ok",
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=60,
         )
     except (subprocess.TimeoutExpired, FileNotFoundError) as e:
         logger.error("claude pre-flight failed: %s", e)
