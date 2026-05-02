@@ -345,6 +345,106 @@ def _build_v3_blocks(
     return data_additions, domains, freshness, alerts
 
 
+# EconDelta indicator-id ↔ brief metric_id alias map. The brief expects a
+# specific naming convention per section (`macro_*`, `remit_*`, `fiscal_*`,
+# `banking_*`, `food_*`); EconDelta keeps its own indicator IDs authoritative.
+# Pure 1:1 aliases (no unit conversion) live here.
+BRIEF_ALIASES: dict[str, str] = {
+    # macro
+    "macro_cpi_food":      "food_inflation",
+    "macro_cpi_headline":  "general_inflation",
+    "macro_cpi_nonfood":   "non_food_inflation",
+    "macro_credit_growth": "private_sector_credit",
+    # remittance
+    "remit_monthly_mn":    "monthly_remittance",
+    "remit_fy_mn":         "fy_remittance",
+    # fiscal
+    "fiscal_nbr_collected_trn": "tax_revenue",
+    "fiscal_govt_borrow_trn":   "domestic_borrowing_for_budget_deficit",
+    "fiscal_foreign_borrow_trn":"foreign_borrowing_for_budget_deficit",
+    "fiscal_bank_borrow_trn":   "bank_borrowing_for_deficit_financing",
+    "fiscal_nsc_outstanding":   "nsc_outstanding",
+    # banking primitives
+    "banking_broad_money":      "broad_money",
+    "banking_reserve_money":    "reserve_money",
+    "banking_money_multiplier": "money_multiplier",
+    "banking_excess_liquid":    "excess_liquid_asset_total_minimum",
+    "banking_deposits":         "deposits_of_the_system",
+    "banking_call_money_rate":  "call_money_rate",
+    # banking ratios (FSAR — quarterly)
+    "banking_npl_pct":          "gross_npl_ratio",
+    "banking_car_pct":          "banking_sector_crar",
+    # money market — yield headline (daily)
+    "tbill_91d_yield_pct":      "bill_bond_rates",
+    "gsec_next_auction_cr":     "gsec_auction",
+    # DAM retail food prices (daily, BDT/kg or BDT/4-pcs for eggs)
+    "food_rice_coarse_bdt":     "food_rice_coarse",
+    "food_atta_packet_bdt":     "food_atta_packet",
+    "food_egg_red_bdt":         "food_egg_red",
+    "food_chicken_farm_bdt":    "food_chicken_farm",
+    "food_oil_soybean_bdt":     "food_oil_soybean",
+    "food_onion_local_bdt":     "food_onion_local",
+    "food_lentil_moong_bdt":    "food_lentil_moong",
+    "food_sugar_local_bdt":     "food_sugar_local",
+}
+
+# Aliases that need a unit conversion (source unit → brief unit).
+# Format: brief_key → (source_key, multiplier).
+BRIEF_CONVERSIONS: dict[str, tuple[str, float]] = {
+    # T-Bill / T-Bond outstanding: gsom reports BDT million; brief expects
+    # BDT crore (1 crore = 10 million → multiplier 0.1).
+    "tbill_outstanding_cr": ("treasury_bill_outstanding", 0.1),
+    "tbond_outstanding_cr": ("treasury_bond_outstanding", 0.1),
+}
+
+# NBR cross-check tolerance (relative). TBS and Daily Star independently
+# report NBR FYTD collection; a >5% gap is treated as a mismatch (likely a
+# transcription error or stale article in one source).
+NBR_CROSS_CHECK_TOLERANCE = 0.05
+
+
+def _apply_brief_aliases(data: dict) -> None:
+    """Mutate `data` in place: surface EconDelta keys under brief-key names,
+    apply unit conversions, and run the NBR cross-check between TBS and
+    Daily Star sources. Idempotent: if a brief_key already exists it's left
+    untouched (so a hand-set value upstream wins).
+    """
+    for brief_key, econdelta_key in BRIEF_ALIASES.items():
+        if econdelta_key in data and brief_key not in data:
+            data[brief_key] = data[econdelta_key]
+
+    for brief_key, (source_key, mult) in BRIEF_CONVERSIONS.items():
+        if source_key in data and brief_key not in data:
+            v = data[source_key]
+            if isinstance(v, (int, float)):
+                data[brief_key] = round(v * mult, 2)
+
+    nbr_tbs = data.get("nbr_fytd_collected_tbs")
+    nbr_ds = data.get("nbr_fytd_collected_dailystar")
+    if "nbr_fytd_collected_cr" in data:
+        return
+    if isinstance(nbr_tbs, (int, float)) and isinstance(nbr_ds, (int, float)):
+        delta = abs(nbr_tbs - nbr_ds) / max(nbr_tbs, nbr_ds)
+        if delta <= NBR_CROSS_CHECK_TOLERANCE:
+            data["nbr_fytd_collected_cr"] = round((nbr_tbs + nbr_ds) / 2, 2)
+            data["nbr_fytd_cross_check"] = "confirmed"
+        else:
+            # Cumulative collection only grows during a fiscal year; the
+            # larger number is more likely to be the later-month report.
+            data["nbr_fytd_collected_cr"] = max(nbr_tbs, nbr_ds)
+            data["nbr_fytd_cross_check"] = f"mismatch_{delta:.2%}"
+            logger.warning(
+                "NBR cross-check mismatch: TBS=%s DS=%s delta=%.2f%%",
+                nbr_tbs, nbr_ds, delta * 100,
+            )
+    elif isinstance(nbr_tbs, (int, float)):
+        data["nbr_fytd_collected_cr"] = nbr_tbs
+        data["nbr_fytd_cross_check"] = "tbs_only"
+    elif isinstance(nbr_ds, (int, float)):
+        data["nbr_fytd_collected_cr"] = nbr_ds
+        data["nbr_fytd_cross_check"] = "dailystar_only"
+
+
 def write_latest(bundle: LatestBundle) -> None:
     """Atomic write: .tmp -> os.replace."""
     DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -394,38 +494,7 @@ def main() -> int:
         if forex.reserves is not None:
             data["fx_reserve_gross_and_bpm6"] = forex.reserves.gross_reserves_usd_bn
 
-    # Brief-key aliases: EconDelta and the brief use different metric_id
-    # conventions for the same underlying numbers. Surface EconDelta's keys
-    # under the brief's expected key names so the brief's macro/remit/fiscal
-    # sections populate without each builder reaching for two key shapes.
-    # (One-way alias: brief side reads expected name, EconDelta keeps its own
-    # name authoritative for tooling.)
-    BRIEF_ALIASES = {
-        # macro
-        "macro_cpi_food":      "food_inflation",
-        "macro_cpi_headline":  "general_inflation",
-        "macro_cpi_nonfood":   "non_food_inflation",
-        "macro_credit_growth": "private_sector_credit",
-        # remittance
-        "remit_monthly_mn":    "monthly_remittance",
-        "remit_fy_mn":         "fy_remittance",
-        # fiscal
-        "fiscal_nbr_collected_trn": "tax_revenue",
-        "fiscal_govt_borrow_trn":   "domestic_borrowing_for_budget_deficit",
-        "fiscal_foreign_borrow_trn":"foreign_borrowing_for_budget_deficit",
-        "fiscal_bank_borrow_trn":   "bank_borrowing_for_deficit_financing",
-        "fiscal_nsc_outstanding":   "nsc_outstanding",
-        # banking primitives
-        "banking_broad_money":      "broad_money",
-        "banking_reserve_money":    "reserve_money",
-        "banking_money_multiplier": "money_multiplier",
-        "banking_excess_liquid":    "excess_liquid_asset_total_minimum",
-        "banking_deposits":         "deposits_of_the_system",
-        "banking_call_money_rate":  "call_money_rate",
-    }
-    for brief_key, econdelta_key in BRIEF_ALIASES.items():
-        if econdelta_key in data and brief_key not in data:
-            data[brief_key] = data[econdelta_key]
+    _apply_brief_aliases(data)
 
     try:
         bundle = LatestBundle(
