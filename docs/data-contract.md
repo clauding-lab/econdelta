@@ -186,6 +186,11 @@ Browse-by-section:
   EconDelta-native `food_*_bdt`
 - **Equities** — DSE summary fields (`dsex`, `dsex_change_pct`,
   `ds30`, `dses`, `turnover_crore`, `advancing`, `declining`)
+- **DSE sector heat** — `dse_sector_heat` (Phase 3.1, deferred): a
+  `dict[sector_name, pct_avg]` computed daily from constituent moves
+  per `config/dse_sector_constituents.json`. Brief renders the 4×2
+  heatmap in §06 when this dict is present; until the scraper ships
+  the field is absent and the brief gracefully falls back.
 
 ## 5. Cadence & freshness
 
