@@ -180,6 +180,54 @@ def _load_v3_snapshot(indicator_id: str) -> dict | None:
         return None
 
 
+def _is_bad_snapshot(snapshot: dict) -> bool:
+    """True if the snapshot represents a failed parse (sentinel 0.0 or missing value)."""
+    if snapshot.get("_provenance") == "needs_review":
+        return True
+    if snapshot.get("_parse_strategy") == "extract_failed":
+        return True
+    if snapshot.get("value") in (None, 0, 0.0):
+        return True
+    return False
+
+
+def _load_last_good_snapshot(indicator_id: str, *, max_days_back: int = 60) -> dict | None:
+    """Walk back through this indicator's per-day snapshots for the most recent good one.
+
+    A 'good' snapshot is one where _is_bad_snapshot() is False — i.e. real
+    extracted data, not the 0.0 placeholder the parser writes when extraction
+    fails. Returns the snapshot dict (with the original date in _stale_from
+    annotation) or None if no good snapshot exists in the lookback window.
+    """
+    d = DATA_DIR / indicator_id
+    if not d.exists():
+        return None
+    candidates = sorted(d.glob("*.json"), reverse=True)
+    cutoff_age_days = max_days_back
+    today = datetime.now(timezone.utc).date()
+    for path in candidates:
+        try:
+            blob = json.loads(path.read_text())
+        except (json.JSONDecodeError, OSError):
+            continue
+        if _is_bad_snapshot(blob):
+            continue
+        # Check it's not too far in the past
+        try:
+            scraped = datetime.fromisoformat(
+                blob["scraped_at"].replace("Z", "+00:00")
+            ).date()
+            if (today - scraped).days > cutoff_age_days:
+                return None  # too old, give up (history is sorted newest-first)
+        except (KeyError, ValueError):
+            continue
+        # Annotate with stale-fallback metadata
+        blob["_provenance"] = "stale_fallback"
+        blob["_stale_from"] = path.stem  # e.g. "2026-04-29"
+        return blob
+    return None
+
+
 def _is_fresh(snapshot: dict, now: datetime) -> bool:
     """Return True if the snapshot is within its cadence staleness threshold."""
     cadence = snapshot.get("cadence", "daily")
@@ -228,11 +276,28 @@ def _build_v3_blocks(
             indicators_failed += 1
             continue
 
-        provenance = snapshot.get("_provenance")
-        if provenance == "needs_review" or snapshot.get("_parse_strategy") == "extract_failed":
+        # Stale-fallback: if today's snapshot is bad (parser wrote 0.0 with
+        # provenance=needs_review), walk back through history for the most
+        # recent successful extraction and use THAT instead, marked stale.
+        # If no good historical snapshot exists, skip the indicator entirely
+        # — better the brief shows a missing key than a misleading 0.0.
+        if _is_bad_snapshot(snapshot):
             indicators_failed += 1
+            historical = _load_last_good_snapshot(indicator_id)
+            if historical is None:
+                logger.info(
+                    "skipping %s — today bad and no good historical snapshot in last 60 days",
+                    indicator_id,
+                )
+                continue
+            logger.info(
+                "stale-fallback for %s: using %s (today is needs_review)",
+                indicator_id,
+                historical.get("_stale_from", "?"),
+            )
+            snapshot = historical
 
-        fresh = _is_fresh(snapshot, now)
+        fresh = _is_fresh(snapshot, now) and snapshot.get("_provenance") != "stale_fallback"
         if fresh:
             indicators_fresh += 1
             cadence_buckets[cadence]["fresh"] += 1
