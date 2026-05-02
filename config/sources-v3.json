@@ -990,6 +990,75 @@
       "anomaly_threshold": 0.30
     },
     {
+      "id": "nbr_vat_collected_cr",
+      "name": "NBR FYTD VAT Collection (BDT crore)",
+      "domain": "government_finance",
+      "cadence": "monthly",
+      "fetch": {
+        "type": "html",
+        "url": "https://www.tbsnews.net/nbr",
+        "task": "Extract ONLY the VAT (value-added tax) FYTD cumulative collection figure. If the article groups supplementary duty with VAT, include both. Return null if no VAT-specific figure is reported.",
+        "discover": "latest_article_link",
+        "article_pattern": "/nbr/[^\"]*(revenue|collect|target|shortfall)"
+      },
+      "parse": {
+        "deterministic": "html_footer_ticker",
+        "llm_prompt": "nbr_component_extract.txt",
+        "value_type": "amount_bdt_crore",
+        "valid_range": [
+          10000.0,
+          800000.0
+        ]
+      },
+      "anomaly_threshold": 0.30
+    },
+    {
+      "id": "nbr_it_collected_cr",
+      "name": "NBR FYTD Income Tax Collection (BDT crore)",
+      "domain": "government_finance",
+      "cadence": "monthly",
+      "fetch": {
+        "type": "html",
+        "url": "https://www.tbsnews.net/nbr",
+        "task": "Extract ONLY the Income Tax (direct tax) FYTD cumulative collection figure. Return null if no IT-specific figure is reported.",
+        "discover": "latest_article_link",
+        "article_pattern": "/nbr/[^\"]*(revenue|collect|target|shortfall)"
+      },
+      "parse": {
+        "deterministic": "html_footer_ticker",
+        "llm_prompt": "nbr_component_extract.txt",
+        "value_type": "amount_bdt_crore",
+        "valid_range": [
+          10000.0,
+          800000.0
+        ]
+      },
+      "anomaly_threshold": 0.30
+    },
+    {
+      "id": "nbr_customs_collected_cr",
+      "name": "NBR FYTD Customs Collection (BDT crore)",
+      "domain": "government_finance",
+      "cadence": "monthly",
+      "fetch": {
+        "type": "html",
+        "url": "https://www.tbsnews.net/nbr",
+        "task": "Extract ONLY the Customs (import duty / indirect tax customs) FYTD cumulative collection figure. Return null if no Customs-specific figure is reported.",
+        "discover": "latest_article_link",
+        "article_pattern": "/nbr/[^\"]*(revenue|collect|target|shortfall)"
+      },
+      "parse": {
+        "deterministic": "html_footer_ticker",
+        "llm_prompt": "nbr_component_extract.txt",
+        "value_type": "amount_bdt_crore",
+        "valid_range": [
+          10000.0,
+          800000.0
+        ]
+      },
+      "anomaly_threshold": 0.30
+    },
+    {
       "id": "fx_reserve_gross_and_bpm6",
       "name": "FX Reserve Gross and BPM6",
       "domain": "forex_and_reserves",

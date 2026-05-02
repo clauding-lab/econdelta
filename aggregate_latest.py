@@ -419,6 +419,11 @@ BRIEF_CONVERSIONS: dict[str, tuple[str, float]] = {
     # 1 billion = 1,000 million → multiplier 1000.
     "remit_monthly_mn": ("monthly_remittance", 1000.0),
     "remit_fy_mn":      ("fy_remittance", 1000.0),
+    # NBR component decomposition (Phase 3.2): articles report BDT crore,
+    # brief's §12 expects BDT bn. 1 bn = 100 crore → multiplier 0.01.
+    "nbr_vat_bn":       ("nbr_vat_collected_cr", 0.01),
+    "nbr_it_bn":        ("nbr_it_collected_cr", 0.01),
+    "nbr_customs_bn":   ("nbr_customs_collected_cr", 0.01),
 }
 
 # NBR cross-check tolerance (relative). TBS and Daily Star independently

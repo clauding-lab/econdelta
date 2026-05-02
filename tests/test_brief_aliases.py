@@ -163,6 +163,30 @@ def test_banking_ratio_aliases_propagate_fsar_values():
     assert data["banking_car_pct"] == 1.56
 
 
+def test_nbr_decomposition_components_convert_crore_to_bn():
+    """Phase 3.2: NBR articles report VAT/IT/Customs in BDT crore;
+    brief's §12 expects BDT bn. 1 bn = 100 crore → multiplier 0.01."""
+    data = {
+        "nbr_vat_collected_cr":     112_500.0,  # ~1.125 lakh crore
+        "nbr_it_collected_cr":       95_300.0,
+        "nbr_customs_collected_cr":  64_700.0,
+    }
+    _apply_brief_aliases(data)
+    assert data["nbr_vat_bn"] == 1125.0
+    assert data["nbr_it_bn"] == 953.0
+    assert data["nbr_customs_bn"] == 647.0
+
+
+def test_nbr_decomposition_skips_when_components_missing():
+    """If an article didn't report a component, the conversion skips it
+    entirely — brief renders null for that card rather than fabricating."""
+    data = {"nbr_vat_collected_cr": 112_500.0}  # IT and customs absent
+    _apply_brief_aliases(data)
+    assert data["nbr_vat_bn"] == 1125.0
+    assert "nbr_it_bn" not in data
+    assert "nbr_customs_bn" not in data
+
+
 def test_multi_tenor_yield_aliases_feed_yield_curve():
     """Phase 2.3 V5: brief's §07 builder reads tbond_tbill_{182,364}d and
     tbond_bond_{5y,10y}; EconDelta scrapes them as tbill_182d_yield etc.

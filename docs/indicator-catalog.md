@@ -6,7 +6,7 @@
 python3 scripts/build_catalog.py > docs/indicator-catalog.md
 ```
 
-**64** scraped indicators × **35** brief aliases × **9** unit conversions × **2** derived = **110** total entries.
+**67** scraped indicators × **35** brief aliases × **12** unit conversions × **2** derived = **116** total entries.
 
 Read the data contract for column semantics and query examples: [`data-contract.md`](data-contract.md).
 
@@ -62,8 +62,11 @@ Read the data contract for column semantics and query examples: [`data-contract.
 | government_finance | `budget_opex_of_the_fy_vs_utilization` | `amount_bdt_crore` | fiscal_year |  | [0.0, 1000000.0] | Budget OpEx of the FY vs Utilization |
 | government_finance | `domestic_borrowing_for_budget_deficit` | `amount_bdt_crore` | monthly | BB | [0.0, 400000.0] | Domestic Borrowing for Budget Deficit |
 | government_finance | `foreign_borrowing_for_budget_deficit` | `amount_bdt_crore` | monthly | BB | [0.0, 200000.0] | Foreign Borrowing for Budget Deficit |
+| government_finance | `nbr_customs_collected_cr` | `amount_bdt_crore` | monthly | TBS | [10000.0, 800000.0] | NBR FYTD Customs Collection (BDT crore) |
 | government_finance | `nbr_fytd_collected_dailystar` | `amount_bdt_crore` | monthly | Daily Star | [50000.0, 1000000.0] | NBR FYTD Collection — Daily Star (BDT crore) |
 | government_finance | `nbr_fytd_collected_tbs` | `amount_bdt_crore` | monthly | TBS | [50000.0, 1000000.0] | NBR FYTD Collection — TBS (BDT crore) |
+| government_finance | `nbr_it_collected_cr` | `amount_bdt_crore` | monthly | TBS | [10000.0, 800000.0] | NBR FYTD Income Tax Collection (BDT crore) |
+| government_finance | `nbr_vat_collected_cr` | `amount_bdt_crore` | monthly | TBS | [10000.0, 800000.0] | NBR FYTD VAT Collection (BDT crore) |
 | government_finance | `non_bank_borrowing_for_deficit_financing` | `amount_bdt_crore` | monthly | BB | [0.0, 200000.0] | Non-bank borrowing for Deficit Financing |
 | government_finance | `non_tax_revenue` | `amount_bdt_crore` | monthly |  | [0.0, 100000.0] | Non-Tax Revenue |
 | government_finance | `rev_gdp_ratio` | `percent` | quarterly |  | [0.0, 40.0] | Rev-GDP Ratio |
@@ -74,6 +77,9 @@ Read the data contract for column semantics and query examples: [`data-contract.
 | government_finance (brief conversion) | `fiscal_foreign_borrow_trn` | `amount_bdt_crore` | monthly | BB | — | Conversion of `foreign_borrowing_for_budget_deficit` × 1e-05 — Foreign Borrowing for Budget Deficit |
 | government_finance (brief conversion) | `fiscal_govt_borrow_trn` | `amount_bdt_crore` | monthly | BB | — | Conversion of `domestic_borrowing_for_budget_deficit` × 1e-05 — Domestic Borrowing for Budget Deficit |
 | government_finance (brief conversion) | `fiscal_nbr_collected_trn` | `amount_bdt_crore` | monthly | BB | — | Conversion of `tax_revenue` × 1e-05 — Tax Revenue |
+| government_finance (brief conversion) | `nbr_customs_bn` | `amount_bdt_crore` | monthly | TBS | — | Conversion of `nbr_customs_collected_cr` × 0.01 — NBR FYTD Customs Collection (BDT crore) |
+| government_finance (brief conversion) | `nbr_it_bn` | `amount_bdt_crore` | monthly | TBS | — | Conversion of `nbr_it_collected_cr` × 0.01 — NBR FYTD Income Tax Collection (BDT crore) |
+| government_finance (brief conversion) | `nbr_vat_bn` | `amount_bdt_crore` | monthly | TBS | — | Conversion of `nbr_vat_collected_cr` × 0.01 — NBR FYTD VAT Collection (BDT crore) |
 | inflation | `food_inflation` | `percent` | monthly | BB | [0.0, 50.0] | Food Inflation |
 | inflation | `general_inflation` | `percent` | monthly | BB | [0.0, 50.0] | General Inflation |
 | inflation | `non_food_inflation` | `percent` | monthly | BB | [0.0, 50.0] | Non-Food Inflation |
