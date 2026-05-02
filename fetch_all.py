@@ -16,6 +16,7 @@ from urllib.request import Request, urlopen
 
 from fetchers.base import FetchError, FetchResult
 from fetchers.html_fetcher import fetch_html
+from fetchers.news_article_discovery import discover_latest_article_link
 from fetchers.pdf_discovery import discover_latest_pdf_link
 from fetchers.pdf_fetcher import fetch_pdf
 from fetchers.pdf_fetcher_stealth import fetch_pdf_stealth
@@ -37,8 +38,29 @@ def _fetch_one(indicator: dict, data_root: Path) -> FetchResult | None:
     fetch_block = indicator["fetch"]
     indicator_id = indicator["id"]
     if fetch_block["type"] == "html":
+        target_url = fetch_block["url"]
+        # Optional 2-step discovery: list page → article URL → article body.
+        # Used by news-source NBR indicators where the listing carries
+        # headlines + lede snippets but the actual numbers live inside
+        # individual article pages.
+        if fetch_block.get("discover") == "latest_article_link":
+            try:
+                listing_html = _download_index_html(target_url)
+            except Exception as e:
+                raise FetchError(
+                    f"listing fetch failed for {target_url}: {e}"
+                ) from e
+            try:
+                target_url = discover_latest_article_link(
+                    html=listing_html,
+                    base_url=target_url,
+                    article_pattern=fetch_block["article_pattern"],
+                )
+            except ValueError as e:
+                raise FetchError(f"article discovery failed: {e}") from e
+            logger.info("discovered latest article for %s: %s", indicator_id, target_url)
         return fetch_html(
-            url=fetch_block["url"],
+            url=target_url,
             indicator_id=indicator_id,
             snapshot_dir=data_root / "_html" / indicator_id,
         )
