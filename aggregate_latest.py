@@ -14,6 +14,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from utils.notifier import notify
+from utils.opus_review import archive_latest, load_history, review_data
 from utils.schema import (
     Alert,
     CommoditySnapshot,
@@ -28,6 +29,7 @@ from utils.schema import (
 REPO_ROOT = Path(__file__).resolve().parent
 DATA_DIR = REPO_ROOT / "data"
 LATEST_PATH = DATA_DIR / "latest.json"
+ARCHIVE_DIR = DATA_DIR / "archive"
 CONFIG_PATH = REPO_ROOT / "config" / "sources.json"
 SOURCES_V3_PATH = REPO_ROOT / "config" / "sources-v3.json"
 
@@ -342,7 +344,47 @@ def main() -> int:
         notify("error", "aggregator validation failed", str(e))
         return 1
 
+    # Opus 4.6 high-effort review: compare proposed `data` against the last 5 days
+    # of archived latest.json. If reject, exit 1 without overwriting — the existing
+    # latest.json (yesterday's last good run) becomes the rollback. The systemd
+    # retry timers will give Step 1+2 a second pass; if they still produce a reject,
+    # the brief publishes against yesterday's data with stale-section markers.
+    if os.environ.get("ECONDELTA_SKIP_OPUS_REVIEW") == "1":
+        logger.info("ECONDELTA_SKIP_OPUS_REVIEW=1 — skipping Opus review")
+    else:
+        history = load_history(ARCHIVE_DIR, days=5)
+        if not history:
+            logger.info("no archive history yet — skipping Opus review on this run")
+        else:
+            verdict = review_data(data, history)
+            status = verdict.get("status", "ok")
+            reason = verdict.get("reason", "")
+            if verdict.get("skipped"):
+                logger.info("opus review skipped: %s", reason)
+            elif status == "reject":
+                missing = verdict.get("missing", [])
+                anomalies = verdict.get("anomalies", [])
+                logger.error(
+                    "opus review REJECTED: %s | missing=%s | anomalies=%d",
+                    reason, missing[:5], len(anomalies),
+                )
+                notify(
+                    "warn",
+                    "EconDelta Opus review rejected today's data",
+                    f"reason: {reason}\nmissing: {missing[:5]}\nanomalies: {len(anomalies)}\n"
+                    f"keeping yesterday's latest.json — retry timers will re-run; "
+                    f"if next aggregate-retry's review also rejects, brief publishes against yesterday's data.",
+                )
+                return 1
+            else:
+                logger.info("opus review OK: %s (confidence=%s)", reason, verdict.get("confidence"))
+
     write_latest(bundle)
+    # Archive a daily copy for tomorrow's Opus review. Same-day runs overwrite,
+    # so the LAST successful aggregate of the day is what tomorrow compares against.
+    archived = archive_latest(LATEST_PATH, ARCHIVE_DIR)
+    if archived is not None:
+        logger.info("archived to %s", archived.name)
 
     summary = " ".join(
         f"{k}={s.status}({s.age_hours}h)" if s.age_hours is not None else f"{k}={s.status}"
