@@ -1,8 +1,8 @@
 """Subprocess wrapper around the `claude -p` Max CLI.
 
-Mirrors brief/claude/max_client.py from the-brief. Adapted for EconDelta:
-  - Default model: claude-sonnet-4-6 (the-brief defaults to opus)
-  - Default effort: medium (the-brief uses high for headline curation)
+Mirrors brief/claude/max_client.py from the-brief. EconDelta-side:
+  - Default model: claude-opus-4-6 (matches the-brief)
+  - Default effort: high (matches the-brief)
 
 No Anthropic API calls. Auth is via the OS user's ~/.claude/.credentials.json
 (Max OAuth), injected by the CLI itself — we pass no tokens.
