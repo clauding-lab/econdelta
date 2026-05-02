@@ -394,6 +394,39 @@ def main() -> int:
         if forex.reserves is not None:
             data["fx_reserve_gross_and_bpm6"] = forex.reserves.gross_reserves_usd_bn
 
+    # Brief-key aliases: EconDelta and the brief use different metric_id
+    # conventions for the same underlying numbers. Surface EconDelta's keys
+    # under the brief's expected key names so the brief's macro/remit/fiscal
+    # sections populate without each builder reaching for two key shapes.
+    # (One-way alias: brief side reads expected name, EconDelta keeps its own
+    # name authoritative for tooling.)
+    BRIEF_ALIASES = {
+        # macro
+        "macro_cpi_food":      "food_inflation",
+        "macro_cpi_headline":  "general_inflation",
+        "macro_cpi_nonfood":   "non_food_inflation",
+        "macro_credit_growth": "private_sector_credit",
+        # remittance
+        "remit_monthly_mn":    "monthly_remittance",
+        "remit_fy_mn":         "fy_remittance",
+        # fiscal
+        "fiscal_nbr_collected_trn": "tax_revenue",
+        "fiscal_govt_borrow_trn":   "domestic_borrowing_for_budget_deficit",
+        "fiscal_foreign_borrow_trn":"foreign_borrowing_for_budget_deficit",
+        "fiscal_bank_borrow_trn":   "bank_borrowing_for_deficit_financing",
+        "fiscal_nsc_outstanding":   "nsc_outstanding",
+        # banking primitives
+        "banking_broad_money":      "broad_money",
+        "banking_reserve_money":    "reserve_money",
+        "banking_money_multiplier": "money_multiplier",
+        "banking_excess_liquid":    "excess_liquid_asset_total_minimum",
+        "banking_deposits":         "deposits_of_the_system",
+        "banking_call_money_rate":  "call_money_rate",
+    }
+    for brief_key, econdelta_key in BRIEF_ALIASES.items():
+        if econdelta_key in data and brief_key not in data:
+            data[brief_key] = data[econdelta_key]
+
     try:
         bundle = LatestBundle(
             schema_version="3.0",
