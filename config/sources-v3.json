@@ -701,6 +701,27 @@
       }
     },
     {
+      "id": "dse_sector_heat",
+      "name": "DSE Sector Heat (8 sectors, % avg)",
+      "domain": "equities",
+      "cadence": "daily",
+      "fetch": {
+        "type": "html",
+        "url": "https://www.dsebd.org/recent_market_information.php",
+        "task": "Per-scrip daily % change for all listed DSE scrips. Aggregated by sector via config/dse_sector_constituents.json (simple average per sector)."
+      },
+      "parse": {
+        "deterministic": "dse_sector_heat",
+        "llm_prompt": "html_table_row.txt",
+        "value_type": "sector_dict",
+        "valid_range": [
+          -50.0,
+          50.0
+        ]
+      },
+      "anomaly_threshold": 5.0
+    },
+    {
       "id": "gsec_auction",
       "name": "Next GSEC Auction Notional",
       "domain": "money_market",

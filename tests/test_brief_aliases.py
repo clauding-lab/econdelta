@@ -187,6 +187,52 @@ def test_nbr_decomposition_skips_when_components_missing():
     assert "nbr_customs_bn" not in data
 
 
+def test_dse_sector_heat_flattens_to_per_sector_numeric_keys():
+    """Phase 3.1: parser emits dict[sector, pct]; aggregate splits it into
+    8 numeric keys (one per sector) so Supabase metric_history persists each.
+    Brief reconstructs the dict from these keys via the history client."""
+    data = {
+        "dse_sector_heat": {
+            "Banks":   -1.40,
+            "NBFI":    -1.10,
+            "Textile":  0.98,
+            "Pharma":  -1.24,
+            "Fuel":    -1.20,
+            "Telecom": -0.16,
+            "Food":    -0.54,
+            "IT":       1.15,
+        },
+    }
+    _apply_brief_aliases(data)
+    assert data["dse_sector_heat_banks"] == -1.40
+    assert data["dse_sector_heat_nbfi"] == -1.10
+    assert data["dse_sector_heat_textile"] == 0.98
+    assert data["dse_sector_heat_pharma"] == -1.24
+    assert data["dse_sector_heat_fuel"] == -1.20
+    assert data["dse_sector_heat_telecom"] == -0.16
+    assert data["dse_sector_heat_food"] == -0.54
+    assert data["dse_sector_heat_it"] == 1.15
+    # Original dict still present (latest.json local consumers can use it)
+    assert data["dse_sector_heat"]["Banks"] == -1.40
+
+
+def test_dse_sector_heat_flatten_skips_non_numeric_entries():
+    """Defensive: a malformed dict entry is dropped, others still flatten."""
+    data = {
+        "dse_sector_heat": {"Banks": -1.40, "Pharma": "n/a", "IT": 1.15},
+    }
+    _apply_brief_aliases(data)
+    assert data["dse_sector_heat_banks"] == -1.40
+    assert data["dse_sector_heat_it"] == 1.15
+    assert "dse_sector_heat_pharma" not in data
+
+
+def test_dse_sector_heat_flatten_noop_when_indicator_absent():
+    data = {"some_other_key": 1.0}
+    _apply_brief_aliases(data)
+    assert all(not k.startswith("dse_sector_heat_") for k in data)
+
+
 def test_multi_tenor_yield_aliases_feed_yield_curve():
     """Phase 2.3 V5: brief's §07 builder reads tbond_tbill_{182,364}d and
     tbond_bond_{5y,10y}; EconDelta scrapes them as tbill_182d_yield etc.

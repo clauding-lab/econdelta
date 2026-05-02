@@ -432,12 +432,34 @@ BRIEF_CONVERSIONS: dict[str, tuple[str, float]] = {
 NBR_CROSS_CHECK_TOLERANCE = 0.05
 
 
+def _flatten_dict_indicators(data: dict) -> None:
+    """Explode dict-shaped indicator values into per-key numeric entries.
+
+    Phase 3.1: ``dse_sector_heat`` arrives as ``{Banks: -1.4, NBFI: -1.1, ...}``
+    from the parser, but Supabase ``metric_history`` only persists numerics
+    (the writer filters dicts/strings). We mint one numeric key per sector
+    so each lands in Supabase and the brief can read them via the standard
+    history path. Idempotent: per-sector keys already in `data` are left
+    alone.
+    """
+    sector_heat = data.get("dse_sector_heat")
+    if isinstance(sector_heat, dict):
+        for sector, pct in sector_heat.items():
+            if not isinstance(pct, (int, float)):
+                continue
+            key = "dse_sector_heat_" + str(sector).lower().replace(" ", "_")
+            if key not in data:
+                data[key] = float(pct)
+
+
 def _apply_brief_aliases(data: dict) -> None:
     """Mutate `data` in place: surface EconDelta keys under brief-key names,
     apply unit conversions, and run the NBR cross-check between TBS and
     Daily Star sources. Idempotent: if a brief_key already exists it's left
     untouched (so a hand-set value upstream wins).
     """
+    _flatten_dict_indicators(data)
+
     for brief_key, econdelta_key in BRIEF_ALIASES.items():
         if econdelta_key in data and brief_key not in data:
             data[brief_key] = data[econdelta_key]

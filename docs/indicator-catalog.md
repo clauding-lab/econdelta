@@ -6,7 +6,7 @@
 python3 scripts/build_catalog.py > docs/indicator-catalog.md
 ```
 
-**67** scraped indicators × **35** brief aliases × **12** unit conversions × **2** derived = **116** total entries.
+**68** scraped indicators × **35** brief aliases × **12** unit conversions × **2** derived = **117** total entries.
 
 Read the data contract for column semantics and query examples: [`data-contract.md`](data-contract.md).
 
@@ -40,6 +40,7 @@ Read the data contract for column semantics and query examples: [`data-contract.
 | commodities (brief alias) | `food_sugar_local_bdt` | `rate` | daily | DAM | [50.0, 250.0] | Alias of `food_sugar_local` — Retail price — Sugar local (BDT/kg) |
 | derived (cross-source) | `nbr_fytd_collected_cr` | `amount_bdt_crore` | monthly | — | — | NBR fiscal-year-to-date collection — confirmed mean of TBS and Daily Star sources when within 5% tolerance, else the larger figure. |
 | derived (cross-source) | `nbr_fytd_cross_check` | `string` | monthly | — | — | Cross-check status for nbr_fytd_collected_cr: 'confirmed', 'mismatch_X.X%', 'tbs_only', or 'dailystar_only'. Strings only land in latest.json — NOT in metric_history (writer filters strings). |
+| equities | `dse_sector_heat` | `sector_dict` | daily | DSE | [-50.0, 50.0] | DSE Sector Heat (8 sectors, % avg) |
 | external_sector | `bop_summary` | `amount_usd_bn` | monthly | BB | [-20.0, 20.0] | BOP Summary |
 | external_sector | `categorywise_export` | `amount_usd_bn` | fiscal_year | BB | [0.0, 60.0] | Categorywise Export |
 | external_sector | `categorywise_fy_import_breakdown` | `amount_usd_bn` | fiscal_year | BB | [0.0, 100.0] | Categorywise FY Import Breakdown |
