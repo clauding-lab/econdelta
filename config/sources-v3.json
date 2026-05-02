@@ -418,15 +418,15 @@
       "fetch": {
         "type": "html",
         "url": "https://gsom.bb.org.bd/mtm-bill.php",
-        "task": "Last total of the page"
+        "task": "row=Total Outstanding Balance col=2"
       },
       "parse": {
         "deterministic": "html_table_row",
         "llm_prompt": "html_table_row.txt",
-        "value_type": "amount_bdt_crore",
+        "value_type": "amount_bdt_mn",
         "valid_range": [
           0.0,
-          500000.0
+          10000000.0
         ]
       },
       "anomaly_threshold": 0.05,
@@ -444,15 +444,15 @@
       "fetch": {
         "type": "html",
         "url": "https://gsom.bb.org.bd/mtm.php",
-        "task": "Last total of the page"
+        "task": "row=Total Outstanding Balance col=2"
       },
       "parse": {
         "deterministic": "html_table_row",
         "llm_prompt": "html_table_row.txt",
-        "value_type": "amount_bdt_crore",
+        "value_type": "amount_bdt_mn",
         "valid_range": [
           0.0,
-          2000000.0
+          50000000.0
         ]
       },
       "anomaly_threshold": 0.05,
@@ -464,13 +464,13 @@
     },
     {
       "id": "bill_bond_rates",
-      "name": "Bill/Bond Rates",
+      "name": "91-Day T-Bill Cut-Off Yield",
       "domain": "money_market",
       "cadence": "daily",
       "fetch": {
         "type": "html",
         "url": "https://www.bb.org.bd/en/index.php/monetaryactivity/treasury",
-        "task": "Cut off graph for bill, standard tenor graph for bonds"
+        "task": "Latest 91-Day Treasury Bill cut-off yield in percent (the most recent auction's weighted-average yield for 91-day tenor). Return only the numeric value, e.g. 9.86."
       },
       "parse": {
         "deterministic": "html_table_row",
@@ -485,7 +485,7 @@
       "alternate": {
         "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
         "type": "pdf",
-        "task": "Go to page 7 of the doc, first table"
+        "task": "Go to page 7 of the doc, first table — extract the 91-Day T-Bill cut-off yield from the latest column"
       }
     },
     {
@@ -598,13 +598,13 @@
     },
     {
       "id": "gsec_auction",
-      "name": "GSEC Auction",
+      "name": "Next GSEC Auction Notional",
       "domain": "money_market",
       "cadence": "daily",
       "fetch": {
         "type": "html",
         "url": "https://www.bb.org.bd/en/index.php/monetaryactivity/auc_calendar",
-        "task": "Self explanatory"
+        "task": "Total notional amount in BDT crore of the next upcoming Treasury Bill or Treasury Bond auction (the topmost dated row in the auction calendar). Sum across all tenors if the row covers multiple. Return only the numeric value."
       },
       "parse": {
         "deterministic": "html_table_row",

@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from fetchers.html_fetcher import fetch_html
+from fetchers.html_fetcher import _is_challenge, fetch_html
 
 
 @pytest.fixture
@@ -11,6 +11,21 @@ def fixture_page(tmp_path: Path) -> str:
     p = tmp_path / "page.html"
     p.write_text("<html><body><table id='rates'><tr><td>USD/BDT</td><td>122.5</td></tr></table></body></html>")
     return p.as_uri()
+
+
+def test_is_challenge_detects_akamai_pardon_marker():
+    html = "<html><body>Pardon Our Interruption... Your support ID is: 12345.</body></html>"
+    assert _is_challenge(html) is True
+
+
+def test_is_challenge_detects_support_id_marker():
+    html = "Please enable JavaScript. Your support ID is: 99999."
+    assert _is_challenge(html) is True
+
+
+def test_is_challenge_returns_false_for_real_content():
+    html = "<html><body><table><tr><td>USD/BDT</td><td>122.5</td></tr></table></body></html>"
+    assert _is_challenge(html) is False
 
 
 def test_fetch_html_writes_snapshot_and_returns_result(fixture_page, tmp_path):
