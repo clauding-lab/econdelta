@@ -18,6 +18,7 @@ import parsers.html_footer_ticker  # noqa: F401
 import parsers.html_table_row  # noqa: F401
 import parsers.html_call_money  # noqa: F401
 import parsers.dam_ticker  # noqa: F401
+import parsers.dse_sector_heat  # noqa: F401
 import parsers.pdf_component  # noqa: F401
 import parsers.pdf_table_row  # noqa: F401
 import parsers.pdf_table_total  # noqa: F401
