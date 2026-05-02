@@ -58,6 +58,12 @@ def run_max(
         "--output-format", "json",
         "--no-session-persistence",
         "--tools", "",
+        # Block MCP-plugin loading. Without this, the Hetzner brief host
+        # picks up the discord-vps-setup plugin and routes responses to
+        # the Discord channel instead of stdout. ExonVPS may not have
+        # the plugin yet, but identical hardening keeps both repos in
+        # lockstep.
+        "--strict-mcp-config",
         "--permission-mode", "bypassPermissions",
         "--effort", effort,
     ]
