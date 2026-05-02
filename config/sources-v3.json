@@ -1044,6 +1044,33 @@
       }
     },
     {
+      "id": "private_sector_credit_yoy_pct",
+      "name": "Private Sector Credit Growth YoY",
+      "domain": "monetary_aggregates",
+      "cadence": "monthly",
+      "fetch": {
+        "type": "pdf",
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
+        "task": "Locate the Major Economic Indicators (MEI) summary table — extract the most recent month's Private Sector Credit growth percentage on a year-on-year basis. Often labelled 'Private sector credit, % YoY', 'Domestic credit (private sector) growth %', or appearing in the 'Monetary Sector — Annual growth rates' block. Return only the numeric percentage value, e.g. 7.2.",
+        "discover": "latest_pdf_link"
+      },
+      "parse": {
+        "deterministic": "pdf_component",
+        "llm_prompt": "pdf_component.txt",
+        "value_type": "percent",
+        "valid_range": [
+          -30.0,
+          50.0
+        ]
+      },
+      "anomaly_threshold": 1.0,
+      "alternate": {
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/5/27",
+        "type": "pdf",
+        "task": "Selected Economic Indicators — find the Private Sector Credit % YoY growth column for the latest month."
+      }
+    },
+    {
       "id": "deposits_of_the_system",
       "name": "Deposits of the system",
       "domain": "monetary_aggregates",

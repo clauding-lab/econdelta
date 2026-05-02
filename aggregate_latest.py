@@ -350,14 +350,14 @@ def _build_v3_blocks(
 # `banking_*`, `food_*`); EconDelta keeps its own indicator IDs authoritative.
 # Pure 1:1 aliases (no unit conversion) live here.
 BRIEF_ALIASES: dict[str, str] = {
-    # macro — ``macro_credit_growth`` deliberately NOT aliased: brief expects
-    # YoY %, EconDelta only has the absolute private_sector_credit BDT crore
-    # value. Compute YoY in a follow-up once Supabase has 365 days of history,
-    # or wire a dedicated YoY scraper. For now the brief renders null, which
-    # is correct and honest.
+    # macro
     "macro_cpi_food":      "food_inflation",
     "macro_cpi_headline":  "general_inflation",
     "macro_cpi_nonfood":   "non_food_inflation",
+    # YoY % credit growth — Phase 3.3: dedicated scrape from BB MEI bulletin
+    # (private_sector_credit_yoy_pct), not derived from the absolute
+    # private_sector_credit BDT-crore value.
+    "macro_credit_growth": "private_sector_credit_yoy_pct",
     # remittance — bn→mn unit conversion is in BRIEF_CONVERSIONS below.
     # fiscal — crore→trillion conversions are in BRIEF_CONVERSIONS below.
     # banking primitives

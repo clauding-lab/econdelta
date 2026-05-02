@@ -78,10 +78,21 @@ def test_remit_fy_converts_bn_to_mn():
     assert data["remit_fy_mn"] == 26500.0
 
 
-def test_macro_credit_growth_alias_no_longer_exists():
-    """The alias was wrong (mapped private_sector_credit absolute amount to
-    a YoY%-shaped key). It's gone — the brief renders null until a proper
-    YoY source lands."""
+def test_macro_credit_growth_aliases_yoy_pct_source():
+    """Phase 3.3: a dedicated YoY scrape (private_sector_credit_yoy_pct)
+    lands as macro_credit_growth — NOT the absolute private_sector_credit
+    crore amount, which has wrong units and was the original bug."""
+    data = {
+        "private_sector_credit_yoy_pct": 7.2,
+        "private_sector_credit": 1_773_829.7,  # absolute BDT crore — must NOT leak in
+    }
+    _apply_brief_aliases(data)
+    assert data["macro_credit_growth"] == 7.2  # YoY % source, not absolute crore
+
+
+def test_macro_credit_growth_skips_when_yoy_source_missing():
+    """If the YoY scrape didn't produce a value, the brief renders null —
+    we DO NOT fall back to the absolute amount."""
     data = {"private_sector_credit": 1_773_829.7}
     _apply_brief_aliases(data)
     assert "macro_credit_growth" not in data

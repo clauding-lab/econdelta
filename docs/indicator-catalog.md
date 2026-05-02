@@ -6,7 +6,7 @@
 python3 scripts/build_catalog.py > docs/indicator-catalog.md
 ```
 
-**63** scraped indicators × **34** brief aliases × **9** unit conversions × **2** derived = **108** total entries.
+**64** scraped indicators × **35** brief aliases × **9** unit conversions × **2** derived = **110** total entries.
 
 Read the data contract for column semantics and query examples: [`data-contract.md`](data-contract.md).
 
@@ -90,12 +90,14 @@ Read the data contract for column semantics and query examples: [`data-contract.
 | monetary_aggregates | `money_multiplier` | `ratio` | monthly | BB | [1.0, 20.0] | Money Multiplier |
 | monetary_aggregates | `nsc_outstanding` | `amount_bdt_crore` | monthly | BB | [0.0, 5000000.0] | NSC outstanding |
 | monetary_aggregates | `private_sector_credit` | `amount_bdt_crore` | monthly | BB | [0.0, 100000000.0] | Private Sector Credit |
+| monetary_aggregates | `private_sector_credit_yoy_pct` | `percent` | monthly | BB | [-30.0, 50.0] | Private Sector Credit Growth YoY |
 | monetary_aggregates | `reserve_money` | `amount_bdt_crore` | weekly | BB | [0.0, 10000000.0] | Reserve Money |
 | monetary_aggregates (brief alias) | `banking_broad_money` | `amount_bdt_crore` | monthly | BB | [0.0, 30000000.0] | Alias of `broad_money` — Broad Money |
 | monetary_aggregates (brief alias) | `banking_deposits` | `amount_bdt_crore` | monthly | BB | [0.0, 30000000.0] | Alias of `deposits_of_the_system` — Deposits of the system |
 | monetary_aggregates (brief alias) | `banking_excess_liquid` | `amount_bdt_crore` | monthly | BB | [0.0, 5000000.0] | Alias of `excess_liquid_asset_total_minimum` — Excess Liquid Asset (Total-Minimum) |
 | monetary_aggregates (brief alias) | `banking_money_multiplier` | `ratio` | monthly | BB | [1.0, 20.0] | Alias of `money_multiplier` — Money Multiplier |
 | monetary_aggregates (brief alias) | `banking_reserve_money` | `amount_bdt_crore` | weekly | BB | [0.0, 10000000.0] | Alias of `reserve_money` — Reserve Money |
+| monetary_aggregates (brief alias) | `macro_credit_growth` | `percent` | monthly | BB | [-30.0, 50.0] | Alias of `private_sector_credit_yoy_pct` — Private Sector Credit Growth YoY |
 | monetary_aggregates (brief conversion) | `fiscal_nsc_outstanding` | `amount_bdt_crore` | monthly | BB | — | Conversion of `nsc_outstanding` × 1e-05 — NSC outstanding |
 | money_market | `banking_sector_crar` | `percent` | quarterly | BB | [-50.0, 30.0] | Banking Sector CAR (Capital Adequacy Ratio) |
 | money_market | `bill_bond_rates` | `percent` | daily | BB | [0.0, 25.0] | 91-Day T-Bill Cut-Off Yield |
