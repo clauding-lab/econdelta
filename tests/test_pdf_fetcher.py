@@ -58,3 +58,22 @@ def test_fetch_pdf_detects_cache_hit(pdf_server, tmp_path: Path):
     fetch_pdf(url=pdf_server, indicator_id="bb_mei", snapshot_dir=tmp_path, as_of_month="2026-04")
     fr2 = fetch_pdf(url=pdf_server, indicator_id="bb_mei", snapshot_dir=tmp_path, as_of_month="2026-04")
     assert fr2.cache_hit is True
+
+
+def test_fetch_pdf_handles_url_with_spaces(pdf_server, tmp_path: Path):
+    """BB publishes some FSAR PDFs with literal spaces in the filename
+    ('qfsar (july-september 2025).pdf'). urllib.request.urlopen rejects
+    these — the fetcher must percent-encode the path before the request.
+    The on-disk filename keeps the original spaces (decoded)."""
+    # Substitute a spaced path on the existing local server.
+    base = pdf_server.rsplit("/", 1)[0]
+    spaced_url = f"{base}/qfsar (july-september 2025).pdf"
+    fr = fetch_pdf(
+        url=spaced_url,
+        indicator_id="bb_fsar",
+        snapshot_dir=tmp_path,
+        as_of_month="2026-05",
+    )
+    assert fr.artifact_path.exists()
+    # On-disk name preserves the original spaces (not percent-encoded).
+    assert "july-september 2025" in fr.artifact_path.name
