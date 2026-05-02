@@ -12,7 +12,8 @@ _MONTHS = {
     "september": 9, "october": 10, "november": 11, "december": 12,
 }
 _MONTH_RE = re.compile(
-    r"(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{4})",
+    r"(january|february|march|april|may|june|july|august|september|october|november|december)"
+    r"[,\s]+(\d{4})",
     re.IGNORECASE,
 )
 

@@ -618,6 +618,60 @@
       "anomaly_threshold": 0.05
     },
     {
+      "id": "gross_npl_ratio",
+      "name": "Gross NPL Ratio (Banking Sector)",
+      "domain": "money_market",
+      "cadence": "quarterly",
+      "fetch": {
+        "type": "pdf",
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/2/60",
+        "task": "Go to page 13 (Executive Summary). Extract the banking sector Non-Performing Loan (NPL) ratio in percent at the end of the most recent quarter. The text reads roughly 'The Non-Performing Loan (NPL) ratio climbed to <X> percent'. Return only the numeric value, e.g. 35.73.",
+        "discover": "latest_pdf_link"
+      },
+      "parse": {
+        "deterministic": "pdf_component",
+        "llm_prompt": "pdf_component.txt",
+        "value_type": "percent",
+        "valid_range": [
+          0.0,
+          50.0
+        ]
+      },
+      "anomaly_threshold": 1.0,
+      "alternate": {
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/0/37",
+        "type": "pdf",
+        "task": "Latest annual Financial Stability Report — banking sector Gross NPL ratio in percent for the most recent year-end."
+      }
+    },
+    {
+      "id": "banking_sector_crar",
+      "name": "Banking Sector CAR (Capital Adequacy Ratio)",
+      "domain": "money_market",
+      "cadence": "quarterly",
+      "fetch": {
+        "type": "pdf",
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/2/60",
+        "task": "Go to page 13 (Executive Summary). Extract the banking sector Capital Adequacy Ratio (CAR / CRAR) in percent at the end of the most recent quarter (the pre-shock figure, before any stress test scenario). The text reads roughly 'the pre-shock Capital Adequacy Ratio (CAR) stood at <X> percent'. Return only the numeric value, e.g. 1.56.",
+        "discover": "latest_pdf_link"
+      },
+      "parse": {
+        "deterministic": "pdf_component",
+        "llm_prompt": "pdf_component.txt",
+        "value_type": "percent",
+        "valid_range": [
+          -50.0,
+          30.0
+        ]
+      },
+      "anomaly_threshold": 1.0,
+      "alternate": {
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/0/37",
+        "type": "pdf",
+        "task": "Latest annual Financial Stability Report — banking sector system-wide CRAR (CAR) in percent for the most recent year-end."
+      }
+    },
+    {
       "id": "fx_reserve_gross_and_bpm6",
       "name": "FX Reserve Gross and BPM6",
       "domain": "forex_and_reserves",
