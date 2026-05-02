@@ -150,3 +150,21 @@ def test_banking_ratio_aliases_propagate_fsar_values():
     _apply_brief_aliases(data)
     assert data["banking_npl_pct"] == 35.73
     assert data["banking_car_pct"] == 1.56
+
+
+def test_multi_tenor_yield_aliases_feed_yield_curve():
+    """Phase 2.3 V5: brief's §07 builder reads tbond_tbill_{182,364}d and
+    tbond_bond_{5y,10y}; EconDelta scrapes them as tbill_182d_yield etc.
+    The aliases bridge the names so the yield curve chart receives every
+    tenor."""
+    data = {
+        "tbill_182d_yield": 10.20,
+        "tbill_364d_yield": 10.55,
+        "tbond_5y_yield": 11.10,
+        "tbond_10y_yield": 11.42,
+    }
+    _apply_brief_aliases(data)
+    assert data["tbond_tbill_182d"] == 10.20
+    assert data["tbond_tbill_364d"] == 10.55
+    assert data["tbond_bond_5y"] == 11.10
+    assert data["tbond_bond_10y"] == 11.42

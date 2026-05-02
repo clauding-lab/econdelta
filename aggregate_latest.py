@@ -376,6 +376,11 @@ BRIEF_ALIASES: dict[str, str] = {
     # money market — brief metric_id forms (the brief's tbond builder
     # uses ``tbond_tbill_91d``; brief's nbr/dam builders use ``dam_*``)
     "tbond_tbill_91d":          "bill_bond_rates",
+    # multi-tenor T-Bill / T-Bond yields — feed §07 yield curve chart
+    "tbond_tbill_182d":         "tbill_182d_yield",
+    "tbond_tbill_364d":         "tbill_364d_yield",
+    "tbond_bond_5y":            "tbond_5y_yield",
+    "tbond_bond_10y":           "tbond_10y_yield",
     # DAM retail food prices (daily, BDT/kg or BDT/4-pcs for eggs)
     "food_rice_coarse_bdt":     "food_rice_coarse",
     "food_atta_packet_bdt":     "food_atta_packet",

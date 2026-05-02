@@ -489,6 +489,110 @@
       }
     },
     {
+      "id": "tbill_182d_yield",
+      "name": "182-Day T-Bill Cut-Off Yield",
+      "domain": "money_market",
+      "cadence": "daily",
+      "fetch": {
+        "type": "html",
+        "url": "https://www.bb.org.bd/en/index.php/monetaryactivity/treasury",
+        "task": "Latest 182-Day Treasury Bill cut-off yield in percent (the most recent auction's weighted-average yield for 182-day tenor). Return only the numeric value, e.g. 10.20."
+      },
+      "parse": {
+        "deterministic": "html_table_row",
+        "llm_prompt": "html_table_row.txt",
+        "value_type": "percent",
+        "valid_range": [
+          0.0,
+          25.0
+        ]
+      },
+      "anomaly_threshold": 1.0,
+      "alternate": {
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
+        "type": "pdf",
+        "task": "Go to page 7 of the doc, first table — extract the 182-Day T-Bill cut-off yield from the latest column"
+      }
+    },
+    {
+      "id": "tbill_364d_yield",
+      "name": "364-Day T-Bill Cut-Off Yield",
+      "domain": "money_market",
+      "cadence": "daily",
+      "fetch": {
+        "type": "html",
+        "url": "https://www.bb.org.bd/en/index.php/monetaryactivity/treasury",
+        "task": "Latest 364-Day Treasury Bill cut-off yield in percent (the most recent auction's weighted-average yield for 364-day tenor). Return only the numeric value, e.g. 10.55."
+      },
+      "parse": {
+        "deterministic": "html_table_row",
+        "llm_prompt": "html_table_row.txt",
+        "value_type": "percent",
+        "valid_range": [
+          0.0,
+          25.0
+        ]
+      },
+      "anomaly_threshold": 1.0,
+      "alternate": {
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
+        "type": "pdf",
+        "task": "Go to page 7 of the doc, first table — extract the 364-Day T-Bill cut-off yield from the latest column"
+      }
+    },
+    {
+      "id": "tbond_5y_yield",
+      "name": "5-Year BGTB Cut-Off Yield",
+      "domain": "money_market",
+      "cadence": "weekly",
+      "fetch": {
+        "type": "html",
+        "url": "https://www.bb.org.bd/en/index.php/monetaryactivity/treasury",
+        "task": "Latest 5-Year Bangladesh Government Treasury Bond (BGTB) cut-off yield in percent (the most recent auction's weighted-average yield for 5-year tenor). Return only the numeric value, e.g. 11.10."
+      },
+      "parse": {
+        "deterministic": "html_table_row",
+        "llm_prompt": "html_table_row.txt",
+        "value_type": "percent",
+        "valid_range": [
+          0.0,
+          25.0
+        ]
+      },
+      "anomaly_threshold": 1.0,
+      "alternate": {
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
+        "type": "pdf",
+        "task": "Go to page 7 of the doc, first table — extract the 5-Year BGTB cut-off yield from the latest column"
+      }
+    },
+    {
+      "id": "tbond_10y_yield",
+      "name": "10-Year BGTB Cut-Off Yield",
+      "domain": "money_market",
+      "cadence": "weekly",
+      "fetch": {
+        "type": "html",
+        "url": "https://www.bb.org.bd/en/index.php/monetaryactivity/treasury",
+        "task": "Latest 10-Year Bangladesh Government Treasury Bond (BGTB) cut-off yield in percent (the most recent auction's weighted-average yield for 10-year tenor). Return only the numeric value, e.g. 11.42."
+      },
+      "parse": {
+        "deterministic": "html_table_row",
+        "llm_prompt": "html_table_row.txt",
+        "value_type": "percent",
+        "valid_range": [
+          0.0,
+          25.0
+        ]
+      },
+      "anomaly_threshold": 1.0,
+      "alternate": {
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
+        "type": "pdf",
+        "task": "Go to page 7 of the doc, first table — extract the 10-Year BGTB cut-off yield from the latest column"
+      }
+    },
+    {
       "id": "policy_rate_slf_sdf",
       "name": "Policy Rate, SLF, SDF",
       "domain": "money_market",
