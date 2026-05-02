@@ -246,9 +246,15 @@ def parse_one(artifact: FetchResult, indicator: dict, history: list[float]) -> d
         logger.info("deterministic parse failed for %s: %s", indicator["id"], e)
 
     if v_det is not None:
-        # Sanity-check via Sonnet
+        # Dict-shaped values (e.g. dse_sector_heat: {sector: pct}) skip the
+        # scalar Sonnet sanity check — the per-entry valid_range applied at
+        # parse time is the structural guard. Emitting deterministic.
+        if isinstance(v_det, dict):
+            return _build_snapshot(indicator=indicator, artifact=artifact, value=v_det,
+                                   provenance="deterministic", parse_strategy=parse_block["deterministic"])
+        # Sanity-check via Sonnet (scalar values only)
         try:
-            check_value = float(v_det) if isinstance(v_det, (int, float)) else 0.0
+            check_value = float(v_det)
             sanity = _sanity_check(indicator=indicator, value=check_value, history=history)
             plausible = bool((sanity.parsed or {}).get("plausible", True))
             note = (sanity.parsed or {}).get("reason")
