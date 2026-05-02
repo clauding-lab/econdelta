@@ -112,10 +112,17 @@ def flatten_data(snapshots: dict[str, Any]) -> dict[str, Any]:
         data["usd_bdt_sell"] = forex.rates.usd_bdt_sell
         data["eur_bdt"] = forex.rates.eur_bdt
         data["gbp_bdt"] = forex.rates.gbp_bdt
+        # Alias: the parse-stage indicator usd_bdt_exchange_rate is fragile (PDF
+        # extraction via Akamai-blocked source); the bb_forex.py direct scrape is
+        # the same number. Pre-fill so a parse failure doesn't leave it 0/null.
+        data["usd_bdt_exchange_rate"] = forex.rates.usd_bdt_mid
         if forex.reserves is not None:
             data["gross_reserves_usd_bn"] = forex.reserves.gross_reserves_usd_bn
             data["import_cover_months"] = forex.reserves.import_cover_months
             data["reserves_date"] = forex.reserves.reserves_date.isoformat()
+            # Same alias rationale: parse-stage fx_reserve_gross_and_bpm6 mirrors
+            # what bb_forex.py already fetched cleanly.
+            data["fx_reserve_gross_and_bpm6"] = forex.reserves.gross_reserves_usd_bn
 
     dse = snapshots.get("dse_market")
     if dse is not None:

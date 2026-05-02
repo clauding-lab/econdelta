@@ -5,6 +5,8 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
+import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -108,13 +110,45 @@ def run(*, config_path: Path, data_root: Path, only: str | None = None) -> list[
     return snapshots
 
 
+def _claude_preflight() -> bool:
+    """Verify subscription claude CLI is reachable before running hybrid extraction.
+
+    Without this, a flaked claude (expired OAuth, network blip, etc.) causes every
+    indicator to fall through to needs_review with empty values — the service still
+    exits 0 and downstream aggregate happily writes a mostly-empty latest.json. By
+    failing fast here, systemd marks parse.service failed → parse-retry.timer can
+    take over → on-call (or human eyeball) sees the failure.
+    """
+    binary = os.environ.get("CLAUDE_BINARY", "claude")
+    try:
+        result = subprocess.run(
+            [binary, "--print", "--model", "sonnet"],
+            input="say ok",
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError) as e:
+        logger.error("claude pre-flight failed: %s", e)
+        return False
+    if result.returncode != 0:
+        logger.error("claude pre-flight exited %d: %s", result.returncode, result.stderr.strip()[:200])
+        return False
+    return True
+
+
 def main() -> int:
     p = argparse.ArgumentParser()
     p.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     p.add_argument("--data-root", type=Path, default=DEFAULT_DATA_ROOT)
     p.add_argument("--only", type=str, default=None)
+    p.add_argument("--skip-claude-preflight", action="store_true",
+                   help="Skip claude reachability check (for tests / deterministic-only runs)")
     args = p.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
+    if not args.skip_claude_preflight and not _claude_preflight():
+        logger.error("aborting parse run — claude CLI not reachable; aggregate will keep last good latest.json")
+        return 1
     snapshots = run(config_path=args.config, data_root=args.data_root, only=args.only)
     by_prov: dict[str, int] = {}
     for s in snapshots:
