@@ -14,10 +14,10 @@ from aggregate_latest import _apply_brief_aliases
 
 
 def test_simple_alias_surfaces_brief_key():
-    data = {"food_inflation": 8.29, "monthly_remittance": 2.88}
+    data = {"food_inflation": 8.29, "general_inflation": 8.58}
     _apply_brief_aliases(data)
     assert data["macro_cpi_food"] == 8.29
-    assert data["remit_monthly_mn"] == 2.88
+    assert data["macro_cpi_headline"] == 8.58
     # Source key untouched
     assert data["food_inflation"] == 8.29
 
@@ -48,6 +48,43 @@ def test_tbond_outstanding_unit_converts_mn_to_crore():
     data = {"treasury_bond_outstanding": 5_767_587.2}
     _apply_brief_aliases(data)
     assert data["tbond_outstanding_cr"] == 576_758.72
+
+
+def test_fiscal_nbr_collected_converts_crore_to_trillion():
+    """EconDelta tax_revenue is BDT crore; brief renders BDT trillion.
+    1 trillion = 100,000 crore → multiplier 0.00001."""
+    data = {"tax_revenue": 119478.0}  # ~BDT 1.19 trillion
+    _apply_brief_aliases(data)
+    assert data["fiscal_nbr_collected_trn"] == 1.19
+
+
+def test_fiscal_govt_borrow_converts_crore_to_trillion():
+    data = {"domestic_borrowing_for_budget_deficit": 67913.54}
+    _apply_brief_aliases(data)
+    assert data["fiscal_govt_borrow_trn"] == 0.68
+
+
+def test_remit_monthly_converts_bn_to_mn():
+    """EconDelta monthly_remittance is USD bn; brief expects USD mn.
+    1 bn = 1000 mn → multiplier 1000."""
+    data = {"monthly_remittance": 2.88949}  # 2.89bn USD
+    _apply_brief_aliases(data)
+    assert data["remit_monthly_mn"] == 2889.49
+
+
+def test_remit_fy_converts_bn_to_mn():
+    data = {"fy_remittance": 26.5}
+    _apply_brief_aliases(data)
+    assert data["remit_fy_mn"] == 26500.0
+
+
+def test_macro_credit_growth_alias_no_longer_exists():
+    """The alias was wrong (mapped private_sector_credit absolute amount to
+    a YoY%-shaped key). It's gone — the brief renders null until a proper
+    YoY source lands."""
+    data = {"private_sector_credit": 1_773_829.7}
+    _apply_brief_aliases(data)
+    assert "macro_credit_growth" not in data
 
 
 def test_food_aliases_pass_through_dam_prices():

@@ -350,20 +350,16 @@ def _build_v3_blocks(
 # `banking_*`, `food_*`); EconDelta keeps its own indicator IDs authoritative.
 # Pure 1:1 aliases (no unit conversion) live here.
 BRIEF_ALIASES: dict[str, str] = {
-    # macro
+    # macro — ``macro_credit_growth`` deliberately NOT aliased: brief expects
+    # YoY %, EconDelta only has the absolute private_sector_credit BDT crore
+    # value. Compute YoY in a follow-up once Supabase has 365 days of history,
+    # or wire a dedicated YoY scraper. For now the brief renders null, which
+    # is correct and honest.
     "macro_cpi_food":      "food_inflation",
     "macro_cpi_headline":  "general_inflation",
     "macro_cpi_nonfood":   "non_food_inflation",
-    "macro_credit_growth": "private_sector_credit",
-    # remittance
-    "remit_monthly_mn":    "monthly_remittance",
-    "remit_fy_mn":         "fy_remittance",
-    # fiscal
-    "fiscal_nbr_collected_trn": "tax_revenue",
-    "fiscal_govt_borrow_trn":   "domestic_borrowing_for_budget_deficit",
-    "fiscal_foreign_borrow_trn":"foreign_borrowing_for_budget_deficit",
-    "fiscal_bank_borrow_trn":   "bank_borrowing_for_deficit_financing",
-    "fiscal_nsc_outstanding":   "nsc_outstanding",
+    # remittance — bn→mn unit conversion is in BRIEF_CONVERSIONS below.
+    # fiscal — crore→trillion conversions are in BRIEF_CONVERSIONS below.
     # banking primitives
     "banking_broad_money":      "broad_money",
     "banking_reserve_money":    "reserve_money",
@@ -407,6 +403,17 @@ BRIEF_CONVERSIONS: dict[str, tuple[str, float]] = {
     # BDT crore (1 crore = 10 million → multiplier 0.1).
     "tbill_outstanding_cr": ("treasury_bill_outstanding", 0.1),
     "tbond_outstanding_cr": ("treasury_bond_outstanding", 0.1),
+    # Fiscal: EconDelta indicators are BDT crore, brief renders BDT trillion.
+    # 1 trillion BDT = 100,000 crore → multiplier 0.00001.
+    "fiscal_nbr_collected_trn":  ("tax_revenue", 0.00001),
+    "fiscal_govt_borrow_trn":    ("domestic_borrowing_for_budget_deficit", 0.00001),
+    "fiscal_foreign_borrow_trn": ("foreign_borrowing_for_budget_deficit", 0.00001),
+    "fiscal_bank_borrow_trn":    ("bank_borrowing_for_deficit_financing", 0.00001),
+    "fiscal_nsc_outstanding":    ("nsc_outstanding", 0.00001),
+    # Remittance: EconDelta source is USD billion, brief renders USD million.
+    # 1 billion = 1,000 million → multiplier 1000.
+    "remit_monthly_mn": ("monthly_remittance", 1000.0),
+    "remit_fy_mn":      ("fy_remittance", 1000.0),
 }
 
 # NBR cross-check tolerance (relative). TBS and Daily Star independently

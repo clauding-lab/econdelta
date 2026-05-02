@@ -6,7 +6,7 @@
 python3 scripts/build_catalog.py > docs/indicator-catalog.md
 ```
 
-**59** scraped indicators × **38** brief aliases × **2** unit conversions × **2** derived = **101** total entries.
+**59** scraped indicators × **30** brief aliases × **9** unit conversions × **2** derived = **100** total entries.
 
 Read the data contract for column semantics and query examples: [`data-contract.md`](data-contract.md).
 
@@ -52,8 +52,8 @@ Read the data contract for column semantics and query examples: [`data-contract.
 | external_sector | `monthly_import_lc_settlement` | `amount_usd_mn` | monthly | BB | [0.0, 20000.0] | Monthly Import LC Settlement |
 | external_sector | `monthly_remittance` | `amount_usd_bn` | monthly | BB | [0.0, 5.0] | Monthly Remittance |
 | external_sector | `remittance_by_country` | `amount_usd_bn` | monthly | BB | [0.0, 10.0] | Remittance by country |
-| external_sector (brief alias) | `remit_fy_mn` | `amount_usd_bn` | fiscal_year | BB | [0.0, 50.0] | Alias of `fy_remittance` — FY Remittance |
-| external_sector (brief alias) | `remit_monthly_mn` | `amount_usd_bn` | monthly | BB | [0.0, 5.0] | Alias of `monthly_remittance` — Monthly Remittance |
+| external_sector (brief conversion) | `remit_fy_mn` | `amount_usd_bn` | fiscal_year | BB | — | Conversion of `fy_remittance` × 1000.0 — FY Remittance |
+| external_sector (brief conversion) | `remit_monthly_mn` | `amount_usd_bn` | monthly | BB | — | Conversion of `monthly_remittance` × 1000.0 — Monthly Remittance |
 | forex_and_reserves | `fx_buy_sale_from_market` | `amount_usd_bn` | monthly |  | [0.0, 5.0] | FX Buy/Sale from Market |
 | forex_and_reserves | `fx_reserve_gross_and_bpm6` | `amount_usd_bn` | weekly | BB | [0.0, 100.0] | FX Reserve Gross and BPM6 |
 | forex_and_reserves | `usd_bdt_exchange_rate` | `rate` | daily | BB | [80.0, 200.0] | USD/BDT Exchange Rate |
@@ -70,10 +70,10 @@ Read the data contract for column semantics and query examples: [`data-contract.
 | government_finance | `tax_gdp_ratio` | `percent` | quarterly |  | [0.0, 30.0] | Tax-GDP Ratio |
 | government_finance | `tax_revenue` | `amount_bdt_crore` | monthly | BB | [0.0, 500000.0] | Tax Revenue |
 | government_finance | `total_revenue_budget_vs_actual` | `amount_bdt_crore` | monthly |  | [0.0, 600000.0] | Total Revenue Budget vs Actual |
-| government_finance (brief alias) | `fiscal_bank_borrow_trn` | `amount_bdt_crore` | monthly | BB | [0.0, 400000.0] | Alias of `bank_borrowing_for_deficit_financing` — Bank Borrowing for Deficit Financing |
-| government_finance (brief alias) | `fiscal_foreign_borrow_trn` | `amount_bdt_crore` | monthly | BB | [0.0, 200000.0] | Alias of `foreign_borrowing_for_budget_deficit` — Foreign Borrowing for Budget Deficit |
-| government_finance (brief alias) | `fiscal_govt_borrow_trn` | `amount_bdt_crore` | monthly | BB | [0.0, 400000.0] | Alias of `domestic_borrowing_for_budget_deficit` — Domestic Borrowing for Budget Deficit |
-| government_finance (brief alias) | `fiscal_nbr_collected_trn` | `amount_bdt_crore` | monthly | BB | [0.0, 500000.0] | Alias of `tax_revenue` — Tax Revenue |
+| government_finance (brief conversion) | `fiscal_bank_borrow_trn` | `amount_bdt_crore` | monthly | BB | — | Conversion of `bank_borrowing_for_deficit_financing` × 1e-05 — Bank Borrowing for Deficit Financing |
+| government_finance (brief conversion) | `fiscal_foreign_borrow_trn` | `amount_bdt_crore` | monthly | BB | — | Conversion of `foreign_borrowing_for_budget_deficit` × 1e-05 — Foreign Borrowing for Budget Deficit |
+| government_finance (brief conversion) | `fiscal_govt_borrow_trn` | `amount_bdt_crore` | monthly | BB | — | Conversion of `domestic_borrowing_for_budget_deficit` × 1e-05 — Domestic Borrowing for Budget Deficit |
+| government_finance (brief conversion) | `fiscal_nbr_collected_trn` | `amount_bdt_crore` | monthly | BB | — | Conversion of `tax_revenue` × 1e-05 — Tax Revenue |
 | inflation | `food_inflation` | `percent` | monthly | BB | [0.0, 50.0] | Food Inflation |
 | inflation | `general_inflation` | `percent` | monthly | BB | [0.0, 50.0] | General Inflation |
 | inflation | `non_food_inflation` | `percent` | monthly | BB | [0.0, 50.0] | Non-Food Inflation |
@@ -96,8 +96,7 @@ Read the data contract for column semantics and query examples: [`data-contract.
 | monetary_aggregates (brief alias) | `banking_excess_liquid` | `amount_bdt_crore` | monthly | BB | [0.0, 5000000.0] | Alias of `excess_liquid_asset_total_minimum` — Excess Liquid Asset (Total-Minimum) |
 | monetary_aggregates (brief alias) | `banking_money_multiplier` | `ratio` | monthly | BB | [1.0, 20.0] | Alias of `money_multiplier` — Money Multiplier |
 | monetary_aggregates (brief alias) | `banking_reserve_money` | `amount_bdt_crore` | weekly | BB | [0.0, 10000000.0] | Alias of `reserve_money` — Reserve Money |
-| monetary_aggregates (brief alias) | `fiscal_nsc_outstanding` | `amount_bdt_crore` | monthly | BB | [0.0, 5000000.0] | Alias of `nsc_outstanding` — NSC outstanding |
-| monetary_aggregates (brief alias) | `macro_credit_growth` | `amount_bdt_crore` | monthly | BB | [0.0, 100000000.0] | Alias of `private_sector_credit` — Private Sector Credit |
+| monetary_aggregates (brief conversion) | `fiscal_nsc_outstanding` | `amount_bdt_crore` | monthly | BB | — | Conversion of `nsc_outstanding` × 1e-05 — NSC outstanding |
 | money_market | `banking_sector_crar` | `percent` | quarterly | BB | [-50.0, 30.0] | Banking Sector CAR (Capital Adequacy Ratio) |
 | money_market | `bill_bond_rates` | `percent` | daily | BB | [0.0, 25.0] | 91-Day T-Bill Cut-Off Yield |
 | money_market | `call_money_rate` | `percent` | daily | BB | [0.0, 25.0] | Call money rate |
