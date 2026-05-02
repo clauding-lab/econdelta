@@ -10,6 +10,11 @@ import pytest
 # aren't what unit/integration tests are validating.
 os.environ.setdefault("ECONDELTA_SKIP_OPUS_REVIEW", "1")
 
+# Skip the Supabase metric_history upsert in aggregate_latest by default
+# for tests. Tests targeting the writer mock requests.Session directly;
+# end-to-end aggregate tests would otherwise need real Supabase creds.
+os.environ.setdefault("ECONDELTA_SKIP_SUPABASE", "1")
+
 
 @pytest.fixture
 def fixtures_dir() -> Path:

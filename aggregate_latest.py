@@ -377,6 +377,9 @@ BRIEF_ALIASES: dict[str, str] = {
     # money market — yield headline (daily)
     "tbill_91d_yield_pct":      "bill_bond_rates",
     "gsec_next_auction_cr":     "gsec_auction",
+    # money market — brief metric_id forms (the brief's tbond builder
+    # uses ``tbond_tbill_91d``; brief's nbr/dam builders use ``dam_*``)
+    "tbond_tbill_91d":          "bill_bond_rates",
     # DAM retail food prices (daily, BDT/kg or BDT/4-pcs for eggs)
     "food_rice_coarse_bdt":     "food_rice_coarse",
     "food_atta_packet_bdt":     "food_atta_packet",
@@ -386,6 +389,15 @@ BRIEF_ALIASES: dict[str, str] = {
     "food_onion_local_bdt":     "food_onion_local",
     "food_lentil_moong_bdt":    "food_lentil_moong",
     "food_sugar_local_bdt":     "food_sugar_local",
+    # DAM retail food prices — brief metric_id forms (`dam_*`)
+    "dam_rice_coarse":          "food_rice_coarse",
+    "dam_lentil":               "food_lentil_moong",
+    "dam_oil":                  "food_oil_soybean",
+    "dam_sugar":                "food_sugar_local",
+    "dam_onion":                "food_onion_local",
+    "dam_egg":                  "food_egg_red",
+    "dam_chicken":              "food_chicken_farm",
+    "dam_flour":                "food_atta_packet",
 }
 
 # Aliases that need a unit conversion (source unit → brief unit).
@@ -552,6 +564,23 @@ def main() -> int:
     archived = archive_latest(LATEST_PATH, ARCHIVE_DIR)
     if archived is not None:
         logger.info("archived to %s", archived.name)
+
+    # Persist to Supabase metric_history (warm queryable history). Best-effort:
+    # local archive (above) is the cold backup, and the next aggregate retry
+    # idempotently re-upserts the same (metric_id, as_of) rows. ECONDELTA_SKIP_SUPABASE=1
+    # disables the call (set in tests/conftest.py and any dev runs).
+    if os.environ.get("ECONDELTA_SKIP_SUPABASE") != "1":
+        try:
+            from utils.supabase_writer import (
+                SupabaseWriteError,
+                upsert_metric_history,
+            )
+            n_rows = upsert_metric_history(data=data, as_of=now.date())
+            logger.info("upserted %d rows to Supabase metric_history (as_of=%s)", n_rows, now.date())
+        except SupabaseWriteError as e:
+            logger.warning(
+                "Supabase write failed: %s — continuing with local archive only", e,
+            )
 
     summary = " ".join(
         f"{k}={s.status}({s.age_hours}h)" if s.age_hours is not None else f"{k}={s.status}"
