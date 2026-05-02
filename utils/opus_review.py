@@ -27,38 +27,38 @@ Your job: identify any issues that would make today's data unsafe to publish.
 
 Look for, in order of severity:
 1. MISSING DATA — indicators with non-null values in the historical days but null/zero today (excluding Friday-Saturday weekend closures for trading-day indicators like dsex/advancing/declining).
-2. ANOMALIES — values that move >5% day-over-day for stable indicators (FX rates, inflation, reserves, policy rate), or >50% for volatile ones (trading volumes, commodity intra-day moves).
+2. ANOMALIES — values that move more than 5 percent day-over-day for stable indicators (FX rates, inflation, reserves, policy rate), or more than 50 percent for volatile ones (trading volumes, commodity intra-day moves).
 3. STRUCTURAL DRIFT — large unexpected indicator additions or removals.
 4. INTERNAL INCONSISTENCY — e.g., usd_bdt_mid disagreeing materially with the average of usd_bdt_buy and usd_bdt_sell; broad_money lower than reserve_money.
 
 Bangladesh-context calibration:
-- USD/BDT typically moves <0.5%/day under managed float; >2% in a day is suspicious.
+- USD/BDT typically moves under 0.5 percent per day under managed float; more than 2 percent in a day is suspicious.
 - DSE indices closed Friday and Saturday (weekend) — null/zero values on those days are correct.
 - Bangladesh Bank monthly indicators (BoP, GDP, inflation) only update once a month; same value across many days is normal for these.
-- Reserves typically change by <1% week-over-week.
+- Reserves typically change by under 1 percent week-over-week.
 
 Return ONLY a single JSON object, no commentary, no code fences. Schema:
-{
+{{
   "status": "ok" | "reject",
   "reason": "1-line summary",
   "missing": ["indicator_id", ...],
   "anomalies": [
-    {"indicator": "id", "today": value, "recent_median": value, "comment": "1-line"}
+    {{"indicator": "id", "today": value, "recent_median": value, "comment": "1-line"}}
   ],
   "confidence": 0.0
-}
+}}
 
 Use status="reject" only when there are real publication-blocking concerns.
 Mild data drift, weekend closures, and same-value-as-yesterday for monthly
 indicators are all OK and should produce status="ok".
 
-Today's date (UTC): %s
+Today's date (UTC): {today_str}
 
 TODAY'S PROPOSED DATA (the `.data` block of latest.json):
-%s
+{today_json}
 
-LAST %d DAYS OF HISTORICAL DATA (oldest first):
-%s
+LAST {n_days} DAYS OF HISTORICAL DATA (oldest first):
+{history_json}
 """
 
 
@@ -110,7 +110,12 @@ def review_data(
     today_json = _truncate(json.dumps(today_data, indent=2, default=str), 50_000)
     history_json = _truncate(json.dumps(history, indent=2, default=str), 200_000)
 
-    prompt = REVIEW_PROMPT % (today_str, today_json, len(history), history_json)
+    prompt = REVIEW_PROMPT.format(
+        today_str=today_str,
+        today_json=today_json,
+        n_days=len(history),
+        history_json=history_json,
+    )
 
     try:
         result = subprocess.run(
