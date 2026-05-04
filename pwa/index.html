@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/>
+<title>EconDelta · Bangladesh Macro</title>
+
+<!-- PWA -->
+<link rel="manifest" href="manifest.webmanifest"/>
+<meta name="theme-color" content="#c34a1f"/>
+<meta name="color-scheme" content="dark"/>
+
+<!-- iOS standalone -->
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+<meta name="apple-mobile-web-app-title" content="EconDelta"/>
+<link rel="apple-touch-icon" href="icons/apple-touch-icon-180.png"/>
+
+<!-- Favicons -->
+<link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png"/>
+<link rel="icon" type="image/png" sizes="16x16" href="icons/favicon-16.png"/>
+
+<!-- Fonts -->
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Serif:ital,wght@0,400;0,600;1,400&display=swap" rel="stylesheet"/>
+
+<link rel="stylesheet" href="styles.css"/>
+</head>
+<body>
+<div id="root"></div>
+
+<!-- React + Babel — local mirror -->
+<script src="vendor/react.production.min.js"></script>
+<script src="vendor/react-dom.production.min.js"></script>
+<script src="vendor/babel.min.js"></script>
+
+<!-- Supabase config (anon key — public by design) -->
+<script src="config.js"></script>
+
+<!-- Data layer — supabase-client falls back to data-mock if config missing -->
+<script src="lib/supabase-client.js"></script>
+
+<!-- React app -->
+<script type="text/babel" src="components.jsx"></script>
+<script type="text/babel" src="pages/latest.jsx"></script>
+<script type="text/babel" src="pages/archive.jsx"></script>
+<script type="text/babel" src="pages/runs.jsx"></script>
+<script type="text/babel" src="pages/sources-about.jsx"></script>
+
+<script type="text/babel">
+function useHashRoute(){
+  const [route, setRoute] = React.useState(window.location.hash.slice(1) || '/');
+  React.useEffect(() => {
+    const onHash = () => setRoute(window.location.hash.slice(1) || '/');
+    window.addEventListener('hashchange', onHash);
+    return () => window.removeEventListener('hashchange', onHash);
+  }, []);
+  return route;
+}
+
+function App(){
+  const route = useHashRoute();
+  const [, setDataVersion] = React.useState(0);
+  React.useEffect(() => {
+    const onChange = () => setDataVersion(v => v + 1);
+    window.addEventListener('ed:data-changed', onChange);
+    return () => window.removeEventListener('ed:data-changed', onChange);
+  }, []);
+  let Page, label;
+  if(route === '/archive'){ Page = PageArchive; label = '02 Archive'; }
+  else if(route === '/runs'){ Page = PageRuns; label = '03 Runs'; }
+  else if(route === '/sources'){ Page = PageSources; label = '04 Sources'; }
+  else if(route === '/about'){ Page = PageAbout; label = '05 About'; }
+  else if(route.startsWith('/domain/')){ Page = PageDomain; label = '01 Latest'; }
+  else { Page = PageLatest; label = '01 Latest'; }
+  return (
+    <div className="app" data-screen-label={label}>
+      <Sidebar route={route}/>
+      <main className="main">
+        <Masthead/>
+        <Page route={route}/>
+      </main>
+    </div>
+  );
+}
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+
+<script src="register-pwa.js" defer></script>
+</body>
+</html>
