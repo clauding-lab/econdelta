@@ -217,3 +217,42 @@ def log_run_start(
         logger.warning("log_run_start failed for source=%s: %s", source, e)
 
     return run_id
+
+
+def log_run_end(
+    run_id: str,
+    started_at: datetime,
+    status: str,
+    exit_code: int = 0,
+    error: _Optional[str] = None,
+) -> None:
+    """Update a run_logs row with finished_at, duration_ms, status, exit_code, error.
+
+    Swallows network errors. Status must be one of: 'ok', 'fail', 'stale', 'skip'.
+    """
+    if os.environ.get("ECONDELTA_SKIP_SUPABASE") == "1":
+        return
+
+    finished_at = datetime.now(timezone.utc)
+    duration_ms = int((finished_at - started_at).total_seconds() * 1000)
+
+    try:
+        base_url, key = _resolve_credentials(None, None)
+        endpoint = f"{base_url}/rest/v1/run_logs?id=eq.{run_id}"
+        headers = {
+            "apikey": key,
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json",
+            "Prefer": "return=minimal",
+        }
+        payload = {
+            "finished_at": finished_at.isoformat(),
+            "duration_ms": duration_ms,
+            "status": status,
+            "exit_code": exit_code,
+            "error": error[:2000] if error else None,  # truncate long tracebacks
+        }
+        sess = requests.Session()
+        sess.patch(endpoint, json=payload, headers=headers, timeout=_RUN_LOGS_TIMEOUT)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("log_run_end failed for run_id=%s: %s", run_id, e)
