@@ -1241,3 +1241,33 @@ h2.sec::before{
   aspect-ratio: 1;
   border-radius: 1px;
 }
+
+.source-section { margin-bottom: 28px; }
+.source-section h3 {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 12px;
+  color: var(--accent, #c34a1f);
+  text-transform: uppercase;
+  letter-spacing: .14em;
+  margin: 0 0 10px;
+}
+.source-indicators { display: grid; gap: 6px; }
+.source-row {
+  display: flex;
+  justify-content: space-between;
+  font-family: 'IBM Plex Sans', sans-serif;
+  font-size: 13px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--rule, #2a2f33);
+}
+.source-row .muted {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px;
+  color: var(--ink-3, #6b7480);
+  margin-left: 8px;
+}
+.source-row a {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px;
+  color: var(--accent, #c34a1f);
+}
