@@ -124,7 +124,11 @@ def _claude_preflight() -> bool:
     binary = os.environ.get("CLAUDE_BINARY", "claude")
     try:
         result = subprocess.run(
-            [binary, "--print", "--model", "claude-opus-4-6"],
+            # --strict-mcp-config blocks MCP-plugin loading. Without it, any
+            # plugin installed in ~/.claude/plugins/ (e.g. discord-vps-setup
+            # on Hetzner) can hijack stdout and make the CLI exit 1 with empty
+            # stderr. Mirrors the fix in claude_max/max_client.py (e027106).
+            [binary, "--print", "--strict-mcp-config", "--model", "claude-opus-4-6"],
             input="say ok",
             capture_output=True,
             text=True,
