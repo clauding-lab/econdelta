@@ -525,6 +525,33 @@ def _apply_brief_aliases(data: dict) -> None:
         data["nbr_fytd_cross_check"] = "dailystar_only"
 
 
+def _titleize(metric_id: str) -> str:
+    """Convert 'banking_npl_pct' -> 'Banking Npl Pct'."""
+    return " ".join(word.capitalize() for word in metric_id.split("_"))
+
+
+def _build_definition_seeds(sources_v3_cfg: dict) -> list[dict]:
+    """Build metric_definitions rows from sources-v3.json indicators.
+
+    Conservative defaults: label falls back to titleized id, sort_order=100,
+    is_hero=False. Tunable in Supabase Studio post-insert.
+    """
+    seeds = []
+    for ind in sources_v3_cfg.get("indicators", []):
+        seeds.append({
+            "metric_id": ind["id"],
+            "label": ind.get("label") or _titleize(ind["id"]),
+            "short_label": ind.get("short_label"),
+            "unit": ind.get("unit"),
+            "domain": ind.get("domain", "Other"),
+            "cadence": ind.get("cadence"),
+            "description": ind.get("description"),
+            "source": ind.get("source"),
+            "source_url": (ind.get("fetch") or {}).get("url"),
+        })
+    return seeds
+
+
 def write_latest(bundle: LatestBundle) -> None:
     """Atomic write: .tmp -> os.replace."""
     DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -633,6 +660,14 @@ def main() -> int:
     if archived is not None:
         logger.info("archived to %s", archived.name)
 
+    # Seed metric_definitions for any new indicators (idempotent).
+    from utils.supabase_writer import upsert_metric_definitions_seed
+    sources_v3 = json.loads(SOURCES_V3_PATH.read_text()) if SOURCES_V3_PATH.exists() else {"indicators": []}
+    seeds = _build_definition_seeds(sources_v3)
+    inserted = upsert_metric_definitions_seed(seeds)
+    if inserted:
+        logger.info("Seeded %d new metric_definitions rows", inserted)
+
     # Persist to Supabase metric_history (warm queryable history). Best-effort:
     # local archive (above) is the cold backup, and the next aggregate retry
     # idempotently re-upserts the same (metric_id, as_of) rows. ECONDELTA_SKIP_SUPABASE=1
@@ -678,4 +713,5 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    from utils.supabase_writer import wrap_run
+    sys.exit(wrap_run("aggregate", "econdelta-aggregate.service", main))
