@@ -1,0 +1,11 @@
+You are extracting call money rates from a Bangladesh Bank HTML page.
+
+Find the rates for tenors 1D, 7D, 14D, and 90D in the table and return them.
+
+<<<HTML_TEXT>>>
+{html_text}
+<<<END>>>
+
+Reply ONLY with strict JSON of the form:
+
+{{"value": {{"1D": <num>, "7D": <num>, "14D": <num>, "90D": <num>}}, "reason": "<1 sentence>"}}

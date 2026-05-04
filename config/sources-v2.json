@@ -216,8 +216,8 @@
       "fallback": null
     },
     {
-      "id": "domestic_borrowing_for_bidget_deficit",
-      "name": "Domestic Borrowing for Bidget Deficit",
+      "id": "domestic_borrowing_for_budget_deficit",
+      "name": "Domestic Borrowing for Budget Deficit",
       "cadence": "monthly",
       "primary": {
         "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
@@ -280,8 +280,8 @@
       "fallback": null
     },
     {
-      "id": "treasury_bond_outstabnding",
-      "name": "Treasury Bond Outstabnding",
+      "id": "treasury_bond_outstanding",
+      "name": "Treasury Bond Outstanding",
       "cadence": "monthly",
       "primary": {
         "url": "https://gsom.bb.org.bd/mtm.php",
@@ -395,8 +395,8 @@
       "fallback": null
     },
     {
-      "id": "gsec_mautiry",
-      "name": "GSEC Mautiry",
+      "id": "gsec_maturity",
+      "name": "GSEC Maturity",
       "cadence": "monthly",
       "primary": {
         "url": "Own Data Hub",

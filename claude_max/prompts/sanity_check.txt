@@ -1,0 +1,14 @@
+You are validating an extracted economic indicator.
+
+Indicator: {indicator_name}
+Domain: {domain}
+Cadence: {cadence}
+Extracted value: {value}
+Value type: {value_type}
+Valid range: {valid_range}
+Last 3 known values: {history}
+
+Is this value plausible given the indicator's typical scale, recent history,
+and value_type? Reply ONLY with strict JSON of the form:
+
+{{"plausible": true|false, "reason": "<1 sentence>"}}

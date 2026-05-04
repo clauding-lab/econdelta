@@ -4,6 +4,11 @@ Documentation=https://github.com/clauding-lab/econdelta
 After=network-online.target
 Wants=network-online.target
 
+# Retry on transient failures (rare for aggregator, but cheap insurance).
+# Up to 3 starts per 30-min window — initial fire plus 2 retries.
+StartLimitIntervalSec=1800
+StartLimitBurst=3
+
 [Service]
 Type=oneshot
 User=adnan
@@ -25,8 +30,10 @@ ProtectSystem=strict
 ProtectHome=read-only
 ReadWritePaths=/home/adnan/econdelta/data /home/adnan/econdelta/logs
 
-# Timeouts
+# Timeouts + retry on transient failures
 TimeoutStartSec=30
+Restart=on-failure
+RestartSec=300
 
 # Logging — systemd journal + append to file
 StandardOutput=append:/home/adnan/econdelta/logs/aggregate-systemd.log

@@ -1,10 +1,9 @@
 [Unit]
-Description=Run EconDelta aggregator twice daily at 00:20 UTC (06:20 BDT) and 10:35 UTC (16:35 BDT)
+Description=Run EconDelta aggregator daily at 23:20 UTC (05:20 BDT next day)
 Requires=econdelta-aggregate.service
 
 [Timer]
-OnCalendar=*-*-* 00:20:00 UTC
-OnCalendar=*-*-* 10:35:00 UTC
+OnCalendar=*-*-* 23:20:00 UTC
 Persistent=true
 RandomizedDelaySec=30
 

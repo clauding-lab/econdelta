@@ -3,5 +3,12 @@ beautifulsoup4>=4.12,<5
 pydantic>=2.8,<3
 yfinance>=0.2.40,<1
 python-dateutil>=2.9,<3
-playwright>=1.47,<2
-playwright-stealth>=1.0.6,<2
+playwright>=1.49,<2
+playwright-stealth>=2.0,<3
+pdfplumber>=0.11,<0.13
+# OCR fallback for scanned PDFs (no text layer). Requires system binaries:
+# Linux: apt install tesseract-ocr poppler-utils
+# Mac:   brew install tesseract poppler
+pytesseract>=0.3.10,<0.4
+pdf2image>=1.17,<2
+Pillow>=10,<12

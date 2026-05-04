@@ -10,7 +10,7 @@ if [[ "$(id -u)" -ne 0 ]]; then
   exit 1
 fi
 
-for t in econdelta-forex econdelta-commodity econdelta-aggregate econdelta-dse; do
+for t in econdelta-forex econdelta-commodity econdelta-aggregate econdelta-dse econdelta-fetch econdelta-parse; do
   systemctl disable --now "${t}.timer" 2>/dev/null || true
 done
 

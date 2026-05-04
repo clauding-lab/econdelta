@@ -13,6 +13,9 @@ dependencies = [
     "pydantic>=2.8,<3",
     "yfinance>=0.2.40,<1",
     "python-dateutil>=2.9,<3",
+    "pdfplumber>=0.11,<0.13",
+    "playwright>=1.49,<2",
+    "playwright-stealth>=2.0,<3",
 ]
 
 [tool.pytest.ini_options]
@@ -28,5 +31,5 @@ select = ["E", "F", "W", "I"]
 ignore = ["E501"]
 
 [tool.coverage.run]
-source = ["utils", "scrapers"]
+source = ["utils", "scrapers", "fetchers", "parsers", "claude_max"]
 omit = ["tests/*"]

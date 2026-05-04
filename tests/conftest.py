@@ -1,8 +1,19 @@
 """Shared pytest fixtures."""
 
+import os
 from pathlib import Path
 
 import pytest
+
+# Skip the Opus 4.6 review in aggregate_latest by default for all tests.
+# Real Opus calls are slow ($$ + minutes), require subscription auth, and
+# aren't what unit/integration tests are validating.
+os.environ.setdefault("ECONDELTA_SKIP_OPUS_REVIEW", "1")
+
+# Skip the Supabase metric_history upsert in aggregate_latest by default
+# for tests. Tests targeting the writer mock requests.Session directly;
+# end-to-end aggregate tests would otherwise need real Supabase creds.
+os.environ.setdefault("ECONDELTA_SKIP_SUPABASE", "1")
 
 
 @pytest.fixture

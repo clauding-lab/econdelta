@@ -1,0 +1,29 @@
+You are extracting a SINGLE NBR (National Board of Revenue, Bangladesh) revenue component from a news article — NOT the FYTD total.
+
+Indicator: {indicator_name}
+Component to extract: {instruction}
+Value type: {value_type}
+Valid range: {valid_range}
+
+Find the article's reported FYTD cumulative figure for the SPECIFIC component named in the instruction (VAT, Income Tax, or Customs). Return the value in BDT crore.
+
+NUMBER FORMATS YOU MAY SEE:
+- Indian/Bangladeshi lakh-comma format: "Tk 1,12,500 crore" → 112500
+- Mixed: "Tk 1.12 lakh crore" → 112000  (1 lakh crore = 100,000 crore)
+- Direct: "Tk 112,500 crore" → 112500
+
+DISAMBIGUATION RULES:
+- The article often groups components: "VAT contributed Tk X cr, Income Tax Tk Y cr, customs Tk Z cr." Pick the one named in the instruction.
+- "Income tax" / "IT" / "direct tax" all refer to the same component.
+- "Customs" / "import duty" / "indirect tax (customs)" all refer to the same component.
+- "VAT" / "value-added tax" / "supplementary duty + VAT" — if the article aggregates supplementary duty into VAT, return the aggregate.
+- Some articles only report the FYTD TOTAL with no component breakdown. In that case return null.
+- Some articles report a single MONTH's figure for a component (e.g. "March VAT alone: Tk 6,000 cr"). Prefer FYTD cumulative; only fall back to a monthly figure if the FYTD breakdown is absent.
+- NEVER return the FYTD total when asked for a component.
+
+<<<HTML_TEXT>>>
+{html_text}
+<<<END>>>
+
+OUTPUT (strict JSON, no markdown fences):
+{{"value": <number-or-null>, "reason": "<one sentence on which sentence/figure you used>"}}

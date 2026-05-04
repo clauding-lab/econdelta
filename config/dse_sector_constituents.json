@@ -1,0 +1,65 @@
+{
+  "_doc": "Phase 3.1 V5 fidelity — DSE sector constituent taxonomy. Maps each of the 8 sectors the brief renders in §06 to its listed scrip codes. The dse_sector_heat scraper averages today's % change across each sector's constituents to produce dse_sector_heat: dict[sector, pct_avg] in latest.json. Simple-average aggregation per the plan.",
+  "_status": "STARTER — populate from DSE's published sector listings before activating the scraper. Brief side renders gracefully when dse_sector_heat is absent; this file is a no-op until the EconDelta scraper consumes it.",
+  "_source_hint": "DSE publishes per-sector indices and constituent lists at dsebd.org. The 'Recent Market Information' page (recent_market_information.php) carries per-scrip daily % moves. One fetch can feed all sectors via this file's mapping — avoids 250+ per-scrip page hits.",
+  "_aggregation": "simple-average of constituent moves per sector. Weighted-by-market-cap is a future refinement; not required for the V1 directional heatmap.",
+  "_brief_sector_order": ["Banks", "NBFI", "Textile", "Pharma", "Fuel", "Telecom", "Food", "IT"],
+  "sectors": {
+    "Banks": {
+      "_note": "Schedule banks listed on DSE main board. Expand to include all 30+ listed banks before activation.",
+      "constituents": [
+        "BRACBANK", "DUTCHBANGL", "EBL", "CITYBANK", "PUBALI",
+        "MERCANBANK", "IFIC", "PRIMEBANK", "SOUTHEASTB", "TRUSTBANK",
+        "ONEBANKLTD", "BANKASIA", "ALARABANK", "ABBANK", "STANDBANKL"
+      ]
+    },
+    "NBFI": {
+      "_note": "Non-bank financial institutions.",
+      "constituents": [
+        "IDLC", "IPDC", "LANKABAFIN", "DBH", "ICB",
+        "ISLAMICFIN", "UNITEDFIN", "BAYLEASING", "PHOENIXFIN", "PREMIERLEA"
+      ]
+    },
+    "Textile": {
+      "_note": "Listed textile and apparel manufacturers.",
+      "constituents": [
+        "SQUARETXT", "ENVOYTEX", "NOMANC", "MALEKSPIN", "PAKIZAIT",
+        "ZAHEENSPIN", "SAFKOSPINN", "RNSPIN", "STYLECRAFT"
+      ]
+    },
+    "Pharma": {
+      "_note": "Pharmaceuticals and chemicals — a large, important sector.",
+      "constituents": [
+        "SQURPHARMA", "BEXIMCO", "RENATA", "INCEPTAPHRM", "ACI",
+        "BEACONPHAR", "ORIONPHARM", "IBNSINA", "GLAXOSMITH", "MARICO"
+      ]
+    },
+    "Fuel": {
+      "_note": "Fuel and power — gas, oil, electricity utilities.",
+      "constituents": [
+        "TITASGAS", "PADMAOIL", "MJLBD", "MEGHNAPET", "JAMUNAOIL",
+        "BPDB", "POWERGRID", "DESCO", "DSSL", "SUMITPOWER"
+      ]
+    },
+    "Telecom": {
+      "_note": "Mobile and fixed-line telecom operators. Small sector — 2-3 majors.",
+      "constituents": [
+        "GP", "ROBI", "BSCCL"
+      ]
+    },
+    "Food": {
+      "_note": "Food and allied — F&B, agro-processing.",
+      "constituents": [
+        "OLYMPIC", "AGRANINS", "BATBC", "AGRICMARK", "AMCL",
+        "FUWANGFOOD", "MEGCONMILK", "RDFOOD", "BANGAS"
+      ]
+    },
+    "IT": {
+      "_note": "Information technology — software, hardware, IT services.",
+      "constituents": [
+        "IBN", "BDCOM", "GENEXIL", "INTECH", "AAMRANET",
+        "AAMRATECH", "ITC", "DAFODILCOM"
+      ]
+    }
+  }
+}

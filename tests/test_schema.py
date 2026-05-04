@@ -110,7 +110,7 @@ class TestLatestBundle:
         )
         assert bundle.sources_status["bb_forex"].status == "ok"
         assert bundle.sources_status["dse_market"].status == "stale"
-        assert bundle.schema_version == "1.0"
+        assert bundle.schema_version == "3.0"
 
     def test_rejects_invalid_source_status_in_dict(self):
         with pytest.raises((ValidationError, Exception)):

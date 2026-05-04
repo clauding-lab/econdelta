@@ -1,0 +1,21 @@
+You are extracting an economic indicator from a Bangladesh Bank PDF.
+
+Indicator: {indicator_name}
+Instruction: {instruction}
+Value type: {value_type}
+Valid range: {valid_range}
+
+PDF page text follows between <<<PDF_TEXT>>> markers. Find the value the
+instruction points at. Numbers may use commas (1,234,567 = 1234567). Strip
+commas and return a single number.
+
+<<<PDF_TEXT>>>
+{pdf_text}
+<<<END>>>
+
+RULES:
+- If you locate a candidate number matching the instruction, RETURN IT as `value`. Never put a number inside `reason` while leaving value=null — commit to the best-fit number.
+- Only return value=null when the data is genuinely absent from the provided text (empty extract, the named component not present, content is a CAPTCHA/bot-challenge page).
+- Reply ONLY with strict JSON of the form:
+
+{{"value": <number-or-null>, "reason": "<1 sentence on where you found it OR why it is missing>"}}

@@ -321,8 +321,8 @@ def test_main_end_to_end_with_all_scrapers_fresh(
     assert latest_path.exists()
 
     payload = json.loads(latest_path.read_text())
-    assert payload["schema_version"] == "1.0"
     assert "updated_at" in payload
+    assert payload["schema_version"] == "3.0"
     assert payload["sources_status"]["bb_forex"]["status"] == "ok"
     assert payload["sources_status"]["dse_market"]["status"] == "ok"
     assert payload["sources_status"]["commodity_prices"]["status"] == "ok"
@@ -401,3 +401,107 @@ def test_main_exit_1_on_validation_failure(
 
     error_calls = [c for c in notify_calls if c[0] == "error"]
     assert error_calls, "Expected an error notify call on validation failure"
+
+
+# ---------------------------------------------------------------------------
+# v3 dual-shape tests
+# ---------------------------------------------------------------------------
+
+
+def test_aggregator_emits_v3_domains_and_freshness(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """v3 aggregator emits domains/freshness/alerts when sources-v3.json + per-indicator snapshots exist."""
+    import aggregate_latest
+
+    # Override paths to tmp_path
+    monkeypatch.setattr(aggregate_latest, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(aggregate_latest, "DATA_DIR", tmp_path / "data")
+    monkeypatch.setattr(aggregate_latest, "LATEST_PATH", tmp_path / "data" / "latest.json")
+    monkeypatch.setattr(aggregate_latest, "CONFIG_PATH", tmp_path / "config" / "sources.json")
+    monkeypatch.setattr(aggregate_latest, "SOURCES_V3_PATH", tmp_path / "config" / "sources-v3.json")
+
+    (tmp_path / "config").mkdir()
+    (tmp_path / "data").mkdir()
+    (tmp_path / "config" / "sources.json").write_text(json.dumps({"sources": {}}))
+    (tmp_path / "config" / "sources-v3.json").write_text(
+        json.dumps(
+            {
+                "version": "3.0",
+                "indicators": [
+                    {
+                        "id": "policy_rate_slf_sdf",
+                        "name": "Policy Rate",
+                        "domain": "money_market",
+                        "cadence": "daily",
+                        "fetch": {"type": "html", "url": "https://www.bb.org.bd/en/"},
+                        "parse": {
+                            "deterministic": "html_footer_ticker",
+                            "value_type": "percent",
+                            "valid_range": [0, 25],
+                            "llm_prompt": "html_footer_ticker.txt",
+                        },
+                        "anomaly_threshold": 1.0,
+                    }
+                ],
+            }
+        )
+    )
+    (tmp_path / "data" / "policy_rate_slf_sdf").mkdir()
+    (tmp_path / "data" / "policy_rate_slf_sdf" / "2026-04-30.json").write_text(
+        json.dumps(
+            {
+                "indicator_id": "policy_rate_slf_sdf",
+                "name": "Policy Rate",
+                "domain": "money_market",
+                "cadence": "daily",
+                "scraped_at": datetime.now(timezone.utc).isoformat(),
+                "source_url": "https://www.bb.org.bd/en/",
+                "value": 10.0,
+                "_provenance": "deterministic",
+            }
+        )
+    )
+
+    rc = aggregate_latest.main()
+    assert rc == 0
+
+    bundle = json.loads((tmp_path / "data" / "latest.json").read_text())
+    assert bundle["schema_version"] == "3.0"
+    assert "domains" in bundle
+    assert "money_market" in bundle["domains"]
+    assert "policy_rate_slf_sdf" in bundle["domains"]["money_market"]
+    assert bundle["data"]["policy_rate_slf_sdf"] == 10.0  # also flat in data
+    assert bundle["freshness"]["indicators_total"] == 1
+    assert bundle["freshness"]["indicators_fresh"] == 1
+
+
+def test_the_brief_read_paths_still_work(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression: The Brief reads payload['updated_at'], payload['sources_status'][src_id]['status']/['age_hours'],
+    and payload['data'].get(key). v3 must not break those exact paths."""
+    import aggregate_latest
+
+    monkeypatch.setattr(aggregate_latest, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(aggregate_latest, "DATA_DIR", tmp_path / "data")
+    monkeypatch.setattr(aggregate_latest, "LATEST_PATH", tmp_path / "data" / "latest.json")
+    monkeypatch.setattr(aggregate_latest, "CONFIG_PATH", tmp_path / "config" / "sources.json")
+    monkeypatch.setattr(aggregate_latest, "SOURCES_V3_PATH", tmp_path / "config" / "sources-v3.json")
+
+    (tmp_path / "config").mkdir()
+    (tmp_path / "data").mkdir()
+    (tmp_path / "config" / "sources.json").write_text(json.dumps({"sources": {}}))
+    # No v3 file at all — emulates pre-v3 install on the target path
+    rc = aggregate_latest.main()
+    assert rc == 0
+
+    bundle = json.loads((tmp_path / "data" / "latest.json").read_text())
+    # The Brief's exact contract:
+    assert "updated_at" in bundle
+    assert "sources_status" in bundle
+    assert "data" in bundle  # flat dict; The Brief calls .get(key) on this
+    assert isinstance(bundle["data"], dict)
+    # Since no MVP snapshots exist either, all sources should be missing — but the structure is intact
+    for status in bundle["sources_status"].values():
+        assert "status" in status  # The Brief reads s.get("status")

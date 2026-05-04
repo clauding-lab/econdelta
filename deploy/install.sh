@@ -63,7 +63,7 @@ install -m 0644 "$REPO_ROOT/deploy/logrotate.conf" /etc/logrotate.d/econdelta
 systemctl daemon-reload
 
 # Enable timers (not services — services are triggered by timers)
-for t in econdelta-forex econdelta-commodity econdelta-aggregate econdelta-dse; do
+for t in econdelta-forex econdelta-commodity econdelta-aggregate econdelta-dse econdelta-fetch econdelta-parse; do
   systemctl enable --now "${t}.timer"
 done
 

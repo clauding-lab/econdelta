@@ -1,27 +1,53 @@
 # EconDelta
 
-A deterministic Python pipeline that scrapes Bangladesh Bank, DSE, and commodity price data on a schedule, writes versioned JSON snapshots, and exposes a canonical `data/latest.json` consumed by The Brief agent.
+EconDelta is the **data layer** for Bangladesh economic indicators.
+It scrapes ~60 series from Bangladesh Bank, BBS, NBR, DSE, DAM, and
+news sources on a daily schedule; parses them; and writes both a
+canonical `data/latest.json` snapshot and a row-per-indicator-per-day
+into Supabase `metric_history` for queryable warm history.
+
+**If you're a downstream app** (the brief, Mission Control, Notifyr,
+something new) and you want to *read* this data, you do **not** need
+to depend on EconDelta's Python code. The contract you depend on is:
+
+1. The Supabase `metric_history` table (schema in
+   [`db/schema.sql`](db/schema.sql))
+2. The indicator catalog (browseable at
+   [`docs/indicator-catalog.md`](docs/indicator-catalog.md))
+3. The consumer guide ([`docs/data-contract.md`](docs/data-contract.md))
+
+Read those three; ignore the rest of this repo. EconDelta's internal
+scrapers, parsers, anomaly gates, and aggregator orchestration are
+implementation details that may evolve — the table schema and
+indicator IDs are the stable interface.
 
 ## Architecture
 
 ```
-                   systemd timers (VPS)
-                         |
-          +--------------+--------------+
-          |              |              |
-   scrapers/          scrapers/      scrapers/
-   bb_forex.py      dse_market.py  commodity_prices.py
-          |              |              |
-          +--------------+--------------+
-                         |
-                  aggregate_latest.py
-                         |
-                  data/latest.json  <-- The Brief agent reads this
-                         |
-                  utils/notifier.py  --> Discord #econdelta-alerts
+                  systemd timers @ ExonVPS (BDIX, Dhaka)
+                       │   05:00–06:10 BDT daily
+              ┌────────┼────────┬─────────┬──────────┐
+              ↓        ↓        ↓         ↓          ↓
+        scrapers/ scrapers/ scrapers/  parsers/   parsers/
+        bb_forex  dse_mkt   commodity  hybrid     dam_ticker
+              │        │        │         │          │
+              └────────┴────────┴─────────┴──────────┘
+                                │
+                       aggregate_latest.py
+                                │
+              ┌─────────────────┼─────────────────┐
+              ↓                 ↓                 ↓
+       data/latest.json  data/archive/    Supabase metric_history
+       (today's snap)    <date>.json      (warm queryable history)
+                         (cold backup)             ↑
+                                                   │ read-only
+                                                   │
+                                              The Brief / future apps
 ```
 
-Anomaly checks (`utils/anomaly.py`) gate every write: if a scraped value deviates beyond the configured threshold, the write is skipped and an alert fires.
+Anomaly checks (`utils/anomaly.py`) gate every write: if a scraped value
+deviates beyond the configured threshold, the write is skipped and an
+alert fires (`utils/notifier.py` → Discord `#econdelta-alerts`).
 
 ## Install (laptop)
 

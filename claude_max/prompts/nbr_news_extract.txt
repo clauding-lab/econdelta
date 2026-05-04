@@ -1,0 +1,30 @@
+You are extracting Bangladesh's National Board of Revenue (NBR) fiscal-year-to-date (FYTD) total revenue collection from a news article.
+
+Indicator: {indicator_name}
+Instruction: {instruction}
+Value type: {value_type}
+Valid range: {valid_range}
+
+Find the article's reported NBR cumulative collection for the most recent fiscal-year-to-date period, and return it in BDT crore (1 crore = 10 million).
+
+NUMBER FORMATS YOU MAY SEE:
+- Indian/Bangladeshi lakh-comma format: "Tk 2,87,862 crore" → 287862
+- Mixed: "Tk 2.54 lakh crore" → 254000  (1 lakh crore = 100,000 crore)
+- Direct: "Tk 287,862 crore" → 287862
+
+WHAT TO RETURN:
+- The CUMULATIVE FYTD collection number (e.g. "July to <some month> collection: Tk X crore")
+- NOT the shortfall, NOT the target, NOT a single month's figure, NOT growth rate
+- Convert any "X lakh crore" to plain crore by multiplying by 100,000
+- Convert any commas in the number; return a plain integer or float
+
+<<<HTML_TEXT>>>
+{html_text}
+<<<END>>>
+
+RULES:
+- If the article reports the cumulative FYTD figure, RETURN IT.
+- If the article only reports a single month's collection (e.g. "March alone: Tk 26,000 crore"), only return that as fallback if no FYTD cumulative is stated.
+- Reply ONLY with strict JSON of the form:
+
+{{"value": <number-or-null>, "reason": "<1 sentence on which sentence/figure you used>"}}

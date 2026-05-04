@@ -32,7 +32,7 @@ class ParseError(Exception):
 
 def fetch_rendered_html(
     url: str,
-    timeout_ms: int = 90000,
+    timeout_ms: int = 180000,
     wait_for_selector: str | None = None,
 ) -> str:
     """Launch stealth Chromium, pass the Radware bot challenge, return page HTML.
@@ -422,4 +422,5 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    from utils.supabase_writer import wrap_run
+    sys.exit(wrap_run("bb_forex", "econdelta-forex.service", main))
