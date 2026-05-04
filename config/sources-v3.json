@@ -470,7 +470,7 @@
       "fetch": {
         "type": "html",
         "url": "https://www.bb.org.bd/en/index.php/monetaryactivity/treasury",
-        "task": "Latest 91-Day Treasury Bill cut-off yield in percent (the most recent auction's weighted-average yield for 91-day tenor). Return only the numeric value, e.g. 9.86."
+        "task": "Latest 91-Day Treasury Bill cut-off yield in percent (the most recent auction's weighted-average yield for 91-day tenor). Return only the numeric value."
       },
       "parse": {
         "deterministic": "html_table_row",
@@ -496,7 +496,7 @@
       "fetch": {
         "type": "html",
         "url": "https://www.bb.org.bd/en/index.php/monetaryactivity/treasury",
-        "task": "Latest 182-Day Treasury Bill cut-off yield in percent (the most recent auction's weighted-average yield for 182-day tenor). Return only the numeric value, e.g. 10.20."
+        "task": "Latest 182-Day Treasury Bill cut-off yield in percent (the most recent auction's weighted-average yield for 182-day tenor). Return only the numeric value."
       },
       "parse": {
         "deterministic": "html_table_row",
@@ -522,7 +522,7 @@
       "fetch": {
         "type": "html",
         "url": "https://www.bb.org.bd/en/index.php/monetaryactivity/treasury",
-        "task": "Latest 364-Day Treasury Bill cut-off yield in percent (the most recent auction's weighted-average yield for 364-day tenor). Return only the numeric value, e.g. 10.55."
+        "task": "Latest 364-Day Treasury Bill cut-off yield in percent (the most recent auction's weighted-average yield for 364-day tenor). Return only the numeric value."
       },
       "parse": {
         "deterministic": "html_table_row",
@@ -548,7 +548,7 @@
       "fetch": {
         "type": "html",
         "url": "https://www.bb.org.bd/en/index.php/monetaryactivity/treasury",
-        "task": "Latest 5-Year Bangladesh Government Treasury Bond (BGTB) cut-off yield in percent (the most recent auction's weighted-average yield for 5-year tenor). Return only the numeric value, e.g. 11.10."
+        "task": "Latest 5-Year Bangladesh Government Treasury Bond (BGTB) cut-off yield in percent (the most recent auction's weighted-average yield for 5-year tenor). Return only the numeric value."
       },
       "parse": {
         "deterministic": "html_table_row",
@@ -574,7 +574,7 @@
       "fetch": {
         "type": "html",
         "url": "https://www.bb.org.bd/en/index.php/monetaryactivity/treasury",
-        "task": "Latest 10-Year Bangladesh Government Treasury Bond (BGTB) cut-off yield in percent (the most recent auction's weighted-average yield for 10-year tenor). Return only the numeric value, e.g. 11.42."
+        "task": "Latest 10-Year Bangladesh Government Treasury Bond (BGTB) cut-off yield in percent (the most recent auction's weighted-average yield for 10-year tenor). Return only the numeric value."
       },
       "parse": {
         "deterministic": "html_table_row",
@@ -750,7 +750,7 @@
       "fetch": {
         "type": "pdf",
         "url": "https://www.bb.org.bd/en/index.php/publication/publictn/2/60",
-        "task": "Go to page 13 (Executive Summary). Extract the banking sector Non-Performing Loan (NPL) ratio in percent at the end of the most recent quarter. The text reads roughly 'The Non-Performing Loan (NPL) ratio climbed to <X> percent'. Return only the numeric value, e.g. 35.73.",
+        "task": "Go to page 13 (Executive Summary). Extract the banking sector Non-Performing Loan (NPL) ratio in percent at the end of the most recent quarter. The text reads roughly 'The Non-Performing Loan (NPL) ratio climbed to <X> percent'. Return only the numeric value.",
         "discover": "latest_pdf_link"
       },
       "parse": {
@@ -777,7 +777,7 @@
       "fetch": {
         "type": "pdf",
         "url": "https://www.bb.org.bd/en/index.php/publication/publictn/2/60",
-        "task": "Go to page 13 (Executive Summary). Extract the banking sector Capital Adequacy Ratio (CAR / CRAR) in percent at the end of the most recent quarter (the pre-shock figure, before any stress test scenario). The text reads roughly 'the pre-shock Capital Adequacy Ratio (CAR) stood at <X> percent'. Return only the numeric value, e.g. 1.56.",
+        "task": "Go to page 13 (Executive Summary). Extract the banking sector Capital Adequacy Ratio (CAR / CRAR) in percent at the end of the most recent quarter (the pre-shock figure, before any stress test scenario). The text reads roughly 'the pre-shock Capital Adequacy Ratio (CAR) stood at <X> percent'. Return only the numeric value.",
         "discover": "latest_pdf_link"
       },
       "parse": {
@@ -1141,7 +1141,7 @@
       "fetch": {
         "type": "pdf",
         "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
-        "task": "Locate the Major Economic Indicators (MEI) summary table — extract the most recent month's Private Sector Credit growth percentage on a year-on-year basis. Often labelled 'Private sector credit, % YoY', 'Domestic credit (private sector) growth %', or appearing in the 'Monetary Sector — Annual growth rates' block. Return only the numeric percentage value, e.g. 7.2.",
+        "task": "Locate the Major Economic Indicators (MEI) summary table — extract the most recent month's Private Sector Credit growth percentage on a year-on-year basis. Often labelled 'Private sector credit, % YoY', 'Domestic credit (private sector) growth %', or appearing in the 'Monetary Sector — Annual growth rates' block. Return only the numeric percentage value.",
         "discover": "latest_pdf_link"
       },
       "parse": {
