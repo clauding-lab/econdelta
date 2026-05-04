@@ -25,8 +25,9 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import date
-from typing import Mapping
+import uuid as _uuid
+from datetime import date, datetime, timezone
+from typing import Callable as _Callable, Mapping, Optional as _Optional
 
 import requests
 
@@ -164,3 +165,55 @@ def upsert_metric_history(
         upserted += len(batch)
 
     return upserted
+
+
+# ============================================================================
+# Run logging helpers — write to public.run_logs for the PWA Runs page
+# ============================================================================
+
+_RUN_LOGS_TIMEOUT = 10  # short timeout; logging must not block scrapers
+
+
+def log_run_start(
+    source: str,
+    unit: _Optional[str] = None,
+    started_at: _Optional[datetime] = None,
+) -> str:
+    """Insert a starting row in run_logs, return uuid for matching log_run_end().
+
+    Swallows network errors — a logging failure must not mask the scrape outcome.
+    Returns a local uuid even on failure so log_run_end() has something to update
+    (the update will also be a no-op).
+    """
+    run_id = str(_uuid.uuid4())
+    if os.environ.get("ECONDELTA_SKIP_SUPABASE") == "1":
+        return run_id
+
+    if started_at is None:
+        started_at = datetime.now(timezone.utc)
+
+    try:
+        base_url, key = _resolve_credentials(None, None)
+        import socket as _socket
+        host = os.environ.get("ECONDELTA_HOST", _socket.gethostname())
+        endpoint = f"{base_url}/rest/v1/run_logs"
+        headers = {
+            "apikey": key,
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json",
+            "Prefer": "return=minimal",
+        }
+        payload = {
+            "id": run_id,
+            "source": source,
+            "started_at": started_at.isoformat(),
+            "status": "running",
+            "host": host,
+            "unit": unit,
+        }
+        sess = requests.Session()
+        sess.post(endpoint, json=payload, headers=headers, timeout=_RUN_LOGS_TIMEOUT)
+    except Exception as e:  # noqa: BLE001 — by design, we swallow logging errors
+        logger.warning("log_run_start failed for source=%s: %s", source, e)
+
+    return run_id
