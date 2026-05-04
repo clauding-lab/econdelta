@@ -280,11 +280,6 @@ body.sidebar-collapsed .app{
   padding: 16px 22px 16px 44px;
   border-right: 1px solid rgba(255,255,255,.08);
 }
-.masthead .mark-svg{
-  width: 42px; height: 42px;
-  flex-shrink: 0;
-  color: var(--signature-ink);
-}
 .masthead .wordmark .top{
   font-family:"IBM Plex Mono",monospace;
   font-size: 9px; letter-spacing: .24em; text-transform: uppercase;
