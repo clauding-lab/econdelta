@@ -256,3 +256,31 @@ def log_run_end(
         sess.patch(endpoint, json=payload, headers=headers, timeout=_RUN_LOGS_TIMEOUT)
     except Exception as e:  # noqa: BLE001
         logger.warning("log_run_end failed for run_id=%s: %s", run_id, e)
+
+
+_STATUS_BY_EXIT = {0: "ok", 1: "fail", 2: "stale", 3: "skip"}
+
+
+def wrap_run(source: str, unit: str, main_func: _Callable[[], int]) -> int:
+    """Wrap a scraper's main() with run_logs instrumentation.
+
+    Pattern at scraper bottom:
+        if __name__ == '__main__':
+            sys.exit(wrap_run('bb_forex', 'econdelta-forex.service', main))
+
+    Maps main()'s exit code to run_logs.status:
+        0 -> 'ok', 1 -> 'fail', 2 -> 'stale', 3 -> 'skip', other -> 'fail'
+    Uncaught exceptions are logged as 'fail' with error=type(e).__name__: str(e),
+    then re-raised so systemd records non-zero exit.
+    """
+    started_at = datetime.now(timezone.utc)
+    run_id = log_run_start(source=source, unit=unit, started_at=started_at)
+    try:
+        exit_code = main_func()
+        status = _STATUS_BY_EXIT.get(exit_code, "fail")
+        log_run_end(run_id, started_at, status=status, exit_code=exit_code)
+        return exit_code
+    except Exception as e:
+        err = f"{type(e).__name__}: {e}"
+        log_run_end(run_id, started_at, status="fail", exit_code=1, error=err)
+        raise

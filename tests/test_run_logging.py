@@ -65,3 +65,29 @@ class TestLogRunEnd:
         ts = datetime.now(timezone.utc)
         log_run_end(run_id="00000000-0000-0000-0000-000000000000",
                     started_at=ts, status="ok", exit_code=0)
+
+
+class TestWrapRun:
+    def test_returns_main_exit_code_on_success(self):
+        from utils.supabase_writer import wrap_run
+        rc = wrap_run("test_source", "test.service", lambda: 0)
+        assert rc == 0
+
+    def test_returns_main_exit_code_on_explicit_failure(self):
+        from utils.supabase_writer import wrap_run
+        rc = wrap_run("test_source", "test.service", lambda: 1)
+        assert rc == 1
+
+    def test_maps_exit_code_2_to_stale_status(self):
+        from utils.supabase_writer import wrap_run, _STATUS_BY_EXIT
+        assert _STATUS_BY_EXIT[0] == "ok"
+        assert _STATUS_BY_EXIT[1] == "fail"
+        assert _STATUS_BY_EXIT[2] == "stale"
+        assert _STATUS_BY_EXIT[3] == "skip"
+
+    def test_propagates_exception_after_logging(self):
+        from utils.supabase_writer import wrap_run
+        def boom():
+            raise RuntimeError("kaboom")
+        with pytest.raises(RuntimeError, match="kaboom"):
+            wrap_run("test_source", "test.service", boom)
