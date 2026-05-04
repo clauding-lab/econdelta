@@ -199,11 +199,25 @@ function StatusPill({ status }){
 
 function Masthead(){
   const data = window.ED_DATA;
-  const d = data.bundle.data;
-  const sources = data.bundle.sources_status;
+  // Async data load: render a minimal masthead until supabase-client populates ED_DATA.
+  if (!data || !data.bundle) {
+    return (
+      <header className="masthead is-loading" role="banner">
+        <div className="left">
+          <div className="wordmark">
+            <div className="top">Bangladesh · Macroeconomic Pipeline</div>
+            <div className="name">Econ<span className="delta">Δ</span>elta</div>
+            <div className="sub">loading…</div>
+          </div>
+        </div>
+      </header>
+    );
+  }
+  const d = data.bundle.data || {};
+  const sources = data.bundle.sources_status || {};
   const okCount = Object.values(sources).filter(s => s.status === 'ok').length;
   const totalSrc = Object.keys(sources).length;
-  const dseDelta = d.dsex_change_pct;
+  const dseDelta = d.dsex_change_pct ?? 0;
 
   // Manual refresh — calls window.__edRefresh() if defined (Supabase mode);
   // in mock mode the helper just dispatches the event so the UI re-renders.
@@ -237,7 +251,7 @@ function Masthead(){
     try { return new Date(data.bundle.updated_at); } catch { return null; }
   })();
   const lastRefreshRel = lastRefresh ? relTime(lastRefresh, now) : '—';
-  const tape = data.tickers.filter(t => t.delta != null);
+  const tape = (data.tickers || []).filter(t => t.delta != null);
   // Repeat tape items twice for seamless loop
   const tapeRow = (
     <React.Fragment>
@@ -291,21 +305,21 @@ function Masthead(){
           <div className="strip">
             <div className="cell">
               <div className="lbl">USD / BDT</div>
-              <div className="val">{d.usd_bdt_mid.toFixed(2)}<span className="unit">WAR</span></div>
+              <div className="val">{(d.usd_bdt_mid ?? 0).toFixed(2)}<span className="unit">WAR</span></div>
             </div>
             <div className="cell">
               <div className="lbl">DSEX</div>
               <div className={"val " + (dseDelta >= 0 ? 'ok' : 'accent')}>
-                {d.dsex.toFixed(0)}<span className="unit">{dseDelta >= 0 ? '+' : ''}{dseDelta.toFixed(2)}%</span>
+                {(d.dsex ?? 0).toFixed(0)}<span className="unit">{dseDelta >= 0 ? '+' : ''}{dseDelta.toFixed(2)}%</span>
               </div>
             </div>
             <div className="cell">
               <div className="lbl">Brent</div>
-              <div className="val">${d.brent_crude_usd_barrel.toFixed(2)}<span className="unit">/bbl</span></div>
+              <div className="val">${(d.brent_crude_usd_barrel ?? 0).toFixed(2)}<span className="unit">/bbl</span></div>
             </div>
             <div className="cell">
               <div className="lbl">Reserves</div>
-              <div className="val">{d.gross_reserves_usd_bn.toFixed(2)}<span className="unit">USD bn</span></div>
+              <div className="val">{(d.gross_reserves_usd_bn ?? 0).toFixed(2)}<span className="unit">USD bn</span></div>
             </div>
             <div className="cell">
               <div className="lbl">Pipeline</div>
