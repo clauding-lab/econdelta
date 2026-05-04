@@ -113,3 +113,59 @@ function formatValue(v, format){
 function slug(s){ return String(s).toLowerCase().replace(/\s+/g, '-'); }
 
 window.PageLatest = PageLatest;
+
+// Domain drill-in — full list of indicators in one domain.
+function PageDomain({route}){
+  const d = window.ED_DATA && window.ED_DATA.dashboard;
+  if(!d) return <div className="loading">no data yet…</div>;
+  const defs = d.definitions || [];
+  const vals = d.values || {};
+
+  // Route shape: '/domain/<slug>' — find domain whose slug matches.
+  const targetSlug = route.replace('/domain/', '');
+  const domainName = (defs.find(x => slug(x.domain) === targetSlug) || {}).domain;
+  if(!domainName){
+    return (
+      <React.Fragment>
+        <PageHead title="Domain not found" kicker="Pipeline"/>
+        <p>No indicators registered for "{targetSlug}".</p>
+        <p><a href="#/">← Back to Latest</a></p>
+      </React.Fragment>
+    );
+  }
+
+  const domainDefs = defs.filter(x => x.domain === domainName);
+
+  return (
+    <React.Fragment>
+      <PageHead
+        title={domainName}
+        kicker="Pipeline · domain detail"
+        meta={<div><b>indicators</b> {domainDefs.length}</div>}
+      />
+      <p><a href="#/">← Back to Latest</a></p>
+      <div className="indicator-list">
+        {domainDefs.map(def => {
+          const v = vals[def.metric_id];
+          return (
+            <div key={def.metric_id} className="indicator-row">
+              <div className="il-label">
+                <b>{def.label}</b>
+                {def.description && <div className="il-desc">{def.description}</div>}
+              </div>
+              <div className="il-value tnum">
+                {v && v.value != null ? formatValue(v.value, def.format) : '—'}
+                <span className="il-unit">{def.unit}</span>
+              </div>
+              {v && v.as_of && (
+                <div className="il-asof">as of {v.as_of}</div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </React.Fragment>
+  );
+}
+
+window.PageDomain = PageDomain;
