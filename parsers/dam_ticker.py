@@ -14,11 +14,16 @@ matches the instruction, and returns the (low+high)/2 midpoint.
 Instruction format: a literal Bengali label as it appears on the page,
 e.g. ``চিনি (দেশী)``. Any whitespace and parens are matched literally
 (no regex metacharacters from the user — we re.escape).
+
+source_as_of: the parser extracts the "Date of report: DD-MM-YYYY" header
+that the DAM portal renders above the ticker. This is the true publication
+date of the report, not the EconDelta run date.
 """
 from __future__ import annotations
 
 import re
 import unicodedata
+from datetime import date
 
 from fetchers.base import FetchResult
 from parsers.base import ParseError, ParseResult
@@ -26,6 +31,13 @@ from parsers.registry import register
 
 # Bengali digit ০-৯ ↔ Western 0-9. Built once at import.
 _BN_TO_EN_DIGITS = str.maketrans("০১২৩৪৫৬৭৮৯", "0123456789")
+
+# DAM report-date header: "Date of report: 04-05-2026" or "Date of report: 04/05/2026"
+# Captures DD (group 1), MM (group 2), YYYY (group 3).
+_DATE_REPORT_RE = re.compile(
+    r"date\s+of\s+report\s*:?\s*(\d{1,2})[-/](\d{1,2})[-/](\d{4})",
+    re.IGNORECASE,
+)
 
 
 def _normalize(text: str) -> str:
@@ -45,10 +57,23 @@ def _normalize(text: str) -> str:
     return unicodedata.normalize("NFC", plain)
 
 
+def _extract_report_date(plain: str) -> date | None:
+    """Return the DAM report date from the normalized page text, or None."""
+    m = _DATE_REPORT_RE.search(plain)
+    if not m:
+        return None
+    day, month, year = int(m.group(1)), int(m.group(2)), int(m.group(3))
+    try:
+        return date(year, month, day)
+    except ValueError:
+        return None
+
+
 @register("dam_ticker")
 class DamTickerParser:
     def parse(self, artifact: FetchResult, instruction: str) -> ParseResult:
-        plain = _normalize(artifact.artifact_path.read_text(encoding="utf-8", errors="replace"))
+        raw = artifact.artifact_path.read_text(encoding="utf-8", errors="replace")
+        plain = _normalize(raw)
         instruction_nfc = unicodedata.normalize("NFC", instruction)
         # Pattern: <label> : <low> - <high>
         # Numbers can be int or decimal; Bengali digits already translated to ASCII.
@@ -64,4 +89,5 @@ class DamTickerParser:
         low = float(m.group(1))
         high = float(m.group(2))
         midpoint = round((low + high) / 2.0, 2)
-        return ParseResult(value=midpoint, _parse_strategy="dam_ticker")
+        source_as_of = _extract_report_date(plain)
+        return ParseResult(value=midpoint, _parse_strategy="dam_ticker", source_as_of=source_as_of)
