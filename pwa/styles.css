@@ -1193,3 +1193,31 @@ h2.sec::before{
 .il-value { font-family: 'IBM Plex Mono', monospace; text-align: right; }
 .il-unit { font-size: 11px; color: var(--ink-3, #6b7480); margin-left: 4px; }
 .il-asof { grid-column: 1 / -1; font-size: 10px; color: var(--ink-3, #6b7480); }
+
+.archive-list { display: grid; gap: 6px; }
+.archive-day {
+  background: var(--paper, #1a2024);
+  border: 1px solid var(--rule, #2a2f33);
+  padding: 10px 14px;
+}
+.archive-day summary {
+  cursor: pointer;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 13px;
+  color: var(--ink, #fff);
+}
+.archive-rows {
+  margin-top: 10px;
+  display: grid;
+  gap: 4px;
+}
+.archive-row {
+  display: grid;
+  grid-template-columns: 2fr 1fr auto;
+  gap: 12px;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px;
+  color: var(--ink-3, #9aa3ad);
+}
+.archive-row .tnum { color: var(--ink, #fff); text-align: right; font-feature-settings: 'tnum' 1; }
+.archive-row .muted { color: var(--ink-3, #6b7480); font-size: 10px; }
