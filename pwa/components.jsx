@@ -5,6 +5,9 @@ const SOURCE_LABELS = {
   bb_forex: 'BB forex',
   dse_market: 'DSE market',
   commodity_prices: 'Commodities',
+  fetch: 'Fetch',
+  parse: 'Parse',
+  aggregate: 'Aggregate',
 };
 
 function useHashRoute(){

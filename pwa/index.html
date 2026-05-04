@@ -74,7 +74,6 @@ function App(){
   else if(route === '/runs'){ Page = PageRuns; label = '03 Runs'; }
   else if(route === '/sources'){ Page = PageSources; label = '04 Sources'; }
   else if(route === '/about'){ Page = PageAbout; label = '05 About'; }
-  else if(route.startsWith('/domain/')){ Page = PageDomain; label = '01 Latest'; }
   else { Page = PageLatest; label = '01 Latest'; }
   return (
     <div className="app" data-screen-label={label}>
