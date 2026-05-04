@@ -1212,11 +1212,11 @@
       "fetch": {
         "type": "pdf",
         "url": "https://www.bb.org.bd/en/index.php/publication/publictn/5/27",
-        "task": "Go to latest available PDF, Component 11a",
+        "task": "row=\"b) Broad Money\" min=1000",
         "discover": "latest_pdf_link"
       },
       "parse": {
-        "deterministic": "pdf_component",
+        "deterministic": "pdf_table_latest",
         "llm_prompt": "pdf_component.txt",
         "value_type": "amount_bdt_crore",
         "valid_range": [
@@ -1239,11 +1239,11 @@
       "fetch": {
         "type": "pdf",
         "url": "https://www.bb.org.bd/en/index.php/publication/publictn/5/27",
-        "task": "Go to latest available PDF, Component 11b",
+        "task": "row=\"a) Reserve Money\" min=1000",
         "discover": "latest_pdf_link"
       },
       "parse": {
-        "deterministic": "pdf_component",
+        "deterministic": "pdf_table_latest",
         "llm_prompt": "pdf_component.txt",
         "value_type": "amount_bdt_crore",
         "valid_range": [
