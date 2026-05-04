@@ -123,4 +123,5 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    from utils.supabase_writer import wrap_run
+    sys.exit(wrap_run("fetch", "econdelta-fetch.service", main))
