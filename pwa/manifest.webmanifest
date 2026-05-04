@@ -1,0 +1,17 @@
+{
+  "name": "EconDelta — Bangladesh Macro",
+  "short_name": "EconDelta",
+  "description": "Live snapshot of Bangladesh forex, capital markets, banking stability, food prices, and government finance. Daily, anomaly-gated.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0e1418",
+  "theme_color": "#c34a1f",
+  "categories": ["finance", "productivity"],
+  "icons": [
+    { "src": "icons/icon-192.png",          "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png",          "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512-maskable.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
