@@ -284,3 +284,86 @@ def wrap_run(source: str, unit: str, main_func: _Callable[[], int]) -> int:
         err = f"{type(e).__name__}: {e}"
         log_run_end(run_id, started_at, status="fail", exit_code=1, error=err)
         raise
+
+
+# ============================================================================
+# Metric definitions seed helper — idempotent ON CONFLICT DO NOTHING upsert
+# ============================================================================
+
+_DEFAULT_DEFINITION_FIELDS = {
+    "short_label": None,
+    "unit": None,
+    "sort_order": 100,
+    "cadence": None,
+    "format": "comma-2dp",
+    "description": None,
+    "source": None,
+    "source_url": None,
+    "is_hero": False,
+    "inverted": False,
+}
+
+
+def _normalize_definition(d: dict) -> dict:
+    """Validate required fields, fill defaults, return upsert-ready row."""
+    if "metric_id" not in d:
+        raise KeyError("definition missing required field 'metric_id'")
+    if "label" not in d:
+        raise KeyError("definition missing required field 'label'")
+    if "domain" not in d:
+        raise KeyError("definition missing required field 'domain'")
+    out = {**_DEFAULT_DEFINITION_FIELDS, **d}
+    return out
+
+
+def upsert_metric_definitions_seed(definitions: list[dict]) -> int:
+    """Insert metric_definitions rows with ON CONFLICT (metric_id) DO NOTHING.
+
+    First insert wins forever; manual edits in Supabase Studio are preserved.
+    Returns count of NEW rows inserted (0 in test/skip mode).
+
+    Raises KeyError for definitions missing required fields (metric_id, label, domain).
+    """
+    if not definitions:
+        return 0
+
+    rows = [_normalize_definition(d) for d in definitions]
+
+    if os.environ.get("ECONDELTA_SKIP_SUPABASE") == "1":
+        return 0
+
+    try:
+        base_url, key = _resolve_credentials(None, None)
+        endpoint = f"{base_url}/rest/v1/metric_definitions?on_conflict=metric_id"
+        headers = {
+            "apikey": key,
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json",
+            # ignore-duplicates = ON CONFLICT DO NOTHING; return=representation
+            # means PostgREST returns only the actually-inserted (new) rows.
+            "Prefer": "resolution=ignore-duplicates,return=representation",
+        }
+        sess = requests.Session()
+        resp = sess.post(endpoint, json=rows, headers=headers, timeout=_DEFAULT_TIMEOUT)
+        if resp.status_code not in (200, 201, 204):
+            logger.error(
+                "upsert_metric_definitions_seed returned HTTP %s: %s",
+                resp.status_code,
+                resp.text[:200],
+            )
+            raise SupabaseWriteError(
+                f"upsert_metric_definitions_seed returned HTTP {resp.status_code}: {resp.text[:200]}"
+            )
+        # With return=representation + ignore-duplicates, PostgREST returns
+        # only the rows that were actually inserted (new rows). Existing rows
+        # return as empty []. len() gives the new-row count.
+        try:
+            inserted = resp.json()
+            return len(inserted) if isinstance(inserted, list) else 0
+        except Exception:
+            return 0
+    except SupabaseWriteError:
+        raise
+    except Exception as e:  # noqa: BLE001
+        logger.error("upsert_metric_definitions_seed failed: %s", e)
+        raise
