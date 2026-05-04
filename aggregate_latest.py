@@ -7,7 +7,7 @@ import json
 import logging
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -345,6 +345,35 @@ def _build_v3_blocks(
     return data_additions, domains, freshness, alerts
 
 
+def _build_source_as_of_map(domains: dict[str, dict[str, Any]]) -> dict[str, date]:
+    """Extract per-metric publication dates from the v3 domains snapshot dict.
+
+    Each v3 snapshot written by ``parsers/hybrid.py:_build_snapshot`` may carry
+    a ``source_as_of`` string (ISO date, e.g. "2025-09-30") when the parser could
+    recover the true publication date from the source document. This function
+    collects those dates and returns a metric_id → date mapping that
+    ``upsert_metric_history`` uses to override the global run-date ``as_of``.
+
+    Metrics without a ``source_as_of`` key (daily scrapers, fallback runs) are
+    simply absent from the returned dict — the writer falls back to today.
+
+    Malformed or missing date strings are silently skipped (logged at DEBUG).
+    """
+    result: dict[str, date] = {}
+    for _domain, indicators in domains.items():
+        for indicator_id, snapshot in indicators.items():
+            raw = snapshot.get("source_as_of")
+            if not raw:
+                continue
+            try:
+                result[indicator_id] = date.fromisoformat(str(raw)[:10])
+            except (ValueError, TypeError):
+                logger.debug(
+                    "skipping malformed source_as_of=%r for %s", raw, indicator_id
+                )
+    return result
+
+
 # EconDelta indicator-id ↔ brief metric_id alias map. The brief expects a
 # specific naming convention per section (`macro_*`, `remit_*`, `fiscal_*`,
 # `banking_*`, `food_*`); EconDelta keeps its own indicator IDs authoritative.
@@ -614,8 +643,18 @@ def main() -> int:
                 SupabaseWriteError,
                 upsert_metric_history,
             )
-            n_rows = upsert_metric_history(data=data, as_of=now.date())
-            logger.info("upserted %d rows to Supabase metric_history (as_of=%s)", n_rows, now.date())
+            # Build per-metric publication-date overrides from v3 snapshot metadata.
+            # Slow-cadence metrics (quarterly FSAR, monthly news) carry source_as_of
+            # from the parser so metric_history.as_of reflects the true publication
+            # date rather than today's run date — fixing the freshness-pill lie.
+            source_as_of_map = _build_source_as_of_map(domains)
+            n_rows = upsert_metric_history(
+                data=data, as_of=now.date(), source_as_of_map=source_as_of_map,
+            )
+            logger.info(
+                "upserted %d rows to Supabase metric_history (as_of=%s, overrides=%d)",
+                n_rows, now.date(), len(source_as_of_map),
+            )
         except SupabaseWriteError as e:
             logger.warning(
                 "Supabase write failed: %s — continuing with local archive only", e,

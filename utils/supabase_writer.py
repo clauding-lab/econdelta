@@ -62,18 +62,35 @@ def _resolve_credentials(
 
 
 def _rows_from_data(
-    data: Mapping[str, object], as_of: date, source: str,
+    data: Mapping[str, object],
+    as_of: date,
+    source: str,
+    source_as_of_map: Mapping[str, date] | None = None,
 ) -> list[dict]:
+    """Build PostgREST row dicts from ``data``.
+
+    Args:
+        data: Flat snapshot dict — only ``int`` and ``float`` values are kept.
+        as_of: Global fallback date for all metrics without a per-metric override.
+        source: Source label written to ``metric_history.source``.
+        source_as_of_map: Optional per-metric publication-date overrides. When a
+            metric_id appears in this map, that date is used as ``as_of`` instead
+            of the global fallback. This is the key fix for the as_of bug: quarterly
+            BB FSAR metrics (banking_npl_pct, banking_car_pct) supply the quarter-end
+            date (e.g. 2025-09-30) rather than today's run date.
+    """
     rows: list[dict] = []
+    overrides = source_as_of_map or {}
     for metric_id, value in data.items():
         if isinstance(value, bool):
             # `bool` is a subclass of `int` in Python — exclude explicitly so
             # any ``status: true``-style flag in the snapshot doesn't slip in.
             continue
         if isinstance(value, (int, float)):
+            effective_as_of = overrides.get(metric_id, as_of)
             rows.append({
                 "metric_id": metric_id,
-                "as_of": as_of.isoformat(),
+                "as_of": effective_as_of.isoformat(),
                 "value": value,
                 "source": source,
             })
@@ -85,6 +102,7 @@ def upsert_metric_history(
     data: Mapping[str, object],
     as_of: date,
     source: str = _DEFAULT_SOURCE,
+    source_as_of_map: Mapping[str, date] | None = None,
     url: str | None = None,
     service_key: str | None = None,
     timeout: int = _DEFAULT_TIMEOUT,
@@ -95,8 +113,15 @@ def upsert_metric_history(
     Args:
         data: The flat snapshot dict (typically ``latest.json["data"]``).
         as_of: The date these readings should be stored under (typically today).
+            This is the global fallback — use ``source_as_of_map`` to override
+            per-metric dates for slow-cadence sources (quarterly FSAR, monthly
+            news articles).
         source: Default "EconDelta"; per-row override not supported (one
                 aggregator run = one source label).
+        source_as_of_map: Optional mapping of metric_id → true publication date.
+            Overrides ``as_of`` for those specific metrics. Metrics absent from
+            this map use the global ``as_of`` fallback. Pass None (default) for
+            backward compatibility.
         url, service_key: Override for SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY
                 env vars. Tests pass these directly.
         timeout: Per-request timeout seconds.
@@ -111,7 +136,7 @@ def upsert_metric_history(
             response. Caller decides whether to abort or continue.
     """
     base_url, key = _resolve_credentials(url, service_key)
-    rows = _rows_from_data(data, as_of, source)
+    rows = _rows_from_data(data, as_of, source, source_as_of_map)
     if not rows:
         logger.info("no scalar values to upsert (snapshot empty or non-numeric only)")
         return 0

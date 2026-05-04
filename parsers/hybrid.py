@@ -209,8 +209,10 @@ def _build_snapshot(
     *, indicator: dict, artifact: FetchResult, value: Any,
     provenance: str, parse_strategy: str, sanity_note: str | None = None,
     previous_value: float | None = None, change_pct: float | None = None,
+    source_as_of: "date | None" = None,
 ) -> dict:
-    return {
+    from datetime import date as _date
+    snapshot: dict = {
         "indicator_id": indicator["id"],
         "name": indicator["name"],
         "domain": indicator["domain"],
@@ -226,6 +228,9 @@ def _build_snapshot(
         "_parse_strategy": parse_strategy,
         "sanity_note": sanity_note,
     }
+    if source_as_of is not None:
+        snapshot["source_as_of"] = source_as_of.isoformat()
+    return snapshot
 
 
 def parse_one(artifact: FetchResult, indicator: dict, history: list[float]) -> dict:
@@ -236,12 +241,14 @@ def parse_one(artifact: FetchResult, indicator: dict, history: list[float]) -> d
 
     parser = get_parser(parse_block["deterministic"])
     v_det: Any = None
+    det_source_as_of = None  # publication date recovered by the deterministic parser
     try:
         det_result: ParseResult = parser.parse(artifact, instruction)
         # value can be a dict (e.g. call_money) — only validate scalar values
         if isinstance(det_result.value, (int, float)):
             validate_value(value=det_result.value, value_type=value_type, valid_range=valid_range)
         v_det = det_result.value
+        det_source_as_of = det_result.source_as_of
     except (ParseError, InvalidValueError) as e:
         logger.info("deterministic parse failed for %s: %s", indicator["id"], e)
 
@@ -251,7 +258,8 @@ def parse_one(artifact: FetchResult, indicator: dict, history: list[float]) -> d
         # parse time is the structural guard. Emitting deterministic.
         if isinstance(v_det, dict):
             return _build_snapshot(indicator=indicator, artifact=artifact, value=v_det,
-                                   provenance="deterministic", parse_strategy=parse_block["deterministic"])
+                                   provenance="deterministic", parse_strategy=parse_block["deterministic"],
+                                   source_as_of=det_source_as_of)
         # Sanity-check via Sonnet (scalar values only)
         try:
             check_value = float(v_det)
@@ -261,12 +269,13 @@ def parse_one(artifact: FetchResult, indicator: dict, history: list[float]) -> d
         except MaxCallError as e:
             logger.warning("sanity-check failed for %s: %s — emitting deterministic anyway", indicator["id"], e)
             return _build_snapshot(indicator=indicator, artifact=artifact, value=v_det,
-                                   provenance="deterministic", parse_strategy=parse_block["deterministic"])
+                                   provenance="deterministic", parse_strategy=parse_block["deterministic"],
+                                   source_as_of=det_source_as_of)
 
         if plausible:
             return _build_snapshot(indicator=indicator, artifact=artifact, value=v_det,
                                    provenance="deterministic", parse_strategy=parse_block["deterministic"],
-                                   sanity_note=note)
+                                   sanity_note=note, source_as_of=det_source_as_of)
         # Disagreement: cross-check with extract
         try:
             extract = _llm_extract(indicator=indicator, artifact=artifact)
@@ -275,17 +284,20 @@ def parse_one(artifact: FetchResult, indicator: dict, history: list[float]) -> d
                 if values_match(float(v_det), float(v_llm), value_type=value_type):
                     return _build_snapshot(indicator=indicator, artifact=artifact, value=v_det,
                                            provenance="deterministic", parse_strategy=parse_block["deterministic"],
-                                           sanity_note=f"sanity flagged but extract agreed; {note}")
+                                           sanity_note=f"sanity flagged but extract agreed; {note}",
+                                           source_as_of=det_source_as_of)
             return _build_snapshot(indicator=indicator, artifact=artifact, value=v_det,
                                    provenance="needs_review", parse_strategy=parse_block["deterministic"],
-                                   sanity_note=f"det={v_det} llm={v_llm} note={note}")
+                                   sanity_note=f"det={v_det} llm={v_llm} note={note}",
+                                   source_as_of=det_source_as_of)
         except MaxCallError as e:
             logger.warning("llm_extract failed for %s: %s", indicator["id"], e)
             return _build_snapshot(indicator=indicator, artifact=artifact, value=v_det,
                                    provenance="needs_review", parse_strategy=parse_block["deterministic"],
-                                   sanity_note=f"sanity flagged, extract errored: {e}")
+                                   sanity_note=f"sanity flagged, extract errored: {e}",
+                                   source_as_of=det_source_as_of)
 
-    # LLM extract path (deterministic failed)
+    # LLM extract path (deterministic failed) — source_as_of not recoverable here
     try:
         extract = _llm_extract(indicator=indicator, artifact=artifact)
         v_llm = (extract.parsed or {}).get("value")
