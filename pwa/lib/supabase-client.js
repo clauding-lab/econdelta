@@ -83,11 +83,25 @@
       });
     });
 
+    // Bundle compat shim — bundle's Masthead component reads data.bundle.data
+    // (flat metric_id -> scalar map), data.bundle.sources_status, data.bundle.updated_at,
+    // and data.tickers (scrolling tape). Build them from the new RPC payload.
+    const flatValues = {};
+    Object.entries(dashboard.values || {}).forEach(([metricId, v]) => {
+      if (v && v.value != null) flatValues[metricId] = v.value;
+    });
+
     window.ED_DATA = {
       today: new Date(),
       dashboard,
       history,
       runs: runsBySource,
+      bundle: {
+        data: flatValues,
+        sources_status: dashboard.sources_status || {},
+        updated_at: dashboard.updated_at,
+      },
+      tickers: [],
     };
 
     // Tell App.jsx to re-render now that data is loaded.
@@ -95,5 +109,7 @@
   }
 
   // Manual refresh — pull-to-refresh or button click.
+  // Bundle's Masthead calls window.__edRefresh; expose under both names.
   window.ED_REFRESH = () => bootstrap();
+  window.__edRefresh = () => bootstrap();
 })();
