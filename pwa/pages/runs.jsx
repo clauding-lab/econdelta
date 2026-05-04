@@ -5,12 +5,12 @@ const { useState: useStateR } = React;
 // Per-source cadence label shown next to the commit graph.
 // Add a row when a new scraper lands.
 const CADENCES = {
-  bb_forex:         '00:05 UTC daily',
-  dse_market:       '10:30 UTC trading days',
-  commodity_prices: '00:08 UTC daily',
-  fetch:            '00:25 UTC daily',
-  parse:            '00:45 UTC daily',
-  aggregate:        '01:00 UTC + 12:35 UTC daily',
+  fetch:            '05:00 BDT daily',
+  bb_forex:         '05:05 BDT daily (+ 06:00 retry)',
+  commodity_prices: '05:08 BDT daily',
+  dse_market:       '05:11 BDT trading days',
+  parse:            '05:16 BDT daily (+ 05:55 retry)',
+  aggregate:        '05:20 BDT daily (+ 06:10 retry)',
 };
 
 function PageRuns(){
