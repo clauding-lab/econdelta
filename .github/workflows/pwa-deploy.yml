@@ -26,10 +26,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Bump SW cache version
+      - name: Bump SW cache version + stamp build version into index.html
         run: |
-          sed -i "s/CACHE_NAME = 'econdelta-v[^']*'/CACHE_NAME = 'econdelta-v1-$(date -u +%Y%m%d-%H%M%S)'/" pwa/sw.js
+          BUILD_VERSION=$(date -u +%Y%m%d-%H%M%S)
+          sed -i "s/CACHE_NAME = 'econdelta-v[^']*'/CACHE_NAME = 'econdelta-v1-${BUILD_VERSION}'/" pwa/sw.js
+          sed -i "s/__BUILD_VERSION__/${BUILD_VERSION}/g" pwa/index.html
           grep "CACHE_NAME" pwa/sw.js
+          grep -c "?v=${BUILD_VERSION}" pwa/index.html | xargs -I {} echo "Stamped {} script tags with v=${BUILD_VERSION}"
 
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
