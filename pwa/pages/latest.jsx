@@ -1,28 +1,32 @@
-// Latest page — hero cards (4 most-watched) + bento grid (per-domain tiles)
-// Driven by window.ED_DATA.dashboard.{definitions, values, sources_status}.
+// Latest page — terminal-style ticker grid + sparklines, ported from bundle.
+// Reads window.ED_DATA: tickers, tickerGroups, bundle.{data,sources_status,updated_at}.
+const { useState: useStateL } = React;
 
 function PageLatest(){
-  const d = window.ED_DATA && window.ED_DATA.dashboard;
-  if(!d) {
-    return <div className="loading">no dashboard data yet…</div>;
+  const data = window.ED_DATA;
+  if(!data || !data.bundle){
+    return <div className="loading">no data yet…</div>;
   }
-  const defs = d.definitions || [];
-  const vals = d.values || {};
-  const srcStatus = d.sources_status || {};
 
-  // Hero cards: definitions where is_hero=true (default 4).
-  const heroes = defs.filter(x => x.is_hero);
+  const groups = data.tickerGroups || [];
+  const sources = data.bundle.sources_status || {};
+  const sourceKeys = Object.keys(sources).sort();
 
-  // Group definitions by domain for bento.
-  const byDomain = {};
-  defs.forEach(def => {
-    if(def.is_hero) return;  // skip — already in heroes
-    if(!byDomain[def.domain]) byDomain[def.domain] = [];
-    byDomain[def.domain].push(def);
-  });
+  // Pipeline-state summary for the header meta block.
+  const allOk = sourceKeys.length > 0 && sourceKeys.every(k => sources[k].status === 'ok');
+  const firstNonOk = sourceKeys.find(k => sources[k].status !== 'ok');
+  const stateLabel = allOk
+    ? <React.Fragment><StatusPill status="ok"/> all sources</React.Fragment>
+    : firstNonOk
+      ? <React.Fragment><StatusPill status={sources[firstNonOk].status}/> {firstNonOk}</React.Fragment>
+      : <React.Fragment><StatusPill status="skip"/> no sources</React.Fragment>;
 
-  // Sources status pill row.
-  const sourceKeys = Object.keys(srcStatus).sort();
+  const updatedAt = data.bundle.updated_at
+    ? new Date(data.bundle.updated_at).toISOString().slice(0,19).replace('T',' ') + ' UTC'
+    : '—';
+
+  const flat = data.bundle.data || {};
+  const showBreadth = flat.advancing != null && flat.declining != null && flat.unchanged != null;
 
   return (
     <React.Fragment>
@@ -31,141 +35,102 @@ function PageLatest(){
         title="Latest"
         meta={
           <React.Fragment>
-            <div><b>updated</b> {d.updated_at && d.updated_at.slice(0, 19) + ' UTC'}</div>
-            <div><b>defs</b> {defs.length}</div>
-            <div><b>values</b> {Object.keys(vals).length}</div>
-            <div><b>sources</b> {sourceKeys.length}</div>
+            <div><b>updated</b>&nbsp; {updatedAt}</div>
+            <div><b>state</b>&nbsp;&nbsp;&nbsp; {stateLabel}</div>
           </React.Fragment>
         }
       />
 
-      {/* Sources status row */}
-      <div className="src-status-row">
-        {sourceKeys.map(src => (
-          <div key={src} className="src-pill">
-            <span className="muted">{src}</span>
-            <StatusPill status={srcStatus[src].status}/>
-            <span className="tnum">{relTime(srcStatus[src].last_success)}</span>
-          </div>
-        ))}
-      </div>
-
-      {/* Hero cards */}
-      {heroes.length > 0 && (
-        <div className="hero-grid">
-          {heroes.map(def => {
-            const v = vals[def.metric_id];
-            return <HeroCard key={def.metric_id} def={def} value={v}/>;
-          })}
-        </div>
-      )}
-
-      {/* Bento grid — one tile per domain */}
-      <div className="bento-grid">
-        {Object.keys(byDomain).sort().map(domain => (
-          <BentoTile key={domain} domain={domain} defs={byDomain[domain]} vals={vals}/>
-        ))}
-      </div>
-    </React.Fragment>
-  );
-}
-
-function HeroCard({def, value}){
-  const v = value && value.value != null ? value.value : null;
-  return (
-    <div className="hero-card">
-      <div className="lbl">{def.short_label || def.label}</div>
-      <div className="val tnum">{v == null ? '—' : formatValue(v, def.format)}</div>
-      <div className="sub">{def.unit}</div>
-    </div>
-  );
-}
-
-function BentoTile({domain, defs, vals}){
-  const onClick = () => { window.location.hash = '#/domain/' + slug(domain); };
-  return (
-    <div className="bento" onClick={onClick}>
-      <div className="dom">{domain}</div>
-      <div className="count">{defs.length} indicators</div>
-      {defs.slice(0, 3).map(def => {
-        const v = vals[def.metric_id];
-        return (
-          <div key={def.metric_id} className="preview">
-            <span>{def.short_label || def.label}</span>
-            <span className="pv">{v && v.value != null ? formatValue(v.value, def.format) : '—'}</span>
-          </div>
-        );
-      })}
-      {defs.length > 3 && <div className="more">+ {defs.length - 3} more →</div>}
-    </div>
-  );
-}
-
-function formatValue(v, format){
-  if(v == null) return '—';
-  if(format === 'pct-1dp') return v.toFixed(1) + '%';
-  if(format === 'pct-2dp') return v.toFixed(2) + '%';
-  if(format === 'currency-bdt') return v.toLocaleString();
-  // default: comma-2dp
-  return Number(v).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
-}
-
-function slug(s){ return String(s).toLowerCase().replace(/\s+/g, '-'); }
-
-window.PageLatest = PageLatest;
-
-// Domain drill-in — full list of indicators in one domain.
-function PageDomain({route}){
-  const d = window.ED_DATA && window.ED_DATA.dashboard;
-  if(!d) return <div className="loading">no data yet…</div>;
-  const defs = d.definitions || [];
-  const vals = d.values || {};
-
-  // Route shape: '/domain/<slug>' — find domain whose slug matches.
-  const targetSlug = route.replace('/domain/', '');
-  const domainName = (defs.find(x => slug(x.domain) === targetSlug) || {}).domain;
-  if(!domainName){
-    return (
-      <React.Fragment>
-        <PageHead title="Domain not found" kicker="Pipeline"/>
-        <p>No indicators registered for "{targetSlug}".</p>
-        <p><a href="#/">← Back to Latest</a></p>
-      </React.Fragment>
-    );
-  }
-
-  const domainDefs = defs.filter(x => x.domain === domainName);
-
-  return (
-    <React.Fragment>
-      <PageHead
-        title={domainName}
-        kicker="Pipeline · domain detail"
-        meta={<div><b>indicators</b> {domainDefs.length}</div>}
-      />
-      <p><a href="#/">← Back to Latest</a></p>
-      <div className="indicator-list">
-        {domainDefs.map(def => {
-          const v = vals[def.metric_id];
+      <div style={{display:'flex',gap:14,marginBottom:18,fontFamily:'IBM Plex Mono, monospace',fontSize:11,color:'var(--ink-3)',flexWrap:'wrap'}}>
+        {sourceKeys.map(src => {
+          const s = sources[src] || {};
           return (
-            <div key={def.metric_id} className="indicator-row">
-              <div className="il-label">
-                <b>{def.label}</b>
-                {def.description && <div className="il-desc">{def.description}</div>}
-              </div>
-              <div className="il-value tnum">
-                {v && v.value != null ? formatValue(v.value, def.format) : '—'}
-                <span className="il-unit">{def.unit}</span>
-              </div>
-              {v && v.as_of && (
-                <div className="il-asof">as of {v.as_of}</div>
-              )}
+            <div key={src}>
+              <span className="muted">{src}</span> &nbsp;
+              <StatusPill status={s.status}/> &nbsp;
+              <span className="tnum">{s.last_success ? relTime(s.last_success) : '—'}</span>
             </div>
           );
         })}
       </div>
+
+      {groups.map(g => {
+        const gTickers = (data.tickers || []).filter(t => t.group === g.key);
+        if(gTickers.length === 0) return null;
+        return (
+          <React.Fragment key={g.key}>
+            <h2 className="sec">{g.key}</h2>
+            <p className="sec-lede">{g.lede}</p>
+            <div className="tickers">
+              {gTickers.map(t => (
+                <div className="ticker" key={t.key}>
+                  <div className="lbl">{t.label}</div>
+                  <div className="val tnum">
+                    {t.val == null ? '—' : t.fmt(t.val)}
+                    <span className="unit">{t.unit}</span>
+                  </div>
+                  {t.delta != null && (
+                    <div className={`delta ${t.delta > 0.0001 ? 'up' : t.delta < -0.0001 ? 'down' : 'flat'}`}>
+                      {t.delta > 0 ? '▲' : t.delta < 0 ? '▼' : '·'} {fmtPct(t.delta)} &nbsp;<span className="muted">d/d</span>
+                    </div>
+                  )}
+                  {t.delta == null && <div className="delta flat">·  no Δ</div>}
+                  {t.spark && (
+                    <div className="spark">
+                      <Sparkline
+                        data={t.spark}
+                        w={180}
+                        h={36}
+                        stroke={t.delta != null && t.delta < 0 ? 'var(--accent)' : 'var(--ok)'}
+                      />
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </React.Fragment>
+        );
+      })}
+
+      {showBreadth && (
+        <React.Fragment>
+          <h2 className="sec">Market breadth — most recent trading day</h2>
+          <p className="sec-lede">
+            {flat.advancing} advancing · {flat.declining} declining · {flat.unchanged} unchanged.
+            {flat.turnover_crore != null && ` Turnover ${Number(flat.turnover_crore).toFixed(2)} crore`}
+            {flat.total_trades != null && ` on ${Number(flat.total_trades).toLocaleString()} trades`}
+            {(flat.turnover_crore != null || flat.total_trades != null) && '.'}
+          </p>
+          <BreadthBar adv={flat.advancing} dec={flat.declining} unc={flat.unchanged}/>
+        </React.Fragment>
+      )}
+
+      <h2 className="sec">Raw payload</h2>
+      <p className="sec-lede">The flat object the downstream agent reads.</p>
+      <pre style={{fontFamily:'IBM Plex Mono, monospace',fontSize:11.5,background:'var(--code-bg)',color:'var(--code-ink)',padding:'14px 16px',border:'1px solid var(--ink)',overflow:'auto',margin:0,borderLeft:'3px solid var(--accent)'}}>
+{JSON.stringify(flat, null, 2)}
+      </pre>
     </React.Fragment>
   );
 }
 
-window.PageDomain = PageDomain;
+function BreadthBar({ adv, dec, unc }){
+  const total = adv + dec + unc;
+  const pct = x => (x/total)*100;
+  return (
+    <div style={{background:'var(--paper)',border:'1px solid var(--rule)',padding:'18px 22px',marginBottom:18}}>
+      <div style={{display:'flex',height:22,borderRadius:2,overflow:'hidden',marginBottom:10,fontFamily:'IBM Plex Mono, monospace',fontSize:10,color:'#fff'}}>
+        <div style={{width:`${pct(adv)}%`,background:'var(--ok)',display:'flex',alignItems:'center',justifyContent:'center'}}>{adv} adv</div>
+        <div style={{width:`${pct(unc)}%`,background:'var(--skip)',display:'flex',alignItems:'center',justifyContent:'center'}}>{unc} unc</div>
+        <div style={{width:`${pct(dec)}%`,background:'var(--accent)',display:'flex',alignItems:'center',justifyContent:'center'}}>{dec} dec</div>
+      </div>
+      <div style={{display:'flex',justifyContent:'space-between',fontFamily:'IBM Plex Mono, monospace',fontSize:11,color:'var(--ink-3)'}}>
+        <span><b style={{color:'var(--ok)'}}>{pct(adv).toFixed(1)}%</b> advancing</span>
+        <span><b style={{color:'var(--ink-3)'}}>{pct(unc).toFixed(1)}%</b> unchanged</span>
+        <span><b style={{color:'var(--accent)'}}>{pct(dec).toFixed(1)}%</b> declining</span>
+      </div>
+    </div>
+  );
+}
+
+window.PageLatest = PageLatest;
