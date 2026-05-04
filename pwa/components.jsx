@@ -279,24 +279,6 @@ function Masthead(){
     <React.Fragment>
       <header className="masthead" role="banner">
         <div className="left">
-          <svg className="mark-svg" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-            {/* Frame */}
-            <rect x="2" y="2" width="60" height="60" stroke="currentColor" strokeWidth="1.5" fill="none"/>
-            <rect x="6" y="6" width="52" height="52" stroke="currentColor" strokeWidth="0.5" fill="none" opacity="0.4"/>
-            {/* Delta triangle (Greek Δ) — centerpiece */}
-            <path d="M32 14 L52 50 L12 50 Z" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinejoin="round"/>
-            {/* Inner data line — a price chart */}
-            <path d="M14 44 L20 38 L26 41 L32 30 L38 35 L44 26 L50 32" stroke="var(--accent)" strokeWidth="1.5" fill="none" strokeLinejoin="round" strokeLinecap="round"/>
-            {/* Data points */}
-            <circle cx="14" cy="44" r="1.5" fill="var(--accent)"/>
-            <circle cx="32" cy="30" r="1.5" fill="var(--accent)"/>
-            <circle cx="50" cy="32" r="1.5" fill="var(--accent)"/>
-            {/* Crosshair */}
-            <line x1="32" y1="6" x2="32" y2="10" stroke="currentColor" strokeWidth="1"/>
-            <line x1="32" y1="54" x2="32" y2="58" stroke="currentColor" strokeWidth="1"/>
-            <line x1="6" y1="32" x2="10" y2="32" stroke="currentColor" strokeWidth="1"/>
-            <line x1="54" y1="32" x2="58" y2="32" stroke="currentColor" strokeWidth="1"/>
-          </svg>
           <div className="wordmark">
             <div className="top">Bangladesh · Macroeconomic Pipeline</div>
             <div className="name">Econ<span className="delta">Δ</span>elta</div>
