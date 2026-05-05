@@ -48,6 +48,9 @@
 <script type="text/babel" src="pages/latest.jsx?v=__BUILD_VERSION__"></script>
 <script type="text/babel" src="pages/archive.jsx?v=__BUILD_VERSION__"></script>
 <script type="text/babel" src="pages/runs.jsx?v=__BUILD_VERSION__"></script>
+<script src="pages/macro/chartConfigs.js?v=__BUILD_VERSION__"></script>
+<script src="pages/macro/events.js?v=__BUILD_VERSION__"></script>
+<script type="text/babel" src="pages/macro.jsx?v=__BUILD_VERSION__"></script>
 <script type="text/babel" src="pages/sources-about.jsx?v=__BUILD_VERSION__"></script>
 
 <script type="text/babel">
@@ -71,6 +74,7 @@ function App(){
   }, []);
   let Page, label;
   if(route === '/archive'){ Page = PageArchive; label = '02 Archive'; }
+  else if(route === '/macro')  { Page = PageMacro;  label = '06 Macro'; }
   else if(route === '/runs'){ Page = PageRuns; label = '03 Runs'; }
   else if(route === '/sources'){ Page = PageSources; label = '04 Sources'; }
   else if(route === '/about'){ Page = PageAbout; label = '05 About'; }
