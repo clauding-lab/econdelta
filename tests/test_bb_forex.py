@@ -422,3 +422,90 @@ class TestMain:
         assert 100.0 < snap.rates.usd_bdt_mid < 200.0
         assert 20.0 < snap.reserves.gross_reserves_usd_bn < 60.0
         assert snap.reserves.import_cover_months is None
+
+
+# ---------------------------------------------------------------------------
+# fetch_rendered_html retry behavior
+# ---------------------------------------------------------------------------
+
+
+class TestFetchRetry:
+    """Verify fetch_rendered_html retries transient browser-level failures."""
+
+    def test_succeeds_on_first_attempt(self):
+        from scrapers.bb_forex import fetch_rendered_html
+
+        with patch(
+            "scrapers.bb_forex._fetch_once", return_value="<html>ok</html>"
+        ) as m:
+            out = fetch_rendered_html("https://example.com", max_attempts=3)
+        assert out == "<html>ok</html>"
+        assert m.call_count == 1
+
+    def test_recovers_after_transient_failures(self):
+        from scrapers.bb_forex import fetch_rendered_html
+
+        side_effects = [
+            RuntimeError("net::ERR_ADDRESS_UNREACHABLE"),
+            RuntimeError("Page.goto: Timeout 60000ms exceeded"),
+            "<html>ok</html>",
+        ]
+        with (
+            patch(
+                "scrapers.bb_forex._fetch_once", side_effect=side_effects
+            ) as m,
+            patch("scrapers.bb_forex.time.sleep") as mock_sleep,
+        ):
+            out = fetch_rendered_html("https://example.com", max_attempts=3)
+        assert out == "<html>ok</html>"
+        assert m.call_count == 3
+        # 2 backoffs (5s, 10s) before the successful 3rd attempt
+        assert mock_sleep.call_args_list == [((5,),), ((10,),)]
+
+    def test_raises_last_error_after_exhausting_attempts(self):
+        from scrapers.bb_forex import fetch_rendered_html
+
+        side_effects = [
+            RuntimeError("first"),
+            RuntimeError("second"),
+            RuntimeError("third — final"),
+        ]
+        with (
+            patch(
+                "scrapers.bb_forex._fetch_once", side_effect=side_effects
+            ) as m,
+            patch("scrapers.bb_forex.time.sleep"),
+        ):
+            with pytest.raises(RuntimeError, match="third — final"):
+                fetch_rendered_html("https://example.com", max_attempts=3)
+        assert m.call_count == 3
+
+    def test_no_sleep_after_final_failure(self):
+        """Backoff must not run after the final attempt."""
+        from scrapers.bb_forex import fetch_rendered_html
+
+        with (
+            patch(
+                "scrapers.bb_forex._fetch_once",
+                side_effect=[RuntimeError("a"), RuntimeError("b")],
+            ),
+            patch("scrapers.bb_forex.time.sleep") as mock_sleep,
+        ):
+            with pytest.raises(RuntimeError):
+                fetch_rendered_html("https://example.com", max_attempts=2)
+        # Only one backoff (5s) between attempts 1 and 2; nothing after attempt 2
+        assert mock_sleep.call_args_list == [((5,),)]
+
+    def test_passes_through_kwargs_to_fetch_once(self):
+        from scrapers.bb_forex import fetch_rendered_html
+
+        with patch(
+            "scrapers.bb_forex._fetch_once", return_value="<html>ok</html>"
+        ) as m:
+            fetch_rendered_html(
+                "https://example.com",
+                timeout_ms=12345,
+                wait_for_selector="div#x",
+                max_attempts=1,
+            )
+        m.assert_called_once_with("https://example.com", 12345, "div#x")
