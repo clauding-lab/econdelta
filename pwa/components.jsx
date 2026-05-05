@@ -72,6 +72,9 @@ function Sidebar({ route }){
       { href:'#/archive', label:'Archive',  badge:'90d',  icon:'◫' },
       { href:'#/runs',    label:'Run dashboard', badge:null, icon:'▦' },
     ]},
+    { group: 'Analysis', links: [
+      { href:'#/macro',   label:'Macro',    badge:'14y',  icon:'≋' },
+    ]},
     { group: 'Reference', links: [
       { href:'#/sources', label:'Sources',  badge:'4',  icon:'◆' },
       { href:'#/about',   label:'About',    badge:null, icon:'§' },

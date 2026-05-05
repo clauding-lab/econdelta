@@ -6,7 +6,7 @@
 //
 // Cache version in CACHE_NAME — bump this string to force eviction on deploy.
 
-const CACHE_NAME = 'econdelta-v1-2026-05-04';
+const CACHE_NAME = 'econdelta-v1-2026-05-05-macro';
 const VENDOR_CACHE = 'econdelta-vendor-v1';
 const RPC_CACHE = 'econdelta-rpc-v1';
 
@@ -22,6 +22,9 @@ const APP_SHELL = [
   './pages/archive.jsx',
   './pages/runs.jsx',
   './pages/sources-about.jsx',
+  './pages/macro.jsx',
+  './pages/macro/chartConfigs.js',
+  './pages/macro/events.js',
   './icons/icon-192.png',
   './icons/icon-512.png',
 ];
@@ -56,6 +59,14 @@ self.addEventListener('fetch', (event) => {
   // Tier 3: RPC call to get_latest_dashboard — network-first, 5s timeout
   if (url.pathname.endsWith('/rest/v1/rpc/get_latest_dashboard')) {
     event.respondWith(rpcStrategy(event.request));
+    return;
+  }
+
+  // Skip cross-origin requests (Supabase REST queries with Range headers,
+  // Chart.js CDN, font CDN, etc.) so they go straight to the network without
+  // SW interception. Caching them via stale-while-revalidate breaks Range
+  // pagination because the cache key ignores Range headers.
+  if (url.origin !== self.location.origin) {
     return;
   }
 
