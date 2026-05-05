@@ -33,12 +33,46 @@
 
   function baseLineOptions(opts) {
     opts = opts || {};
+    const yTickCallback = opts.yTicks && opts.yTicks.callback;
     return {
       responsive: true,
       maintainAspectRatio: false,
+      animation: { duration: 300 },
+      interaction: { mode: 'index', intersect: false },
+      spanGaps: true,
+      elements: {
+        line: { tension: 0.3, borderJoinStyle: 'round' },
+        point: { radius: 0, hoverRadius: 4, hoverBorderWidth: 2, hoverBackgroundColor: '#fff' },
+      },
       plugins: {
-        legend: { display: !!opts.legend, position: 'top', labels: { font: FONT } },
-        tooltip: { backgroundColor: PALETTE.text, titleFont: FONT, bodyFont: FONT },
+        legend: opts.legend ? {
+          display: true,
+          position: 'top',
+          align: 'end',
+          labels: { usePointStyle: true, boxWidth: 8, font: FONT, color: PALETTE.text },
+        } : { display: false },
+        tooltip: {
+          backgroundColor: PALETTE.text,
+          titleColor: '#fdfaf4',
+          bodyColor: '#fdfaf4',
+          titleFont: Object.assign({ size: 12, weight: '600' }, FONT),
+          bodyFont: Object.assign({ size: 12 }, FONT),
+          padding: 10,
+          usePointStyle: true,
+          boxPadding: 4,
+          cornerRadius: 4,
+          callbacks: {
+            label: (ctx) => {
+              const v = ctx.parsed.y;
+              const label = ctx.dataset.label || '';
+              if (v == null) return label + ': —';
+              const fmt = yTickCallback
+                ? yTickCallback(v)
+                : Number(v).toLocaleString(undefined, { maximumFractionDigits: 2 });
+              return label ? label + ': ' + fmt : String(fmt);
+            },
+          },
+        },
       },
       scales: {
         x: {
@@ -159,8 +193,29 @@
       options: {
         responsive: true,
         maintainAspectRatio: false,
+        animation: { duration: 300 },
+        interaction: { mode: 'nearest', intersect: false, axis: 'x' },
         parsing: false,
-        plugins: { legend: { display: false } },
+        elements: {
+          line: { tension: 0.1, borderJoinStyle: 'round' },
+          point: { hoverRadius: 5, hoverBorderWidth: 2, hoverBackgroundColor: '#fff' },
+        },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            backgroundColor: PALETTE.text,
+            titleColor: '#fdfaf4',
+            bodyColor: '#fdfaf4',
+            titleFont: Object.assign({ size: 12, weight: '600' }, FONT),
+            bodyFont: Object.assign({ size: 12 }, FONT),
+            padding: 10,
+            cornerRadius: 4,
+            callbacks: {
+              title: (items) => items[0] ? items[0].dataset.label : '',
+              label: (ctx) => ctx.parsed.x + 'Y: ' + Number(ctx.parsed.y).toFixed(2) + '%',
+            },
+          },
+        },
         scales: {
           x: { type: 'linear', title: { display: true, text: 'Tenor (years)', font: FONT },
                grid: { color: PALETTE.grid }, ticks: { color: PALETTE.text, font: FONT } },
@@ -311,19 +366,16 @@
             yAxisID: 'y2' },
         ],
       },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: { legend: { display: true, position: 'top', labels: { font: FONT } } },
-        scales: {
-          x: { type: 'time', time: { unit: 'year' }, grid: { color: PALETTE.grid },
-               ticks: { color: PALETTE.text, font: FONT } },
-          y1: { type: 'linear', position: 'left',  grid: { color: PALETTE.grid },
-                ticks: { color: PALETTE.text, font: FONT } },
-          y2: { type: 'linear', position: 'right', grid: { display: false },
-                ticks: { color: PALETTE.text, font: FONT } },
-        },
-      },
+      options: (function () {
+        const base = baseLineOptions({ legend: true });
+        // Replace single y with dual y1/y2
+        delete base.scales.y;
+        base.scales.y1 = { type: 'linear', position: 'left',  grid: { color: PALETTE.grid },
+                           ticks: { color: PALETTE.text, font: FONT } };
+        base.scales.y2 = { type: 'linear', position: 'right', grid: { display: false },
+                           ticks: { color: PALETTE.text, font: FONT } };
+        return base;
+      })(),
     };
   }
 
@@ -394,18 +446,15 @@
             borderDash: [3, 3], yAxisID: 'y2' },
         ],
       },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: { legend: { display: true, position: 'top', labels: { font: FONT } } },
-        scales: {
-          x: { type: 'time', time: { unit: 'month' }, grid: { color: PALETTE.grid },
-               ticks: { color: PALETTE.text, font: FONT } },
-          y1: { type: 'linear', position: 'left',  ticks: { color: PALETTE.text, font: FONT } },
-          y2: { type: 'linear', position: 'right', grid: { display: false },
-                ticks: { color: PALETTE.text, font: FONT } },
-        },
-      },
+      options: (function () {
+        const base = baseLineOptions({ legend: true });
+        base.scales.x.time = { unit: 'month' };
+        delete base.scales.y;
+        base.scales.y1 = { type: 'linear', position: 'left',  ticks: { color: PALETTE.text, font: FONT } };
+        base.scales.y2 = { type: 'linear', position: 'right', grid: { display: false },
+                           ticks: { color: PALETTE.text, font: FONT } };
+        return base;
+      })(),
     };
   }
 
