@@ -62,19 +62,32 @@ async function fetchMonthlyData() {
   if (window.ED_DATA && window.ED_DATA.macroMonthly) return window.ED_DATA.macroMonthly;
   const cfg = window.ED_SUPABASE_CONFIG;
   if (!cfg || !cfg.url || !cfg.anonKey) throw new Error('Supabase config missing');
-  const inList = KEY_METRICS_USED.map(m => '"' + m + '"').join(',');
-  const url = cfg.url + '/rest/v1/metric_history_monthly'
-            + '?metric_id=in.(' + inList + ')'
-            + '&select=metric_id,as_of,value'
-            + '&order=as_of.asc&limit=20000';
-  const resp = await fetch(url, {
-    headers: { apikey: cfg.anonKey, Authorization: 'Bearer ' + cfg.anonKey },
-  });
-  if (!resp.ok) throw new Error('HTTP ' + resp.status + ': ' + (await resp.text()));
-  const rows = await resp.json();
+  const inList = KEY_METRICS_USED.join(',');
+  const baseUrl = cfg.url + '/rest/v1/metric_history_monthly'
+                + '?metric_id=in.(' + inList + ')'
+                + '&select=metric_id,as_of,value'
+                + '&order=as_of.asc';
+  // PostgREST caps each response at 1000 rows; page through with Range header.
+  const PAGE_SIZE = 1000;
+  const all = [];
+  for (let offset = 0; ; offset += PAGE_SIZE) {
+    const resp = await fetch(baseUrl, {
+      headers: {
+        apikey: cfg.anonKey,
+        Authorization: 'Bearer ' + cfg.anonKey,
+        Range: offset + '-' + (offset + PAGE_SIZE - 1),
+      },
+    });
+    if (!resp.ok && resp.status !== 206) {
+      throw new Error('HTTP ' + resp.status + ': ' + (await resp.text()));
+    }
+    const rows = await resp.json();
+    all.push.apply(all, rows);
+    if (rows.length < PAGE_SIZE) break;
+  }
 
   const byMetric = {};
-  rows.forEach(r => {
+  all.forEach(r => {
     if (!byMetric[r.metric_id]) byMetric[r.metric_id] = [];
     byMetric[r.metric_id].push([r.as_of, Number(r.value)]);
   });

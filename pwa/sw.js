@@ -62,6 +62,14 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
+  // Skip cross-origin requests (Supabase REST queries with Range headers,
+  // Chart.js CDN, font CDN, etc.) so they go straight to the network without
+  // SW interception. Caching them via stale-while-revalidate breaks Range
+  // pagination because the cache key ignores Range headers.
+  if (url.origin !== self.location.origin) {
+    return;
+  }
+
   // Tier 1: vendor — cache-first
   if (url.pathname.includes('/vendor/')) {
     event.respondWith(
