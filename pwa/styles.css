@@ -1387,8 +1387,8 @@ h2.sec::before{
 .macro-modal {
   background: var(--paper);
   border: 1px solid var(--rule);
-  padding: 32px 36px;
-  max-width: 1180px;
+  padding: 22px 28px 24px;
+  max-width: 1100px;
   width: 100%;
   max-height: calc(100vh - 40px);
   overflow-y: auto;
@@ -1414,23 +1414,25 @@ h2.sec::before{
   color: var(--accent);
 }
 .macro-modal-title {
-  margin: 4px 0;
+  margin: 2px 0;
   font-family: 'IBM Plex Sans', system-ui, sans-serif;
   color: var(--ink);
+  font-size: 1.4rem;
+  line-height: 1.25;
 }
 .macro-modal-date {
-  font-size: 0.9rem;
+  font-size: 0.85rem;
   color: var(--ink-3);
-  margin-bottom: 16px;
+  margin-bottom: 12px;
   font-family: 'IBM Plex Mono', monospace;
 }
-.macro-modal-kpis { display: grid; gap: 6px; margin-bottom: 20px; }
+.macro-modal-kpis { display: grid; gap: 4px; margin-bottom: 14px; }
 .macro-kpi-row {
   display: grid;
   grid-template-columns: 2fr 1fr 1fr;
   gap: 8px;
-  font-size: 0.9rem;
-  padding: 6px 0;
+  font-size: 0.85rem;
+  padding: 4px 0;
   border-bottom: 1px dashed var(--rule-soft);
   color: var(--ink);
 }
@@ -1439,7 +1441,9 @@ h2.sec::before{
 .macro-kpi-date { text-align: right; color: var(--ink-4); font-size: 0.8rem; font-family: 'IBM Plex Mono', monospace; }
 .macro-modal-charts {
   display: grid;
-  gap: 20px;
+  gap: 14px;
   grid-template-columns: 1fr;
 }
-.macro-modal-charts .macro-card-canvas { height: 360px; }
+.macro-modal-charts .macro-card { padding: 12px 16px; }
+.macro-modal-charts .macro-card-canvas { height: 220px; }
+.macro-modal-charts .macro-card-head { margin-bottom: 6px; }
