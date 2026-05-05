@@ -46,6 +46,13 @@
     return series[series.length - 1][1];
   }
 
+  // Round to max 2 decimal places and drop trailing zeros so Chart.js axis
+  // ticks don't show floating-point artifacts like 5.6000000000000005%.
+  function r2(v) {
+    if (v == null || !isFinite(v)) return v;
+    return Math.round(v * 100) / 100;
+  }
+
   function baseLineOptions(opts) {
     opts = opts || {};
     const yTickCallback = opts.yTicks && opts.yTicks.callback;
@@ -132,7 +139,7 @@
             borderColor: PALETTE.accent, borderWidth: 1.5, pointRadius: 0, tension: 0.2 },
         ],
       },
-      options: baseLineOptions({ legend: true, yTicks: { callback: v => v + '%' } }),
+      options: baseLineOptions({ legend: true, yTicks: { callback: v => r2(v) + '%' } }),
     };
   }
 
@@ -150,7 +157,7 @@
             borderColor: PALETTE.accent, borderWidth: 1.5, pointRadius: 0, tension: 0.2 },
         ],
       },
-      options: baseLineOptions({ legend: true, yTicks: { callback: v => v + '%' } }),
+      options: baseLineOptions({ legend: true, yTicks: { callback: v => r2(v) + '%' } }),
     };
   }
 
@@ -166,7 +173,7 @@
             borderDash: [4, 4] },
         ],
       },
-      options: baseLineOptions({ legend: true, yTicks: { callback: v => v + '%' } }),
+      options: baseLineOptions({ legend: true, yTicks: { callback: v => r2(v) + '%' } }),
     };
   }
 
@@ -234,7 +241,7 @@
         scales: {
           x: { type: 'linear', title: { display: true, text: 'Tenor (years)', font: FONT },
                grid: { color: PALETTE.grid }, ticks: { color: PALETTE.text, font: FONT } },
-          y: { ticks: { color: PALETTE.text, font: FONT, callback: v => v + '%' },
+          y: { ticks: { color: PALETTE.text, font: FONT, callback: v => r2(v) + '%' },
                grid: { color: PALETTE.grid } },
         },
       },
@@ -253,7 +260,7 @@
           borderWidth: 0,
         }],
       },
-      options: baseLineOptions({ yTicks: { callback: v => v + '%' } }),
+      options: baseLineOptions({ yTicks: { callback: v => r2(v) + '%' } }),
     };
   }
 
@@ -291,7 +298,7 @@
             borderColor: PALETTE.primary, borderWidth: 2, pointRadius: 0 },
         ],
       },
-      options: baseLineOptions({ legend: true, yTicks: { callback: v => v + '%' } }),
+      options: baseLineOptions({ legend: true, yTicks: { callback: v => r2(v) + '%' } }),
     };
   }
 
@@ -306,7 +313,7 @@
             borderColor: PALETTE.primary, borderWidth: 2, pointRadius: 0 },
         ],
       },
-      options: baseLineOptions({ legend: true, yTicks: { callback: v => v + '%' } }),
+      options: baseLineOptions({ legend: true, yTicks: { callback: v => r2(v) + '%' } }),
     };
   }
 
@@ -348,7 +355,7 @@
           tension: 0.2,
         }],
       },
-      options: baseLineOptions({ yTicks: { callback: v => '$' + v + 'B' } }),
+      options: baseLineOptions({ yTicks: { callback: v => '$' + r2(v) + 'B' } }),
     };
   }
 
@@ -364,7 +371,7 @@
           pointRadius: 0,
         }],
       },
-      options: baseLineOptions({ yTicks: { callback: v => v + ' mo' } }),
+      options: baseLineOptions({ yTicks: { callback: v => r2(v) + ' mo' } }),
     };
   }
 
@@ -449,7 +456,7 @@
             borderDash: [3, 3] },
         ],
       },
-      options: baseLineOptions({ legend: true, yTicks: { callback: v => v + '%' } }),
+      options: baseLineOptions({ legend: true, yTicks: { callback: v => r2(v) + '%' } }),
     };
   }
 
