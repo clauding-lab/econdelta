@@ -404,22 +404,29 @@
       .filter(e => e.color && e.date && dataMap[e.date] != null)
       .map(e => ({ x: e.date, y: dataMap[e.date], color: e.color, id: e.id }));
 
+    // Line uses ink-2 (dark navy) instead of accent so red/orange event dots
+    // pop against it. Several events use #c8472b which is essentially the same
+    // hue as --accent — they vanish if the line is also accent-colored.
     return {
       type: 'line',
       data: {
         datasets: [
           { label: 'DSEX', data: dataPts,
-            borderColor: PALETTE.primary, backgroundColor: PALETTE.primaryDim,
-            borderWidth: 2, pointRadius: 0, tension: 0.2, fill: true },
+            borderColor: PALETTE.accent,
+            backgroundColor: 'rgba(11, 18, 32, 0.06)',
+            borderWidth: 1.6, pointRadius: 0, tension: 0.25, fill: true },
           { label: 'Events',
             data: eventDots,
             type: 'scatter',
             backgroundColor: eventDots.map(p => p.color),
-            borderColor: '#fff',
-            borderWidth: 1.5,
-            pointRadius: 6,
-            pointHoverRadius: 8,
-            showLine: false },
+            borderColor: PALETTE.paper,
+            borderWidth: 2,
+            pointRadius: 7,
+            pointHoverRadius: 9,
+            hoverBorderWidth: 2,
+            showLine: false,
+            // Drop shadow approximation: a halo via stroke
+            order: -1 },
         ],
       },
       options: baseLineOptions({ legend: false }),
