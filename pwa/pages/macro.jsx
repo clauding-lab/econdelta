@@ -166,7 +166,7 @@ function EventStrip({ events, onSelect }) {
           </div>
           <div className="macro-event-title">{e.title}</div>
           <div className="macro-event-sum">{e.summary}</div>
-          <div className="macro-event-cta">READ MORE →</div>
+          <div className="macro-event-cta">CLICK HERE →</div>
         </button>
       ))}
     </div>
