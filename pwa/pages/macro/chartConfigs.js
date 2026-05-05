@@ -6,19 +6,34 @@
 // Exposed via window.MACRO_CHART_CONFIGS (no ES modules — PWA uses inline Babel).
 
 (function () {
-  // Macro Observer-style canvas palette.
-  const PALETTE = {
-    primary: '#c8472b',
-    primaryDim: 'rgba(200, 71, 43, 0.12)',
-    secondary: '#2a8a59',
-    accent: '#3b6ea5',
-    grid: 'rgba(80, 60, 40, 0.10)',
-    text: '#3d342a',
-    cream: '#F4F1EA',
-    danger: '#8b1c0e',
-  };
+  // Read EconDelta theme tokens from CSS at chart-build time so charts adopt
+  // the same palette as the rest of the app and respond to light/dark theme.
+  // Falls back to literal hex when called server-side or before document is ready.
+  function cssVar(name, fallback) {
+    if (typeof document === 'undefined' || !document.documentElement) return fallback;
+    const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    return v || fallback;
+  }
 
-  const FONT = { family: "'IBM Plex Serif', Georgia, serif" };
+  function buildPalette() {
+    return {
+      primary:    cssVar('--accent', '#ff5a1f'),
+      primaryDim: cssVar('--accent-bg', 'rgba(255, 90, 31, 0.15)'),
+      secondary:  cssVar('--ok', '#006d6d'),
+      accent:     cssVar('--ink-2', '#2a3346'),
+      grid:       cssVar('--grid-line', '#dde1e8'),
+      text:       cssVar('--ink', '#0b1220'),
+      paper:      cssVar('--paper', '#ffffff'),
+      muted:      cssVar('--ink-3', '#5b6577'),
+      danger:     cssVar('--fail', '#d12a2a'),
+    };
+  }
+
+  // PALETTE object stays a property accessor so values are fresh per chart.
+  // (Most callsites read it once; that's fine for build-time evaluation.)
+  let PALETTE = buildPalette();
+
+  const FONT = { family: "'IBM Plex Sans', system-ui, sans-serif" };
 
   // ---------- helpers ----------
 
@@ -389,22 +404,29 @@
       .filter(e => e.color && e.date && dataMap[e.date] != null)
       .map(e => ({ x: e.date, y: dataMap[e.date], color: e.color, id: e.id }));
 
+    // Line uses ink-2 (dark navy) instead of accent so red/orange event dots
+    // pop against it. Several events use #c8472b which is essentially the same
+    // hue as --accent — they vanish if the line is also accent-colored.
     return {
       type: 'line',
       data: {
         datasets: [
           { label: 'DSEX', data: dataPts,
-            borderColor: PALETTE.primary, backgroundColor: PALETTE.primaryDim,
-            borderWidth: 2, pointRadius: 0, tension: 0.2, fill: true },
+            borderColor: PALETTE.accent,
+            backgroundColor: 'rgba(11, 18, 32, 0.06)',
+            borderWidth: 1.6, pointRadius: 0, tension: 0.25, fill: true },
           { label: 'Events',
             data: eventDots,
             type: 'scatter',
             backgroundColor: eventDots.map(p => p.color),
-            borderColor: '#fff',
-            borderWidth: 1.5,
-            pointRadius: 6,
-            pointHoverRadius: 8,
-            showLine: false },
+            borderColor: PALETTE.paper,
+            borderWidth: 2,
+            pointRadius: 7,
+            pointHoverRadius: 9,
+            hoverBorderWidth: 2,
+            showLine: false,
+            // Drop shadow approximation: a halo via stroke
+            order: -1 },
         ],
       },
       options: baseLineOptions({ legend: false }),
