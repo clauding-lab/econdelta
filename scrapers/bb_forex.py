@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import sys
+import time
 from datetime import date, datetime, timezone
 from pathlib import Path
 
@@ -30,24 +31,12 @@ class ParseError(Exception):
     """Raised when page HTML does not match the expected structure."""
 
 
-def fetch_rendered_html(
+def _fetch_once(
     url: str,
-    timeout_ms: int = 180000,
-    wait_for_selector: str | None = None,
+    timeout_ms: int,
+    wait_for_selector: str | None,
 ) -> str:
-    """Launch stealth Chromium, pass the Radware bot challenge, return page HTML.
-
-    Strategy:
-      1. Launch headless Chromium with playwright-stealth patches
-         (navigator.webdriver removed, plugins/languages/platform spoofed, etc.)
-      2. Navigate via domcontentloaded (the challenge page itself fires
-         domcontentloaded; we let JS run afterwards to solve the challenge)
-      3. Optionally wait for a specific selector to verify the real page
-         has loaded (bypassing the challenge page)
-      4. If the selector never appears, reload once — challenge cookies
-         set on first visit typically let the second visit through
-      5. Fall back to raw content() if no selector is provided
-    """
+    """Single browser-launch attempt. Caller wraps with retry."""
     stealth = Stealth()
     with sync_playwright() as pw:
         browser = pw.chromium.launch(
@@ -71,7 +60,6 @@ def fetch_rendered_html(
 
         try:
             page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
-            # Let challenge JS run; 10 s is enough for Radware TSPD
             page.wait_for_timeout(10000)
 
             if wait_for_selector is not None:
@@ -90,6 +78,44 @@ def fetch_rendered_html(
         finally:
             browser.close()
     return html
+
+
+def fetch_rendered_html(
+    url: str,
+    timeout_ms: int = 60_000,
+    wait_for_selector: str | None = None,
+    max_attempts: int = 3,
+) -> str:
+    """Fetch page via stealth Chromium with retry on transient failures.
+
+    bb.org.bd is reachable from ExonVPS via curl in <0.3s but Playwright
+    intermittently sees `ERR_ADDRESS_UNREACHABLE` or hangs on
+    `domcontentloaded` during dawn-hour windows. A short per-attempt
+    timeout with retries recovers far better than one long single shot.
+
+    Per-attempt timeout default 60s (working runs complete in 11–37s);
+    backoff 5s, 10s between attempts. Max budget ~195s for 3 attempts.
+
+    Each attempt launches a fresh browser to avoid carrying corrupt
+    state across retries.
+    """
+    last_err: Exception | None = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return _fetch_once(url, timeout_ms, wait_for_selector)
+        except Exception as e:
+            last_err = e
+            logger.warning(
+                "fetch attempt %d/%d failed: %s: %s",
+                attempt,
+                max_attempts,
+                type(e).__name__,
+                str(e)[:200],
+            )
+            if attempt < max_attempts:
+                time.sleep(5 * attempt)
+    assert last_err is not None
+    raise last_err
 
 
 def parse_exchange_rates(html: str) -> ForexRates:
