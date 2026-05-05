@@ -6,7 +6,7 @@
 //
 // Cache version in CACHE_NAME — bump this string to force eviction on deploy.
 
-const CACHE_NAME = 'econdelta-v1-2026-05-04';
+const CACHE_NAME = 'econdelta-v1-2026-05-05-macro';
 const VENDOR_CACHE = 'econdelta-vendor-v1';
 const RPC_CACHE = 'econdelta-rpc-v1';
 
@@ -22,6 +22,9 @@ const APP_SHELL = [
   './pages/archive.jsx',
   './pages/runs.jsx',
   './pages/sources-about.jsx',
+  './pages/macro.jsx',
+  './pages/macro/chartConfigs.js',
+  './pages/macro/events.js',
   './icons/icon-192.png',
   './icons/icon-512.png',
 ];
