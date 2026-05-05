@@ -178,5 +178,20 @@
         'dsex_monthly',
       ],
     },
+    {
+      id: 'feb26_election',
+      date: '2026-02-15',
+      category: 'POLITICAL',
+      title: 'Bangladesh National Election',
+      summary: 'General election following the 2024 transition; Yunus interim govt hands over.',
+      color: '#5a4cb8',
+      kpiMetricIds: [
+        'dsex_monthly',
+        'point_to_point_inflation_monthly',
+        'gross_reserves_usd_bn_monthly',
+        'usd_bdt_mid_monthly',
+        'bb_repo_rate_monthly',
+      ],
+    },
   ];
 })();
