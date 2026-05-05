@@ -401,19 +401,147 @@
     };
   }
 
-  // DSEX index with event dots overlaid. No turnover line — that series is not
-  // available in the upstream Macro Observer JSON.
+  // Custom Chart.js plugin: render event markers as colored dots at the top
+  // of the chart (above the data area) with a dashed vertical drop line down
+  // to the chart bottom. On hover, the line goes solid + a colored label box
+  // appears above the dot showing the event title. Modeled on Macro Observer.
+  function makeEventMarkersPlugin(events) {
+    return {
+      id: 'eventMarkers',
+      afterDatasetsDraw(chart) {
+        const { ctx, chartArea, scales } = chart;
+        if (!chartArea) return;
+        const xs = scales.x;
+        const dotY = chartArea.top - 14;
+        const hovered = chart.$hoveredMarkerIdx;
+
+        ctx.save();
+
+        events.forEach((e, i) => {
+          const xPx = xs.getPixelForValue(new Date(e.date).getTime());
+          if (xPx < chartArea.left - 10 || xPx > chartArea.right + 10) return;
+          const isHovered = hovered === i;
+
+          // Dashed (or solid when hovered) vertical drop line
+          ctx.strokeStyle = e.color;
+          ctx.globalAlpha = isHovered ? 0.85 : 0.30;
+          ctx.lineWidth = isHovered ? 1.8 : 1;
+          ctx.setLineDash(isHovered ? [] : [3, 3]);
+          ctx.beginPath();
+          ctx.moveTo(xPx, dotY + 3);
+          ctx.lineTo(xPx, chartArea.bottom);
+          ctx.stroke();
+          ctx.setLineDash([]);
+          ctx.globalAlpha = 1;
+
+          // Colored outer ring
+          const capR = isHovered ? 6.5 : 4.5;
+          ctx.fillStyle = e.color;
+          ctx.beginPath();
+          ctx.arc(xPx, dotY, capR, 0, Math.PI * 2);
+          ctx.fill();
+          // Inner paper dot (so the marker reads as a ring)
+          ctx.fillStyle = PALETTE.paper;
+          ctx.beginPath();
+          ctx.arc(xPx, dotY, isHovered ? 2.5 : 1.7, 0, Math.PI * 2);
+          ctx.fill();
+        });
+
+        // Hovered label box + connector + date string
+        if (hovered != null && events[hovered]) {
+          const e = events[hovered];
+          const xPx = xs.getPixelForValue(new Date(e.date).getTime());
+          if (xPx >= chartArea.left - 10 && xPx <= chartArea.right + 10) {
+            const titleText = (e.title || '').toUpperCase();
+            ctx.font = "600 11px 'IBM Plex Mono', monospace";
+            const textW = ctx.measureText(titleText).width;
+            const padX = 11;
+            const w = textW + padX * 2;
+            const h = 24;
+            let labelX = xPx - w / 2;
+            if (labelX < chartArea.left) labelX = chartArea.left + 4;
+            if (labelX + w > chartArea.right) labelX = chartArea.right - w - 4;
+            const labelY = dotY - h - 12;
+
+            // Connector from label box down to dot
+            ctx.strokeStyle = e.color;
+            ctx.lineWidth = 1.4;
+            ctx.beginPath();
+            ctx.moveTo(xPx, dotY - 6);
+            ctx.lineTo(xPx, labelY + h);
+            ctx.stroke();
+
+            // Filled box with same-color border
+            ctx.fillStyle = e.color;
+            ctx.strokeStyle = e.color;
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            ctx.rect(labelX, labelY, w, h);
+            ctx.fill();
+            ctx.stroke();
+
+            // Title text
+            ctx.fillStyle = PALETTE.paper;
+            ctx.textBaseline = 'middle';
+            ctx.fillText(titleText, labelX + padX, labelY + h / 2);
+
+            // Date string under the dot
+            ctx.font = "10px 'IBM Plex Mono', monospace";
+            ctx.fillStyle = e.color;
+            const dateStr = new Date(e.date)
+              .toLocaleDateString('en-US', { year: 'numeric', month: 'short' })
+              .toUpperCase();
+            const dateW = ctx.measureText(dateStr).width;
+            let dateX = xPx - dateW / 2;
+            if (dateX < chartArea.left) dateX = chartArea.left + 4;
+            if (dateX + dateW > chartArea.right) dateX = chartArea.right - dateW - 4;
+            ctx.fillText(dateStr, dateX, dotY + 14);
+          }
+        }
+
+        ctx.restore();
+      },
+      afterEvent(chart, args) {
+        const ev = args.event;
+        if (!ev || (ev.type !== 'mousemove' && ev.type !== 'mouseout')) return;
+        const chartArea = chart.chartArea;
+        if (!chartArea) return;
+        const dotY = chartArea.top - 14;
+        const xs = chart.scales.x;
+        let nearest = null;
+        let nearestDist = Infinity;
+        // Hover zone: a horizontal band around the marker row
+        const inZone = ev.type === 'mousemove'
+          && ev.y >= dotY - 18
+          && ev.y <= dotY + 18;
+        if (inZone) {
+          events.forEach((e, i) => {
+            const xPx = xs.getPixelForValue(new Date(e.date).getTime());
+            const d = Math.abs(xPx - ev.x);
+            if (d < nearestDist) { nearestDist = d; nearest = i; }
+          });
+          if (nearestDist > 18) nearest = null;
+        }
+        if (nearest !== chart.$hoveredMarkerIdx) {
+          chart.$hoveredMarkerIdx = nearest;
+          args.changed = true;
+        }
+        if (chart.canvas) {
+          chart.canvas.style.cursor = nearest != null ? 'pointer' : '';
+        }
+      },
+    };
+  }
+
+  // DSEX index. Event markers are rendered above the chart by the
+  // eventMarkers custom plugin, with dashed drop lines + hover labels.
   function dsexConfig(s, events) {
     const dataPts = toPoints(s['dsex_monthly']);
-    const dataMap = {};
-    dataPts.forEach(p => { dataMap[p.x] = p.y; });
-    const eventDots = (events || [])
-      .filter(e => e.color && e.date && dataMap[e.date] != null)
-      .map(e => ({ x: e.date, y: dataMap[e.date], color: e.color, id: e.id }));
-
-    // Line uses ink-2 (dark navy) instead of accent so red/orange event dots
-    // pop against it. Several events use #c8472b which is essentially the same
-    // hue as --accent — they vanish if the line is also accent-colored.
+    const validEvents = (events || []).filter(e => e.color && e.date);
+    const opts = baseLineOptions({ legend: false });
+    opts.layout = { padding: { top: 60 } };
+    // Don't let the index-mode tooltip confuse hover above the data area
+    opts.interaction = { mode: 'index', intersect: false };
     return {
       type: 'line',
       data: {
@@ -422,21 +550,10 @@
             borderColor: PALETTE.accent,
             backgroundColor: 'rgba(11, 18, 32, 0.06)',
             borderWidth: 1.6, pointRadius: 0, tension: 0.25, fill: true },
-          { label: 'Events',
-            data: eventDots,
-            type: 'scatter',
-            backgroundColor: eventDots.map(p => p.color),
-            borderColor: PALETTE.paper,
-            borderWidth: 2,
-            pointRadius: 7,
-            pointHoverRadius: 9,
-            hoverBorderWidth: 2,
-            showLine: false,
-            // Drop shadow approximation: a halo via stroke
-            order: -1 },
         ],
       },
-      options: baseLineOptions({ legend: false }),
+      options: opts,
+      plugins: [makeEventMarkersPlugin(validEvents)],
     };
   }
 
