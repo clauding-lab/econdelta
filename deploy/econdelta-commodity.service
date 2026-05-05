@@ -17,11 +17,15 @@ WorkingDirectory=/home/adnan/econdelta
 EnvironmentFile=/etc/econdelta.env
 ExecStart=/home/adnan/econdelta/.venv/bin/python -m scrapers.commodity_prices
 
-# Resource limits to protect Notifyr and Mission Control on the same VPS
+# Resource limits to protect Notifyr and Mission Control on the same VPS.
+# TasksMax must be >= ~150 because Playwright/Chromium spawns dozens of
+# helper processes (renderer, GPU, network, zygote, utility); a tighter
+# cap silently stalls the network-service spawn and Page.goto hangs to
+# its own timeout. 512 matches the working V2/V3 fetch + parse units.
 MemoryMax=500M
 MemoryHigh=400M
 CPUQuota=50%
-TasksMax=64
+TasksMax=512
 
 # Hardening
 PrivateTmp=true
