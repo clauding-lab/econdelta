@@ -1,13 +1,19 @@
-"""Pure-functions module for seeding macro monthly data.
+"""Seed macro monthly data into Supabase metric_history_monthly and metric_definitions_monthly.
 
-No I/O, no HTTP requests, no os.environ access.
-CLI / upsert path comes in Task 6.
+Pure transform functions are defined first (no I/O). The CLI / upsert path follows.
 """
 from __future__ import annotations
 
+import argparse
+import json
 import logging
+import os
+import sys
 from dataclasses import dataclass, field
 from datetime import date
+from pathlib import Path
+
+import requests
 
 logger = logging.getLogger("seed_macro_monthly")
 
@@ -235,3 +241,135 @@ def build_definitions_rows() -> list[dict]:
     })
 
     return rows
+
+
+# ---------------------------------------------------------------------------
+# Supabase upsert
+# ---------------------------------------------------------------------------
+
+UPSTREAM_URL = "https://macro.thenazmussakib.com/macro_monthly_data.json"
+LOCAL_CACHE = Path(__file__).resolve().parent / "_seed_data" / "macro_monthly_data.json"
+
+_BATCH_SIZE = 500
+_DEFAULT_TIMEOUT = 60
+
+
+class SeedScriptError(Exception):
+    """Raised when the seed script cannot complete."""
+
+
+def _resolve_credentials() -> tuple[str, str]:
+    url = os.environ.get("SUPABASE_URL")
+    key = (
+        os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+        or os.environ.get("SUPABASE_SERVICE_KEY")
+    )
+    if not url or not key:
+        raise SeedScriptError(
+            "SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY (or SUPABASE_SERVICE_KEY) must be set"
+        )
+    return url.rstrip("/"), key
+
+
+def _upsert(
+    *,
+    url: str,
+    key: str,
+    table: str,
+    rows: list[dict],
+    on_conflict: str,
+    session: requests.Session | None = None,
+    timeout: int = _DEFAULT_TIMEOUT,
+) -> int:
+    """Upsert rows in batches via PostgREST. Returns total rows sent.
+
+    Sends `Prefer: resolution=merge-duplicates,return=minimal` so existing
+    (metric_id, as_of) keys are updated rather than rejected.
+    """
+    if not rows:
+        return 0
+    sess = session or requests.Session()
+    headers = {
+        "apikey": key,
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+        "Prefer": "resolution=merge-duplicates,return=minimal",
+    }
+    endpoint = f"{url}/rest/v1/{table}?on_conflict={on_conflict}"
+    sent = 0
+    for i in range(0, len(rows), _BATCH_SIZE):
+        batch = rows[i : i + _BATCH_SIZE]
+        resp = sess.post(endpoint, headers=headers, json=batch, timeout=timeout)
+        if resp.status_code >= 300:
+            raise SeedScriptError(
+                f"upsert {table} failed: HTTP {resp.status_code}: {resp.text[:500]}"
+            )
+        sent += len(batch)
+    return sent
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+
+def _load_payload(refresh: bool) -> dict:
+    if refresh or not LOCAL_CACHE.exists():
+        logger.info("fetching upstream %s", UPSTREAM_URL)
+        resp = requests.get(UPSTREAM_URL, timeout=30)
+        resp.raise_for_status()
+        LOCAL_CACHE.parent.mkdir(parents=True, exist_ok=True)
+        LOCAL_CACHE.write_bytes(resp.content)
+    return json.loads(LOCAL_CACHE.read_text())
+
+
+def main(argv: list[str] | None = None) -> int:
+    p = argparse.ArgumentParser(description=__doc__ or "")
+    p.add_argument("--dry-run", action="store_true",
+                   help="parse + transform; print summary; no Supabase writes")
+    p.add_argument("--refresh", action="store_true",
+                   help="re-fetch upstream JSON before transforming")
+    p.add_argument("--verbose", "-v", action="store_true")
+    args = p.parse_args(argv)
+
+    logging.basicConfig(
+        level=logging.DEBUG if args.verbose else logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+
+    payload = _load_payload(refresh=args.refresh)
+    history_rows = build_history_rows(payload)
+    definition_rows = build_definitions_rows()
+
+    metric_ids = sorted({r["metric_id"] for r in history_rows})
+    dates = [r["as_of"] for r in history_rows]
+    summary = (
+        f"prepared {len(history_rows)} history rows across {len(metric_ids)} metric_ids "
+        f"(oldest={min(dates) if dates else '—'}, latest={max(dates) if dates else '—'}); "
+        f"{len(definition_rows)} definition rows"
+    )
+    logger.info(summary)
+
+    if args.dry_run:
+        logger.info("--dry-run: no writes performed")
+        return 0
+
+    url, key = _resolve_credentials()
+    sent_hist = _upsert(
+        url=url, key=key,
+        table="metric_history_monthly",
+        rows=history_rows,
+        on_conflict="metric_id,as_of",
+    )
+    sent_defs = _upsert(
+        url=url, key=key,
+        table="metric_definitions_monthly",
+        rows=definition_rows,
+        on_conflict="metric_id",
+    )
+    logger.info("upsert ok: %d history rows, %d definition rows", sent_hist, sent_defs)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

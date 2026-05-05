@@ -229,3 +229,109 @@ class TestAgainstRealFixture:
         for r in rows:
             assert r["as_of"].endswith("-01")  # always day-1
             assert len(r["as_of"]) == 10  # YYYY-MM-DD
+
+
+# ---------- upsert helper ----------
+
+from unittest.mock import MagicMock
+
+import requests as _requests
+
+from scripts.seed_macro_monthly import _upsert, SeedScriptError
+
+
+def _ok_session() -> MagicMock:
+    sess = MagicMock(spec=_requests.Session)
+    resp = MagicMock()
+    resp.status_code = 201
+    resp.text = ""
+    sess.post.return_value = resp
+    return sess
+
+
+class TestUpsert:
+    def test_empty_rows_no_call(self):
+        sess = _ok_session()
+        sent = _upsert(url="https://x.supabase.co", key="k",
+                       table="t", rows=[], on_conflict="metric_id,as_of",
+                       session=sess)
+        assert sent == 0
+        sess.post.assert_not_called()
+
+    def test_single_batch_under_limit(self):
+        sess = _ok_session()
+        rows = [{"metric_id": "x", "as_of": "2024-01-01", "value": 1.0,
+                 "source": DEFAULT_SOURCE, "source_as_of": "2024-01-01"}] * 10
+        sent = _upsert(url="https://x.supabase.co", key="k",
+                       table="metric_history_monthly", rows=rows,
+                       on_conflict="metric_id,as_of", session=sess)
+        assert sent == 10
+        assert sess.post.call_count == 1
+        call_args = sess.post.call_args
+        endpoint = call_args[0][0] if call_args[0] else call_args[1].get("url", "")
+        assert "/rest/v1/metric_history_monthly" in endpoint
+        assert "on_conflict=metric_id" in endpoint
+        headers = call_args[1]["headers"]
+        assert headers["apikey"] == "k"
+        assert headers["Authorization"] == "Bearer k"
+        assert "merge-duplicates" in headers["Prefer"]
+        assert "return=minimal" in headers["Prefer"]
+
+    def test_multi_batch(self):
+        sess = _ok_session()
+        rows = [{"metric_id": "x", "as_of": f"2024-{(i % 12) + 1:02d}-01",
+                 "value": float(i), "source": DEFAULT_SOURCE, "source_as_of": "2024-01-01"}
+                for i in range(1200)]
+        sent = _upsert(url="https://x.supabase.co", key="k",
+                       table="t", rows=rows, on_conflict="metric_id,as_of",
+                       session=sess)
+        assert sent == 1200
+        # 500/500/200 = 3 calls
+        assert sess.post.call_count == 3
+
+    def test_non_2xx_raises(self):
+        sess = MagicMock(spec=_requests.Session)
+        resp = MagicMock()
+        resp.status_code = 401
+        resp.text = "unauthorized"
+        sess.post.return_value = resp
+        with pytest.raises(SeedScriptError, match="HTTP 401"):
+            _upsert(url="https://x.supabase.co", key="bad",
+                    table="t",
+                    rows=[{"metric_id": "x", "as_of": "2024-01-01", "value": 1.0,
+                           "source": DEFAULT_SOURCE, "source_as_of": "2024-01-01"}],
+                    on_conflict="metric_id,as_of", session=sess)
+
+
+class TestResolveCredentials:
+    def test_missing_url_raises(self, monkeypatch):
+        from scripts.seed_macro_monthly import _resolve_credentials
+        monkeypatch.delenv("SUPABASE_URL", raising=False)
+        monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "k")
+        with pytest.raises(SeedScriptError):
+            _resolve_credentials()
+
+    def test_missing_key_raises(self, monkeypatch):
+        from scripts.seed_macro_monthly import _resolve_credentials
+        monkeypatch.setenv("SUPABASE_URL", "https://x.supabase.co")
+        monkeypatch.delenv("SUPABASE_SERVICE_ROLE_KEY", raising=False)
+        monkeypatch.delenv("SUPABASE_SERVICE_KEY", raising=False)
+        with pytest.raises(SeedScriptError):
+            _resolve_credentials()
+
+    def test_strips_trailing_slash(self, monkeypatch):
+        from scripts.seed_macro_monthly import _resolve_credentials
+        monkeypatch.setenv("SUPABASE_URL", "https://x.supabase.co/")
+        monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "k")
+        url, key = _resolve_credentials()
+        assert url == "https://x.supabase.co"
+        assert key == "k"
+
+
+class TestMainDryRun:
+    def test_dry_run_against_real_fixture_returns_zero(self, monkeypatch):
+        from scripts.seed_macro_monthly import main
+        # Ensure no Supabase env so a non-dry-run would fail loudly
+        monkeypatch.delenv("SUPABASE_URL", raising=False)
+        rc = main(["--dry-run"])
+        assert rc == 0
