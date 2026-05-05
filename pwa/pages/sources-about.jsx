@@ -269,6 +269,39 @@ function PageSources(){
           </div>
         </section>
       ))}
+
+      <h2 className="sec">External seeds &amp; acknowledgements</h2>
+      <p className="sec-lede">
+        Long-horizon series that EconDelta does not scrape itself. Used as a one-shot historical seed; primary sources will be revisited as the catalog deepens.
+      </p>
+      <div className="src">
+        <div className="head">
+          <div>
+            <div className="name">Macro Observer — Bangladesh long-horizon monthly</div>
+            <div className="url">
+              <a href="https://macro.thenazmussakib.com/" target="_blank" rel="noopener">https://macro.thenazmussakib.com/</a>
+            </div>
+          </div>
+          <div><StatusPill status="ok"/></div>
+        </div>
+        <div className="grid">
+          <div className="field"><div className="k">Author</div><div className="v">Nazmus Sakib</div></div>
+          <div className="field"><div className="k">Underlying sources</div><div className="v">Bangladesh Bank · BBS · DSE</div></div>
+          <div className="field"><div className="k">Cadence</div><div className="v">One-shot seed (Jan 2012 → present)</div></div>
+          <div className="field"><div className="k">Method</div><div className="v">JSON download + KEY_MAP transform</div></div>
+          <div className="field" style={{gridColumn:'1 / -1',borderRight:'none',borderBottom:'none'}}>
+            <div className="k">Used by</div>
+            <div className="v">
+              <span style={{display:'inline-block',padding:'2px 7px',background:'var(--code-bg)',borderRadius:2,marginRight:6,marginBottom:4}}>/macro tab</span>
+              <span style={{display:'inline-block',padding:'2px 7px',background:'var(--code-bg)',borderRadius:2,marginRight:6,marginBottom:4}}>metric_history_monthly</span>
+              <span style={{display:'inline-block',padding:'2px 7px',background:'var(--code-bg)',borderRadius:2,marginRight:6,marginBottom:4}}>metric_definitions_monthly</span>
+            </div>
+          </div>
+        </div>
+        <div className="notes">
+          Seeded into Supabase via <span className="mono">scripts/seed_macro_monthly.py</span> from the public <span className="mono">macro_monthly_data.json</span> payload. 4,665 rows across 29 monthly metric_ids covering January 2012 through May 2026; each row tagged <span className="mono">source = 'macro_observer_seed'</span>. Future EconDelta-native monthly aggregation (computed from daily <span className="mono">metric_history</span>) will append to the same table; the seed becomes purely historical from that point forward.
+        </div>
+      </div>
     </React.Fragment>
   );
 }
