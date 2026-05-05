@@ -1387,8 +1387,8 @@ h2.sec::before{
 .macro-modal {
   background: var(--paper);
   border: 1px solid var(--rule);
-  padding: 28px;
-  max-width: 760px;
+  padding: 32px 36px;
+  max-width: 1180px;
   width: 100%;
   max-height: calc(100vh - 40px);
   overflow-y: auto;
@@ -1437,5 +1437,9 @@ h2.sec::before{
 .macro-kpi-label { font-family: 'IBM Plex Mono', monospace; color: var(--ink-3); }
 .macro-kpi-value { text-align: right; font-weight: 600; color: var(--ink); }
 .macro-kpi-date { text-align: right; color: var(--ink-4); font-size: 0.8rem; font-family: 'IBM Plex Mono', monospace; }
-.macro-modal-charts { display: grid; gap: 16px; }
-@media (min-width: 720px) { .macro-modal-charts { grid-template-columns: 1fr 1fr; } }
+.macro-modal-charts {
+  display: grid;
+  gap: 20px;
+  grid-template-columns: 1fr;
+}
+.macro-modal-charts .macro-card-canvas { height: 360px; }
