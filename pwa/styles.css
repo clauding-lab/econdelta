@@ -1267,48 +1267,51 @@ h2.sec::before{
   color: var(--accent, #c34a1f);
 }
 
-/* /macro tab */
+/* /macro tab — uses EconDelta theme tokens (--paper, --ink-*, --rule, --accent)
+   so light and dark modes inherit correctly. */
 .macro-section { margin: 32px 0; }
 .macro-section-title {
-  font-family: 'IBM Plex Serif', Georgia, serif;
+  font-family: 'IBM Plex Sans', system-ui, sans-serif;
   font-size: 1.25rem;
   font-weight: 600;
   margin: 0 0 16px;
-  color: var(--color-text, #3d342a);
+  color: var(--ink);
 }
 .macro-grid {
   display: grid;
-  gap: 20px;
+  gap: 16px;
   grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
 }
 .macro-card {
-  background: var(--color-card, #fdfaf4);
-  border: 1px solid rgba(80, 60, 40, 0.10);
-  border-radius: 4px;
-  padding: 16px;
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  padding: 18px 20px;
   display: flex;
   flex-direction: column;
+  color: var(--ink);
 }
 .macro-card-head { margin-bottom: 12px; }
 .macro-fig {
   font-family: 'IBM Plex Mono', monospace;
-  font-size: 0.7rem;
-  letter-spacing: 0.06em;
-  color: #c8472b;
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--accent);
   font-weight: 600;
 }
 .macro-card-title {
-  font-family: 'IBM Plex Serif', Georgia, serif;
+  font-family: 'IBM Plex Sans', system-ui, sans-serif;
   font-size: 1.05rem;
   font-weight: 600;
   margin: 4px 0 2px;
+  color: var(--ink);
 }
-.macro-card-sub { font-size: 0.85rem; color: #6b5c4b; }
+.macro-card-sub { font-size: 0.85rem; color: var(--ink-3); }
 .macro-card-latest {
   font-size: 0.95rem;
   margin-top: 6px;
   font-weight: 600;
-  color: #c8472b;
+  color: var(--accent);
 }
 .macro-card-canvas { position: relative; height: 280px; }
 @media (max-width: 720px) { .macro-card-canvas { height: 240px; } }
@@ -1320,30 +1323,47 @@ h2.sec::before{
   margin-top: 16px;
 }
 .macro-event-card {
-  background: var(--color-card, #fdfaf4);
-  border: 1px solid rgba(80, 60, 40, 0.08);
+  background: var(--paper);
+  border: 1px solid var(--rule);
   border-left-width: 4px;
-  border-radius: 3px;
   padding: 12px 14px;
   cursor: pointer;
   text-align: left;
   font: inherit;
+  color: var(--ink);
 }
-.macro-event-card:hover { background: #f8f3e8; }
+.macro-event-card:hover { background: var(--paper-2); }
 .macro-event-cat {
   font-family: 'IBM Plex Mono', monospace;
   font-size: 0.7rem;
   letter-spacing: 0.08em;
-  color: #6b5c4b;
+  text-transform: uppercase;
+  color: var(--ink-3);
 }
-.macro-event-title { font-weight: 600; margin-top: 4px; }
-.macro-event-date { font-size: 0.8rem; color: #8a7a68; margin-top: 2px; }
-.macro-event-sum { font-size: 0.85rem; margin-top: 6px; line-height: 1.35; }
+.macro-event-title {
+  font-weight: 600;
+  margin-top: 4px;
+  color: var(--ink);
+  font-size: 0.95rem;
+  line-height: 1.3;
+}
+.macro-event-date {
+  font-size: 0.78rem;
+  color: var(--ink-4);
+  margin-top: 2px;
+  font-family: 'IBM Plex Mono', monospace;
+}
+.macro-event-sum {
+  font-size: 0.85rem;
+  margin-top: 6px;
+  line-height: 1.4;
+  color: var(--ink-2);
+}
 
 .macro-modal-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(40, 30, 20, 0.55);
+  background: var(--scrim);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1351,14 +1371,15 @@ h2.sec::before{
   padding: 20px;
 }
 .macro-modal {
-  background: var(--color-card, #fdfaf4);
-  border-radius: 6px;
+  background: var(--paper);
+  border: 1px solid var(--rule);
   padding: 28px;
   max-width: 760px;
   width: 100%;
   max-height: calc(100vh - 40px);
   overflow-y: auto;
   position: relative;
+  color: var(--ink);
 }
 .macro-modal-close {
   position: absolute;
@@ -1368,16 +1389,27 @@ h2.sec::before{
   border: none;
   font-size: 1.5rem;
   cursor: pointer;
-  color: #6b5c4b;
+  color: var(--ink-3);
 }
+.macro-modal-close:hover { color: var(--ink); }
 .macro-modal-cat {
   font-family: 'IBM Plex Mono', monospace;
   font-size: 0.7rem;
   letter-spacing: 0.08em;
-  color: #c8472b;
+  text-transform: uppercase;
+  color: var(--accent);
 }
-.macro-modal-title { margin: 4px 0; font-family: 'IBM Plex Serif', Georgia, serif; }
-.macro-modal-date { font-size: 0.9rem; color: #8a7a68; margin-bottom: 16px; }
+.macro-modal-title {
+  margin: 4px 0;
+  font-family: 'IBM Plex Sans', system-ui, sans-serif;
+  color: var(--ink);
+}
+.macro-modal-date {
+  font-size: 0.9rem;
+  color: var(--ink-3);
+  margin-bottom: 16px;
+  font-family: 'IBM Plex Mono', monospace;
+}
 .macro-modal-kpis { display: grid; gap: 6px; margin-bottom: 20px; }
 .macro-kpi-row {
   display: grid;
@@ -1385,10 +1417,11 @@ h2.sec::before{
   gap: 8px;
   font-size: 0.9rem;
   padding: 6px 0;
-  border-bottom: 1px dashed rgba(80, 60, 40, 0.08);
+  border-bottom: 1px dashed var(--rule-soft);
+  color: var(--ink);
 }
-.macro-kpi-label { font-family: 'IBM Plex Mono', monospace; color: #6b5c4b; }
-.macro-kpi-value { text-align: right; font-weight: 600; }
-.macro-kpi-date { text-align: right; color: #8a7a68; font-size: 0.8rem; }
+.macro-kpi-label { font-family: 'IBM Plex Mono', monospace; color: var(--ink-3); }
+.macro-kpi-value { text-align: right; font-weight: 600; color: var(--ink); }
+.macro-kpi-date { text-align: right; color: var(--ink-4); font-size: 0.8rem; font-family: 'IBM Plex Mono', monospace; }
 .macro-modal-charts { display: grid; gap: 16px; }
 @media (min-width: 720px) { .macro-modal-charts { grid-template-columns: 1fr 1fr; } }
