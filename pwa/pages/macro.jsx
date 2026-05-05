@@ -7,6 +7,18 @@
 const { useState: useStateM, useEffect: useEffectM, useRef: useRefM } = React;
 
 // ---------------------------------------------------------------------------
+// Date formatting — display as Mon'YY (e.g. 2026-02-01 → "Feb'26")
+// ---------------------------------------------------------------------------
+
+const MACRO_MONTH_ABBR = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+function formatPeriod(dateStr) {
+  if (!dateStr) return '';
+  const d = new Date(dateStr);
+  if (isNaN(d.getTime())) return dateStr;
+  return MACRO_MONTH_ABBR[d.getUTCMonth()] + "'" + String(d.getUTCFullYear()).slice(2);
+}
+
+// ---------------------------------------------------------------------------
 // Chart.js loader (lazy, idempotent)
 // ---------------------------------------------------------------------------
 
@@ -149,10 +161,12 @@ function EventStrip({ events, onSelect }) {
           style={{ borderLeftColor: e.color }}
           onClick={() => onSelect(e)}
         >
-          <div className="macro-event-cat">{e.category}</div>
+          <div className="macro-event-meta" style={{ color: e.color }}>
+            {formatPeriod(e.date)} · {e.category}
+          </div>
           <div className="macro-event-title">{e.title}</div>
-          <div className="macro-event-date">{e.date}</div>
           <div className="macro-event-sum">{e.summary}</div>
+          <div className="macro-event-cta">READ MORE →</div>
         </button>
       ))}
     </div>
@@ -177,7 +191,9 @@ function EventModal({ event, seriesByMetric, onClose }) {
     <div className="macro-modal-backdrop" onClick={onClose}>
       <div className="macro-modal" onClick={e => e.stopPropagation()}>
         <button className="macro-modal-close" onClick={onClose} aria-label="Close">×</button>
-        <div className="macro-modal-cat">{event.category}</div>
+        <div className="macro-modal-cat" style={{ color: event.color || undefined }}>
+          {formatPeriod(event.date)} · {event.category}
+        </div>
         <h2 className="macro-modal-title">{event.title}</h2>
         <div className="macro-modal-date">{event.date}</div>
 
