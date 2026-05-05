@@ -1266,3 +1266,129 @@ h2.sec::before{
   font-size: 11px;
   color: var(--accent, #c34a1f);
 }
+
+/* /macro tab */
+.macro-section { margin: 32px 0; }
+.macro-section-title {
+  font-family: 'IBM Plex Serif', Georgia, serif;
+  font-size: 1.25rem;
+  font-weight: 600;
+  margin: 0 0 16px;
+  color: var(--color-text, #3d342a);
+}
+.macro-grid {
+  display: grid;
+  gap: 20px;
+  grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+}
+.macro-card {
+  background: var(--color-card, #fdfaf4);
+  border: 1px solid rgba(80, 60, 40, 0.10);
+  border-radius: 4px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+}
+.macro-card-head { margin-bottom: 12px; }
+.macro-fig {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 0.7rem;
+  letter-spacing: 0.06em;
+  color: #c8472b;
+  font-weight: 600;
+}
+.macro-card-title {
+  font-family: 'IBM Plex Serif', Georgia, serif;
+  font-size: 1.05rem;
+  font-weight: 600;
+  margin: 4px 0 2px;
+}
+.macro-card-sub { font-size: 0.85rem; color: #6b5c4b; }
+.macro-card-latest {
+  font-size: 0.95rem;
+  margin-top: 6px;
+  font-weight: 600;
+  color: #c8472b;
+}
+.macro-card-canvas { position: relative; height: 280px; }
+@media (max-width: 720px) { .macro-card-canvas { height: 240px; } }
+
+.macro-events {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  margin-top: 16px;
+}
+.macro-event-card {
+  background: var(--color-card, #fdfaf4);
+  border: 1px solid rgba(80, 60, 40, 0.08);
+  border-left-width: 4px;
+  border-radius: 3px;
+  padding: 12px 14px;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+}
+.macro-event-card:hover { background: #f8f3e8; }
+.macro-event-cat {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 0.7rem;
+  letter-spacing: 0.08em;
+  color: #6b5c4b;
+}
+.macro-event-title { font-weight: 600; margin-top: 4px; }
+.macro-event-date { font-size: 0.8rem; color: #8a7a68; margin-top: 2px; }
+.macro-event-sum { font-size: 0.85rem; margin-top: 6px; line-height: 1.35; }
+
+.macro-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(40, 30, 20, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  padding: 20px;
+}
+.macro-modal {
+  background: var(--color-card, #fdfaf4);
+  border-radius: 6px;
+  padding: 28px;
+  max-width: 760px;
+  width: 100%;
+  max-height: calc(100vh - 40px);
+  overflow-y: auto;
+  position: relative;
+}
+.macro-modal-close {
+  position: absolute;
+  top: 12px;
+  right: 16px;
+  background: none;
+  border: none;
+  font-size: 1.5rem;
+  cursor: pointer;
+  color: #6b5c4b;
+}
+.macro-modal-cat {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 0.7rem;
+  letter-spacing: 0.08em;
+  color: #c8472b;
+}
+.macro-modal-title { margin: 4px 0; font-family: 'IBM Plex Serif', Georgia, serif; }
+.macro-modal-date { font-size: 0.9rem; color: #8a7a68; margin-bottom: 16px; }
+.macro-modal-kpis { display: grid; gap: 6px; margin-bottom: 20px; }
+.macro-kpi-row {
+  display: grid;
+  grid-template-columns: 2fr 1fr 1fr;
+  gap: 8px;
+  font-size: 0.9rem;
+  padding: 6px 0;
+  border-bottom: 1px dashed rgba(80, 60, 40, 0.08);
+}
+.macro-kpi-label { font-family: 'IBM Plex Mono', monospace; color: #6b5c4b; }
+.macro-kpi-value { text-align: right; font-weight: 600; }
+.macro-kpi-date { text-align: right; color: #8a7a68; font-size: 0.8rem; }
+.macro-modal-charts { display: grid; gap: 16px; }
+@media (min-width: 720px) { .macro-modal-charts { grid-template-columns: 1fr 1fr; } }
