@@ -17,11 +17,13 @@ WorkingDirectory=/home/adnan/econdelta
 EnvironmentFile=/etc/econdelta.env
 ExecStart=/home/adnan/econdelta/.venv/bin/python -m aggregate_latest
 
-# Resource limits — aggregator is light
+# Resource limits — aggregator runs claude_max which spawns the claude CLI
+# subprocess + MCP servers; needs more task slots than naive Python work.
+# 512 matches the working V2/V3 fetch + parse units.
 MemoryMax=250M
 MemoryHigh=200M
 CPUQuota=50%
-TasksMax=64
+TasksMax=512
 
 # Hardening
 PrivateTmp=true
