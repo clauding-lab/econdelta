@@ -1,55 +1,66 @@
 // EconDelta /macro tab — events seed.
-// 11 events that map to colored dots on the DSEX chart and to modal cards.
-// Exposed via window.MACRO_EVENTS (no ES modules — PWA uses inline Babel).
+//
+// Structurally matches Macro Observer's events list (titles, dates, tags,
+// summaries) so the analytical narrative reads the same. The Feb'26
+// Bangladesh National Election is added as a project-specific 12th event
+// per Adnan's request.
 //
 // Each event:
 //   id           — stable string id
-//   date         — first day of event month, "YYYY-MM-DD"
-//   category     — short uppercase tag rendered in modal
-//   title        — short headline
-//   summary      — 1-line lede shown on the card
-//   color        — dot color on DSEX chart
+//   date         — first day of event month, "YYYY-MM-DD" (used to position
+//                  marker on x-axis and to look up KPI values)
+//   category     — short uppercase tag rendered above the title
+//   title        — short headline (matches MO's `title` verbatim where applicable)
+//   summary      — 1-line lede shown on the card (matches MO's `blurb`)
+//   color        — dot color on DSEX chart and left-border on event card
 //   kpiMetricIds — 5 metric_ids surfaced as KPI rows in the modal
 
 (function () {
+  // Color tokens borrowed from Macro Observer's chart-annotation EVENTS list:
+  //   #1c5d4e — deep teal-green (expansion / recovery / normalization)
+  //   #c8472b — red/oxblood     (crisis / external shock)
+  //   #b8860b — amber-gold      (infrastructure / inflation)
+  //   #2d4a7c — navy-blue       (policy / political)
+  //   #7a3b6f — plum-purple     (regime change / geopolitics)
+
   window.MACRO_EVENTS = [
     {
-      id: 'jan13_dsex_birth',
-      date: '2013-01-01',
-      category: 'INDEX',
-      title: 'DSEX Index Launches',
-      summary: 'DSE adopts the broad-market DSEX as its primary benchmark.',
-      color: '#3b6ea5',
+      id: 'sep14_stable_growth',
+      date: '2014-09-01',
+      category: 'EXPANSION',
+      title: 'Stable Growth Window',
+      summary: 'GDP growth >6%, inflation moderating, reserves rising.',
+      color: '#1c5d4e',
       kpiMetricIds: [
-        'dsex_monthly',
         'point_to_point_inflation_monthly',
-        'bb_repo_rate_monthly',
         'gross_reserves_usd_bn_monthly',
+        'private_credit_growth_yoy_monthly',
         'usd_bdt_mid_monthly',
+        'dsex_monthly',
       ],
     },
     {
-      id: 'jun18_us_taper',
-      date: '2018-06-01',
-      category: 'EXTERNAL',
-      title: 'US Taper Tantrum · BDT Pressure',
-      summary: 'Fed tightening + import surge drives BDT depreciation.',
-      color: '#c8472b',
+      id: 'jan19_strong_growth',
+      date: '2019-01-01',
+      category: 'EXPANSION',
+      title: 'Strong Growth Continues',
+      summary: 'Real GDP growth crosses 7%, on track for 8% by FY19.',
+      color: '#1c5d4e',
       kpiMetricIds: [
-        'usd_bdt_mid_monthly',
+        'point_to_point_inflation_monthly',
+        'private_credit_growth_yoy_monthly',
         'gross_reserves_usd_bn_monthly',
-        'reer_monthly',
-        'imports_usd_mn_monthly',
-        'remittance_usd_mn_monthly',
+        'usd_bdt_mid_monthly',
+        'dsex_monthly',
       ],
     },
     {
-      id: 'mar20_covid',
-      date: '2020-03-01',
+      id: 'apr20_covid',
+      date: '2020-04-01',
       category: 'CRISIS',
-      title: 'COVID-19 Lockdown',
-      summary: 'Economic shutdown; remittance collapse; fiscal expansion.',
-      color: '#8b1c0e',
+      title: 'COVID-19 Shock',
+      summary: 'Nationwide lockdown March-May 2020. RMG orders collapse.',
+      color: '#c8472b',
       kpiMetricIds: [
         'point_to_point_inflation_monthly',
         'remittance_usd_mn_monthly',
@@ -59,41 +70,26 @@
       ],
     },
     {
-      id: 'aug20_remittance_record',
-      date: '2020-08-01',
-      category: 'EXTERNAL',
-      title: 'Remittance Surge',
-      summary: 'Diaspora flows hit a multi-year peak through formal channels.',
-      color: '#2a8a59',
+      id: 'jul21_reopening_reserves_peak',
+      date: '2021-07-01',
+      category: 'RECOVERY',
+      title: 'Reopening & Reserves Peak',
+      summary: 'FX reserves hit all-time high of $48bn in August 2021.',
+      color: '#1c5d4e',
       kpiMetricIds: [
+        'gross_reserves_usd_bn_monthly',
         'remittance_usd_mn_monthly',
-        'gross_reserves_usd_bn_monthly',
-        'usd_bdt_mid_monthly',
-        'reer_monthly',
-        'dsex_monthly',
-      ],
-    },
-    {
-      id: 'aug21_reserves_peak',
-      date: '2021-08-01',
-      category: 'EXTERNAL',
-      title: 'FX Reserves Peak · $48bn',
-      summary: 'Reserves crest before commodity-import shock begins.',
-      color: '#2a8a59',
-      kpiMetricIds: [
-        'gross_reserves_usd_bn_monthly',
-        'import_cover_months_monthly',
         'imports_usd_mn_monthly',
         'usd_bdt_mid_monthly',
-        'point_to_point_inflation_monthly',
+        'dsex_monthly',
       ],
     },
     {
       id: 'mar22_ukr_war',
       date: '2022-03-01',
       category: 'EXTERNAL',
-      title: 'Russia–Ukraine War · Commodity Shock',
-      summary: 'Energy and food import bills spike; pressure on reserves.',
+      title: 'Russia–Ukraine War & Energy Shock',
+      summary: "Brent crude tops $130. Bangladesh's import bill explodes.",
       color: '#c8472b',
       kpiMetricIds: [
         'imports_usd_mn_monthly',
@@ -104,27 +100,27 @@
       ],
     },
     {
-      id: 'jul22_imf_call',
-      date: '2022-07-01',
-      category: 'POLICY',
-      title: 'IMF Programme Discussions Begin',
-      summary: 'Authorities engage IMF for $4.7B EFF/ECF/RSF support.',
-      color: '#3b6ea5',
+      id: 'aug22_energy_crisis',
+      date: '2022-08-01',
+      category: 'INFRASTRUCTURE',
+      title: 'Energy Crisis & Load-Shedding',
+      summary: 'Daily power outages return. Diesel-fuel rationing imposed.',
+      color: '#b8860b',
       kpiMetricIds: [
-        'gross_reserves_usd_bn_monthly',
-        'import_cover_months_monthly',
-        'usd_bdt_mid_monthly',
         'point_to_point_inflation_monthly',
-        'bb_repo_rate_monthly',
+        'cpi_p2p_food_monthly',
+        'imports_usd_mn_monthly',
+        'gross_reserves_usd_bn_monthly',
+        'usd_bdt_mid_monthly',
       ],
     },
     {
-      id: 'feb23_imf_disburse',
-      date: '2023-02-01',
+      id: 'jan23_imf_approved',
+      date: '2023-01-01',
       category: 'POLICY',
-      title: 'IMF First Disbursement',
-      summary: 'First tranche under the $4.7B programme arrives.',
-      color: '#2a8a59',
+      title: 'IMF Program Approved',
+      summary: '$4.7bn EFF/RSF program approved Jan 30, 2023.',
+      color: '#2d4a7c',
       kpiMetricIds: [
         'gross_reserves_usd_bn_monthly',
         'usd_bdt_mid_monthly',
@@ -134,27 +130,27 @@
       ],
     },
     {
-      id: 'may24_smart_repeal',
+      id: 'may24_crawling_peg',
       date: '2024-05-01',
-      category: 'POLICY',
-      title: 'SMART Lending-Cap Repealed',
-      summary: 'BB shifts to corridor-based monetary policy; repo as anchor.',
-      color: '#3b6ea5',
+      category: 'FX REGIME',
+      title: 'Crawling Peg Adopted',
+      summary: 'BB devalues taka by 6.7% in single move. End of soft peg.',
+      color: '#7a3b6f',
       kpiMetricIds: [
+        'usd_bdt_mid_monthly',
+        'reer_monthly',
         'bb_repo_rate_monthly',
-        'tbill_364d_yield_monthly',
-        'private_credit_growth_yoy_monthly',
-        'm2_growth_yoy_monthly',
+        'gross_reserves_usd_bn_monthly',
         'point_to_point_inflation_monthly',
       ],
     },
     {
-      id: 'aug24_transition',
+      id: 'aug24_political_transition',
       date: '2024-08-01',
-      category: 'POLICY',
+      category: 'GEOPOLITICS',
       title: 'Political Transition',
-      summary: 'Interim administration takes office; reserves stabilise.',
-      color: '#3b6ea5',
+      summary: 'Aug 5: PM Hasina resigns amid student-led protests. Yunus interim govt.',
+      color: '#7a3b6f',
       kpiMetricIds: [
         'gross_reserves_usd_bn_monthly',
         'usd_bdt_mid_monthly',
@@ -164,17 +160,32 @@
       ],
     },
     {
+      id: 'jun25_disinflation',
+      date: '2025-06-01',
+      category: 'INFLATION',
+      title: 'Disinflation Underway',
+      summary: 'P2P inflation falls to 8.5% from 9%+ earlier in 2025.',
+      color: '#b8860b',
+      kpiMetricIds: [
+        'point_to_point_inflation_monthly',
+        'cpi_12m_avg_monthly',
+        'bb_repo_rate_monthly',
+        'usd_bdt_mid_monthly',
+        'private_credit_growth_yoy_monthly',
+      ],
+    },
+    {
       id: 'feb26_normalization',
       date: '2026-02-01',
       category: 'NORMALIZATION',
       title: 'Reserves Rebuild · Macro Stability',
-      summary: 'FX reserves cross $35bn; inflation eases through 9%.',
-      color: '#2a8a59',
+      summary: 'FX reserves cross $35bn. P2P inflation just above 9%.',
+      color: '#1c5d4e',
       kpiMetricIds: [
-        'point_to_point_inflation_monthly',
-        'bb_repo_rate_monthly',
         'gross_reserves_usd_bn_monthly',
+        'point_to_point_inflation_monthly',
         'usd_bdt_mid_monthly',
+        'bb_repo_rate_monthly',
         'dsex_monthly',
       ],
     },
@@ -184,7 +195,7 @@
       category: 'POLITICAL',
       title: 'Bangladesh National Election',
       summary: 'General election following the 2024 transition; Yunus interim govt hands over.',
-      color: '#5a4cb8',
+      color: '#2d4a7c',
       kpiMetricIds: [
         'dsex_monthly',
         'point_to_point_inflation_monthly',
