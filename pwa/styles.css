@@ -1280,7 +1280,7 @@ h2.sec::before{
 .macro-grid {
   display: grid;
   gap: 16px;
-  grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+  grid-template-columns: 1fr;
 }
 .macro-card {
   background: var(--paper);
@@ -1313,7 +1313,7 @@ h2.sec::before{
   font-weight: 600;
   color: var(--accent);
 }
-.macro-card-canvas { position: relative; height: 280px; }
+.macro-card-canvas { position: relative; height: 340px; }
 @media (max-width: 720px) { .macro-card-canvas { height: 240px; } }
 
 .macro-events {
