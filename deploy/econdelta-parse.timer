@@ -1,9 +1,16 @@
 [Unit]
-Description=Run EconDelta Stage 2 parse daily at 23:15 UTC (05:15 BDT next day)
+# Shifted from 23:15 UTC (05:15 BDT) → 22:30 UTC (04:30 BDT) to dodge the
+# 05:00–06:10 BDT window where the claude CLI preflight was returning exit 1
+# with empty stderr (Anthropic edge contention during US-afternoon peak).
+# Tradeoff: parse runs on the prior day's fetched artifacts because fetch.timer
+# still fires at 23:00 UTC; for the morning brief that's acceptable since most
+# metrics (BB WSEI quarterly, NBR fiscal-year-to-date, banking NPL) refresh
+# weekly or slower, and daily indicators are framed as "yesterday's close".
+Description=Run EconDelta Stage 2 parse daily at 22:30 UTC (04:30 BDT next day)
 Requires=econdelta-parse.service
 
 [Timer]
-OnCalendar=*-*-* 23:15:00 UTC
+OnCalendar=*-*-* 22:30:00 UTC
 Persistent=true
 RandomizedDelaySec=120
 

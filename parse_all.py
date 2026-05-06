@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import subprocess
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -113,6 +114,10 @@ def run(*, config_path: Path, data_root: Path, only: str | None = None) -> list[
     return snapshots
 
 
+_PREFLIGHT_MAX_ATTEMPTS = 3
+_PREFLIGHT_BACKOFF_SEC = (5, 15)
+
+
 def _claude_preflight() -> bool:
     """Verify subscription claude CLI is reachable before running hybrid extraction.
 
@@ -121,27 +126,53 @@ def _claude_preflight() -> bool:
     exits 0 and downstream aggregate happily writes a mostly-empty latest.json. By
     failing fast here, systemd marks parse.service failed → parse-retry.timer can
     take over → on-call (or human eyeball) sees the failure.
+
+    Retries up to _PREFLIGHT_MAX_ATTEMPTS times with backoff to absorb transient
+    edge-side blips (e.g. Anthropic API contention during the cron window). Each
+    attempt logs stdout, stderr, exit code, and elapsed time so future failures
+    are diagnosable without SSH'ing the host.
     """
     binary = os.environ.get("CLAUDE_BINARY", "claude")
-    try:
-        result = subprocess.run(
-            # --strict-mcp-config blocks MCP-plugin loading. Without it, any
-            # plugin installed in ~/.claude/plugins/ (e.g. discord-vps-setup
-            # on Hetzner) can hijack stdout and make the CLI exit 1 with empty
-            # stderr. Mirrors the fix in claude_max/max_client.py (e027106).
-            [binary, "--print", "--strict-mcp-config", "--model", "claude-opus-4-6"],
-            input="say ok",
-            capture_output=True,
-            text=True,
-            timeout=60,
-        )
-    except (subprocess.TimeoutExpired, FileNotFoundError) as e:
-        logger.error("claude pre-flight failed: %s", e)
-        return False
-    if result.returncode != 0:
-        logger.error("claude pre-flight exited %d: %s", result.returncode, result.stderr.strip()[:200])
-        return False
-    return True
+    # --strict-mcp-config blocks MCP-plugin loading. Without it, any
+    # plugin installed in ~/.claude/plugins/ (e.g. discord-vps-setup
+    # on Hetzner) can hijack stdout and make the CLI exit 1 with empty
+    # stderr. Mirrors the fix in claude_max/max_client.py (e027106).
+    cmd = [binary, "--print", "--strict-mcp-config", "--model", "claude-opus-4-6"]
+    for attempt in range(1, _PREFLIGHT_MAX_ATTEMPTS + 1):
+        t0 = time.monotonic()
+        try:
+            result = subprocess.run(
+                cmd,
+                input="say ok",
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+        except (subprocess.TimeoutExpired, FileNotFoundError) as e:
+            elapsed = time.monotonic() - t0
+            logger.error(
+                "claude pre-flight attempt %d/%d crashed after %.1fs: %s",
+                attempt, _PREFLIGHT_MAX_ATTEMPTS, elapsed, e,
+            )
+        else:
+            elapsed = time.monotonic() - t0
+            if result.returncode == 0:
+                if attempt > 1:
+                    logger.info(
+                        "claude pre-flight ok on attempt %d/%d (%.1fs)",
+                        attempt, _PREFLIGHT_MAX_ATTEMPTS, elapsed,
+                    )
+                return True
+            logger.error(
+                "claude pre-flight attempt %d/%d exited %d after %.1fs — stdout=%r stderr=%r",
+                attempt, _PREFLIGHT_MAX_ATTEMPTS, result.returncode, elapsed,
+                result.stdout.strip()[:200], result.stderr.strip()[:200],
+            )
+        if attempt < _PREFLIGHT_MAX_ATTEMPTS:
+            backoff = _PREFLIGHT_BACKOFF_SEC[min(attempt - 1, len(_PREFLIGHT_BACKOFF_SEC) - 1)]
+            logger.info("claude pre-flight retry in %ds", backoff)
+            time.sleep(backoff)
+    return False
 
 
 def main() -> int:
