@@ -118,6 +118,32 @@ _PREFLIGHT_MAX_ATTEMPTS = 3
 _PREFLIGHT_BACKOFF_SEC = (5, 15)
 
 
+def _claude_warmup() -> None:
+    """Force claude OAuth token refresh ahead of the strict preflight.
+
+    Systemd-context auto-refresh of claude's cached access_token has been
+    observed to stall while interactive invocations refresh cleanly,
+    leaving the strict preflight to fail with 401. A throwaway --print
+    call without --strict-mcp-config reliably rewrites ~/.claude/.credentials.json,
+    so the strict preflight that follows sees a fresh token. Best-effort:
+    real validation lives in _claude_preflight() — failures are absorbed.
+    """
+    binary = os.environ.get("CLAUDE_BINARY", "claude")
+    t0 = time.monotonic()
+    try:
+        result = subprocess.run(
+            [binary, "--print", "ping"],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    except Exception as e:
+        logger.info("claude warmup skipped: %s", e)
+        return
+    elapsed = time.monotonic() - t0
+    logger.info("claude warmup exit=%d in %.1fs", result.returncode, elapsed)
+
+
 def _claude_preflight() -> bool:
     """Verify subscription claude CLI is reachable before running hybrid extraction.
 
@@ -184,9 +210,11 @@ def main() -> int:
                    help="Skip claude reachability check (for tests / deterministic-only runs)")
     args = p.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
-    if not args.skip_claude_preflight and not _claude_preflight():
-        logger.error("aborting parse run — claude CLI not reachable; aggregate will keep last good latest.json")
-        return 1
+    if not args.skip_claude_preflight:
+        _claude_warmup()
+        if not _claude_preflight():
+            logger.error("aborting parse run — claude CLI not reachable; aggregate will keep last good latest.json")
+            return 1
     snapshots = run(config_path=args.config, data_root=args.data_root, only=args.only)
     by_prov: dict[str, int] = {}
     for s in snapshots:
