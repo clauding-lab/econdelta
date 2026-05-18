@@ -16,6 +16,7 @@ import pytest
 
 from scrapers.bb_forex import (
     ParseError,
+    _is_captcha_page,
     load_previous_snapshot,
     parse_exchange_rates,
     parse_reserves,
@@ -509,3 +510,20 @@ class TestFetchRetry:
                 max_attempts=1,
             )
         m.assert_called_once_with("https://example.com", 12345, "div#x")
+
+
+def test_is_captcha_page_true_for_bb_captcha_fixture():
+    html = (FIXTURES_DIR / "bb_forex_captcha_page.html").read_text(encoding="utf-8")
+    assert _is_captcha_page(html) is True
+
+
+def test_is_captcha_page_false_for_normal_exchange_rates_fixture():
+    # bb_forex_reserves.html already exists in fixtures dir (used by existing reserves tests)
+    html = (FIXTURES_DIR / "bb_forex_reserves.html").read_text(encoding="utf-8")
+    assert _is_captcha_page(html) is False
+
+
+def test_is_captcha_page_false_for_partial_markers():
+    # Has id="ans" alone but missing other markers
+    html = '<html><body><input id="ans" /></body></html>'
+    assert _is_captcha_page(html) is False

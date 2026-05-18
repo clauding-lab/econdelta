@@ -31,6 +31,18 @@ class ParseError(Exception):
     """Raised when page HTML does not match the expected structure."""
 
 
+def _is_captcha_page(html: str) -> bool:
+    """Detect BB's image-CAPTCHA wall.
+
+    BB serves a CAPTCHA challenge to flagged IPs (e.g. data-center addresses
+    like ExonVPS). The wall contains an "answer" input, a "jar" submit button,
+    a thumbnail image to identify, and a "support ID" footer. All four markers
+    must be present — any one alone could be a false positive.
+    """
+    markers = ('id="ans"', 'id="jar"', 'class="thumbnails"', "support ID")
+    return all(m in html for m in markers)
+
+
 def _fetch_once(
     url: str,
     timeout_ms: int,
