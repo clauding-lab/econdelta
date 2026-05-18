@@ -623,3 +623,101 @@ def test_solve_captcha_via_claude_returns_none_on_timeout(tmp_path):
     with patch("scrapers.bb_forex.subprocess.run") as mock_run:
         mock_run.side_effect = subprocess.TimeoutExpired(cmd="claude", timeout=60)
         assert _solve_captcha_via_claude(img) is None
+
+
+# ---------------------------------------------------------------------------
+# _solve_captcha_loop integration tests
+# ---------------------------------------------------------------------------
+#
+# We test the captcha-handling logic in isolation via a fake page object,
+# rather than mocking the full sync_playwright() context. This matches the
+# existing TestFetchRetry pattern (patch at the smallest reasonable boundary).
+#
+# _solve_captcha_loop drives the captcha challenge using a passed-in page:
+# read content, check for captcha markers, extract image, solve, fill #ans,
+# click #jar, wait for navigation, re-check. Up to 3 attempts.
+
+
+class _FakePage:
+    """Minimal sync_playwright Page stub for captcha-loop tests.
+
+    Pages return successive HTML payloads from `content_returns` on each
+    page.content() call. fill/click record their calls for assertion;
+    wait_for_load_state is a no-op.
+    """
+
+    def __init__(self, content_returns: list[str]) -> None:
+        self._content_returns = list(content_returns)
+        self.fill_calls: list[tuple[str, str]] = []
+        self.click_calls: list[str] = []
+        self.wait_for_load_state_calls: list[dict] = []
+
+    def content(self) -> str:
+        if not self._content_returns:
+            # If a test drained the queue, repeat the last response.
+            raise AssertionError("FakePage.content() called more times than queued")
+        return self._content_returns.pop(0)
+
+    def fill(self, selector: str, value: str) -> None:
+        self.fill_calls.append((selector, value))
+
+    def click(self, selector: str) -> None:
+        self.click_calls.append(selector)
+
+    def wait_for_load_state(self, state: str, timeout: int | None = None) -> None:
+        self.wait_for_load_state_calls.append({"state": state, "timeout": timeout})
+
+
+_CAPTCHA_HTML = (FIXTURES_DIR / "bb_forex_captcha_page.html").read_text(encoding="utf-8")
+_RESERVES_HTML = (FIXTURES_DIR / "bb_forex_reserves.html").read_text(encoding="utf-8")
+
+
+def test_solve_captcha_loop_returns_html_when_no_captcha_present():
+    """Happy path — initial HTML is not a captcha page → return immediately, no fills/clicks."""
+    from scrapers.bb_forex import _solve_captcha_loop
+
+    page = _FakePage(content_returns=[])  # content() should not be called
+    result = _solve_captcha_loop(page, _RESERVES_HTML, timeout_ms=60_000)
+
+    assert result == _RESERVES_HTML
+    assert page.fill_calls == []
+    assert page.click_calls == []
+
+
+def test_solve_captcha_loop_clears_captcha_on_first_solve():
+    """First attempt: captcha detected → solver returns 'arrows' → page navigates → re-check shows non-captcha HTML."""
+    from scrapers.bb_forex import _solve_captcha_loop
+
+    # After click+navigation, page.content() returns the real HTML.
+    page = _FakePage(content_returns=[_RESERVES_HTML])
+
+    with patch(
+        "scrapers.bb_forex._solve_captcha_via_claude", return_value="arrows"
+    ) as mock_solve:
+        result = _solve_captcha_loop(page, _CAPTCHA_HTML, timeout_ms=60_000)
+
+    assert result == _RESERVES_HTML
+    assert mock_solve.call_count == 1
+    assert page.fill_calls == [("#ans", "arrows")]
+    assert page.click_calls == ["#jar"]
+    # wait_for_load_state was called after click
+    assert len(page.wait_for_load_state_calls) == 1
+    assert page.wait_for_load_state_calls[0]["state"] == "domcontentloaded"
+
+
+def test_solve_captcha_loop_raises_after_3_failed_attempts():
+    """Every re-check returns captcha HTML → ParseError after 3 attempts; solver called 3x."""
+    from scrapers.bb_forex import _solve_captcha_loop
+
+    # Each iteration re-reads page.content() after submit. All return captcha HTML.
+    page = _FakePage(content_returns=[_CAPTCHA_HTML, _CAPTCHA_HTML, _CAPTCHA_HTML])
+
+    with patch(
+        "scrapers.bb_forex._solve_captcha_via_claude", return_value="wrong"
+    ) as mock_solve:
+        with pytest.raises(ParseError, match="captcha solve failed after 3 attempts"):
+            _solve_captcha_loop(page, _CAPTCHA_HTML, timeout_ms=60_000)
+
+    assert mock_solve.call_count == 3
+    assert page.fill_calls == [("#ans", "wrong")] * 3
+    assert page.click_calls == ["#jar"] * 3
