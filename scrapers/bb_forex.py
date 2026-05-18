@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import os
+import re
 import sys
 import time
 from datetime import date, datetime, timezone
@@ -41,6 +43,43 @@ def _is_captcha_page(html: str) -> bool:
     """
     markers = ('id="ans"', 'id="jar"', 'class="thumbnails"', "support ID")
     return all(m in html for m in markers)
+
+
+# BB renders the challenge image as either:
+#   <img ... class="thumbnails" ... src="data:image/png;base64,...">  (plan order)
+#   <img ... src="data:image/png;base64,..." ... class="thumbnails">  (live fixture order)
+# We accept both orderings, anchored on class="thumbnails" so we don't
+# accidentally match the unrelated red-dot / audio-icon images on the page.
+_CAPTCHA_IMG_RE = re.compile(
+    r'<img[^>]+(?:'
+    r'class="thumbnails"[^>]+src="data:image/png;base64,([^"]+)"'
+    r'|'
+    r'src="data:image/png;base64,([^"]+)"[^>]+class="thumbnails"'
+    r')',
+    re.IGNORECASE,
+)
+
+
+def _extract_captcha_image(html: str, dest_path: Path) -> None:
+    """Extract the base64-encoded captcha PNG from BB's captcha-wall HTML.
+
+    BB embeds the challenge image as a data URI on an <img class="thumbnails">
+    tag. We decode and write atomically (tmp + rename), mirroring the
+    write_snapshot() pattern in this module.
+    """
+    m = _CAPTCHA_IMG_RE.search(html)
+    if m is None:
+        raise ParseError("no captcha image found in captcha-page HTML")
+    b64 = m.group(1) or m.group(2)
+    try:
+        png_bytes = base64.b64decode(b64)
+    except Exception as e:
+        raise ParseError(f"failed to decode captcha image base64: {e}") from e
+
+    dest_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = dest_path.with_suffix(dest_path.suffix + ".tmp")
+    tmp_path.write_bytes(png_bytes)
+    os.replace(tmp_path, dest_path)
 
 
 def _fetch_once(

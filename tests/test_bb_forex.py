@@ -16,6 +16,7 @@ import pytest
 
 from scrapers.bb_forex import (
     ParseError,
+    _extract_captcha_image,
     _is_captcha_page,
     load_previous_snapshot,
     parse_exchange_rates,
@@ -527,3 +528,22 @@ def test_is_captcha_page_false_for_partial_markers():
     # Has id="ans" alone but missing other markers
     html = '<html><body><input id="ans" /></body></html>'
     assert _is_captcha_page(html) is False
+
+
+def test_extract_captcha_image_writes_decoded_png(tmp_path):
+    html = (FIXTURES_DIR / "bb_forex_captcha_page.html").read_text(encoding="utf-8")
+    dest = tmp_path / "captcha.png"
+    _extract_captcha_image(html, dest)
+    assert dest.exists()
+    assert dest.stat().st_size > 100
+    # PNG magic bytes
+    assert dest.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
+    # Byte-identical to the saved fixture
+    expected = (FIXTURES_DIR / "bb_forex_captcha.png").read_bytes()
+    assert dest.read_bytes() == expected
+
+
+def test_extract_captcha_image_raises_when_no_thumbnail(tmp_path):
+    dest = tmp_path / "x.png"
+    with pytest.raises(ParseError, match="no captcha image"):
+        _extract_captcha_image("<html><body>nothing</body></html>", dest)
