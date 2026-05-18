@@ -118,6 +118,7 @@ def _solve_captcha_via_claude(image_path: Path) -> str | None:
         "--permission-mode", "bypassPermissions",
         prompt_with_image,
     ]
+    t0 = time.monotonic()
     try:
         result = subprocess.run(
             argv,
@@ -127,8 +128,16 @@ def _solve_captcha_via_claude(image_path: Path) -> str | None:
         )
     except (subprocess.TimeoutExpired, FileNotFoundError):
         return None
+    elapsed = time.monotonic() - t0
 
     if result.returncode != 0:
+        # Mirror parse_all._claude_preflight's log shape so first-failure
+        # diagnostics on ExonVPS don't require SSHing to read journal.
+        logger.warning(
+            "captcha solver exited %d after %.1fs — stdout=%r stderr=%r",
+            result.returncode, elapsed,
+            result.stdout.strip()[:200], result.stderr.strip()[:200],
+        )
         return None
 
     raw = result.stdout.strip().lower()

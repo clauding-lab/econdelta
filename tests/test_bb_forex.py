@@ -7,6 +7,7 @@ Fixtures in tests/fixtures/ provide representative HTML snapshots.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import subprocess
 from datetime import date, datetime, timezone
@@ -623,6 +624,24 @@ def test_solve_captcha_via_claude_returns_none_on_timeout(tmp_path):
     with patch("scrapers.bb_forex.subprocess.run") as mock_run:
         mock_run.side_effect = subprocess.TimeoutExpired(cmd="claude", timeout=60)
         assert _solve_captcha_via_claude(img) is None
+
+
+def test_solve_captcha_via_claude_logs_stderr_and_elapsed_on_nonzero_exit(tmp_path, caplog):
+    img = tmp_path / "x.png"
+    img.write_bytes(b"\x89PNG\r\n\x1a\n" + b"dummy")
+    with patch("scrapers.bb_forex.subprocess.run") as mock_run:
+        mp = MagicMock()
+        mp.stdout = ""
+        mp.stderr = "claude: model claude-haiku-4-5 not available\n"
+        mp.returncode = 1
+        mock_run.return_value = mp
+        with caplog.at_level(logging.WARNING, logger="bb_forex"):
+            assert _solve_captcha_via_claude(img) is None
+    # Must log the stderr snippet so first-failure diagnostics don't require SSH
+    record_text = " ".join(r.getMessage() for r in caplog.records)
+    assert "not available" in record_text
+    # Must log elapsed time (seconds)
+    assert "elapsed" in record_text.lower() or "s)" in record_text or "after" in record_text.lower()
 
 
 # ---------------------------------------------------------------------------
