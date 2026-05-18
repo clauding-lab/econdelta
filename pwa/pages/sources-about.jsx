@@ -55,7 +55,7 @@ const UPSTREAMS = [
     url: 'data/raw/* (from fetch)',
     method: 'parsers/* + claude_max',
     renders: 'Hybrid: deterministic parsers first, LLM fallback (Claude) for needs_review',
-    cadence: '05:16 BDT daily (+ 05:55 BDT retry)',
+    cadence: '10:30 BDT daily (+ 11:55 BDT retry)',
     tos: 'n/a — local processing',
     selector: '7 parser families: pdf_component, dam_ticker, html_footer_ticker, gsom_ticker, hybrid, etc.',
     fields: ['ParseResult per indicator: {metric_id, value, source_as_of, confidence, status}'],
@@ -67,7 +67,7 @@ const UPSTREAMS = [
     url: 'data/parsed/* + Opus review',
     method: 'utils/supabase_writer + Opus 4.6 review gate',
     renders: 'aggregate_latest.py main() → wrap_run',
-    cadence: '05:20 BDT daily (+ 06:10 BDT retry)',
+    cadence: '13:00 BDT daily (+ 14:00 BDT retry)',
     tos: 'n/a',
     selector: 'metric_history upsert + metric_definitions seed (idempotent ON CONFLICT)',
     fields: ['ALL — writes flat rows to metric_history and seeds metric_definitions catalog'],
@@ -325,7 +325,7 @@ function PageAbout(){
       <div className="cards">
         <div className="card">
           <div className="h">Backend · Python on ExonVPS</div>
-          <div className="body">Six systemd units (fetch / bb_forex / commodity / dse / parse / aggregate) staggered between 05:00 and 05:20 BDT daily. Operating from a BD-located VPS (Exonhost BDIX, <span className="mono">103.187.23.22</span>) — bypasses BB+DSE foreign-IP firewalls.</div>
+          <div className="body">Six systemd units running from 05:00 to 14:00 BDT daily — morning scrape cascade (fetch / bb_forex / commodity / dse) 05:00–05:11, mid-day Claude-extraction parse (10:30 + 11:55 retry), afternoon aggregate (13:00 + 14:00 retry). Operating from a BD-located VPS (Exonhost BDIX, <span className="mono">103.187.23.22</span>) — bypasses BB+DSE foreign-IP firewalls.</div>
         </div>
         <div className="card">
           <div className="h">Data · Supabase Postgres</div>
@@ -341,16 +341,24 @@ function PageAbout(){
       <pre style={{fontFamily:'IBM Plex Mono, monospace',fontSize:11.5,background:'var(--code-bg)',color:'var(--code-ink)',border:'1px solid var(--ink)',borderLeft:'3px solid var(--accent)',padding:18,whiteSpace:'pre',overflowX:'auto'}}>
 {`                    systemd timers (ExonVPS · BDIX-Dhaka)
                                   │
-        ┌───────────┬─────────────┼─────────────┬───────────┐
-        ▼           ▼             ▼             ▼           ▼
-     fetch     bb_forex     commodity        dse        parse
-   05:00 BDT   05:05 BDT    05:08 BDT    05:11 BDT   05:16 BDT
-   (60+ urls)  (Playwright) (yfinance)   (requests)  (parsers + Claude)
-        │           │             │             │           │
-        └───────────┴─────────────┼─────────────┴───────────┘
+                                  │  morning scrape cascade
+        ┌───────────┬─────────────┼─────────────┐
+        ▼           ▼             ▼             ▼
+     fetch     bb_forex     commodity        dse
+   05:00 BDT   05:05 BDT    05:08 BDT    05:11 BDT
+   (60+ urls)  (Playwright) (yfinance)   (requests)
+        │           │             │             │
+        └───────────┴─────────────┴─────────────┘
+                                  │
+                                  ▼
+                       parse_all.py (Stage 2 — Claude extraction)
+                          10:30 BDT (+ 11:55 retry)
+                          ├ claude --print --strict-mcp-config
+                          └ 60+ ParseResult rows → data/parsed/*
+                                  │
                                   ▼
                         aggregate_latest.py
-                          05:20 BDT (+ 06:10 retry)
+                          13:00 BDT (+ 14:00 retry)
                           ├ Opus review gate (4.6)
                           ├ wrap_run → run_logs row
                           ├ upsert_metric_definitions_seed (60+ rows, idempotent)
