@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 from datetime import date, datetime, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -18,6 +19,7 @@ from scrapers.bb_forex import (
     ParseError,
     _extract_captcha_image,
     _is_captcha_page,
+    _solve_captcha_via_claude,
     load_previous_snapshot,
     parse_exchange_rates,
     parse_reserves,
@@ -547,3 +549,77 @@ def test_extract_captcha_image_raises_when_no_thumbnail(tmp_path):
     dest = tmp_path / "x.png"
     with pytest.raises(ParseError, match="no captcha image"):
         _extract_captcha_image("<html><body>nothing</body></html>", dest)
+
+
+def _mock_completed_process(stdout: str, returncode: int = 0) -> MagicMock:
+    p = MagicMock()
+    p.stdout = stdout
+    p.stderr = ""
+    p.returncode = returncode
+    return p
+
+
+def test_solve_captcha_via_claude_returns_lowercase_word(tmp_path):
+    img = tmp_path / "x.png"
+    img.write_bytes(b"\x89PNG\r\n\x1a\n" + b"dummy")
+    with patch("scrapers.bb_forex.subprocess.run") as mock_run:
+        mock_run.return_value = _mock_completed_process("Bottle\n")
+        result = _solve_captcha_via_claude(img)
+    assert result == "bottle"
+    # confirm claude was invoked with the image attached
+    argv = mock_run.call_args[0][0]
+    assert "--print" in argv
+    assert "--model" in argv
+    assert any("claude-haiku" in a for a in argv)
+    # @<path> must appear inside one of the argv elements (the prompt string)
+    assert any(f"@{img}" in a for a in argv)
+
+
+def test_solve_captcha_via_claude_strips_trailing_punctuation(tmp_path):
+    img = tmp_path / "x.png"
+    img.write_bytes(b"\x89PNG\r\n\x1a\n" + b"dummy")
+    with patch("scrapers.bb_forex.subprocess.run") as mock_run:
+        mock_run.return_value = _mock_completed_process("arrows.\n")
+        assert _solve_captcha_via_claude(img) == "arrows"
+
+
+def test_solve_captcha_via_claude_returns_first_word_only(tmp_path):
+    img = tmp_path / "x.png"
+    img.write_bytes(b"\x89PNG\r\n\x1a\n" + b"dummy")
+    with patch("scrapers.bb_forex.subprocess.run") as mock_run:
+        mock_run.return_value = _mock_completed_process("a red apple")
+        result = _solve_captcha_via_claude(img)
+    # Take first word, strip junk
+    assert result == "a"
+
+
+def test_solve_captcha_via_claude_returns_none_on_empty_output(tmp_path):
+    img = tmp_path / "x.png"
+    img.write_bytes(b"\x89PNG\r\n\x1a\n" + b"dummy")
+    with patch("scrapers.bb_forex.subprocess.run") as mock_run:
+        mock_run.return_value = _mock_completed_process("\n")
+        assert _solve_captcha_via_claude(img) is None
+
+
+def test_solve_captcha_via_claude_returns_none_on_too_long(tmp_path):
+    img = tmp_path / "x.png"
+    img.write_bytes(b"\x89PNG\r\n\x1a\n" + b"dummy")
+    with patch("scrapers.bb_forex.subprocess.run") as mock_run:
+        mock_run.return_value = _mock_completed_process("a" * 31)
+        assert _solve_captcha_via_claude(img) is None
+
+
+def test_solve_captcha_via_claude_returns_none_on_nonzero_exit(tmp_path):
+    img = tmp_path / "x.png"
+    img.write_bytes(b"\x89PNG\r\n\x1a\n" + b"dummy")
+    with patch("scrapers.bb_forex.subprocess.run") as mock_run:
+        mock_run.return_value = _mock_completed_process("error", returncode=1)
+        assert _solve_captcha_via_claude(img) is None
+
+
+def test_solve_captcha_via_claude_returns_none_on_timeout(tmp_path):
+    img = tmp_path / "x.png"
+    img.write_bytes(b"\x89PNG\r\n\x1a\n" + b"dummy")
+    with patch("scrapers.bb_forex.subprocess.run") as mock_run:
+        mock_run.side_effect = subprocess.TimeoutExpired(cmd="claude", timeout=60)
+        assert _solve_captcha_via_claude(img) is None

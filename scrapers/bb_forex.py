@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import re
+import subprocess
 import sys
 import time
 from datetime import date, datetime, timezone
@@ -80,6 +81,63 @@ def _extract_captcha_image(html: str, dest_path: Path) -> None:
     tmp_path = dest_path.with_suffix(dest_path.suffix + ".tmp")
     tmp_path.write_bytes(png_bytes)
     os.replace(tmp_path, dest_path)
+
+
+_CAPTCHA_SOLVE_TIMEOUT_S = 60
+_CAPTCHA_SOLVE_MAX_ANSWER_LEN = 30
+_CAPTCHA_SOLVE_PROMPT = (
+    "What single common object is shown in this image? "
+    "Examples of valid answers: 'bottle', 'arrows', 'dot', 'apple'. "
+    "Reply with ONLY a single English lowercase common noun, no other text."
+)
+
+
+def _solve_captcha_via_claude(image_path: Path) -> str | None:
+    """Identify the object in a BB captcha image via Claude vision.
+
+    Returns the predicted single-word answer (lowercase, no punctuation), or
+    None on any failure (timeout, non-zero exit, empty output, over-long
+    output). Caller wraps with retry.
+
+    Uses `claude -p` with the image attached via @filepath syntax —
+    Claude Code's prompt-side file reference triggers vision-mode
+    attachment. Model is claude-haiku-4-5 (cheapest multimodal, sufficient
+    for the simple object-identification task BB asks).
+
+    Auth via CLAUDE_CODE_OAUTH_TOKEN env var (set in /etc/econdelta.env).
+    """
+    binary = os.environ.get("CLAUDE_BINARY", "claude")
+    prompt_with_image = f"{_CAPTCHA_SOLVE_PROMPT}\n\n@{image_path}"
+    argv = [
+        binary, "--print", "--strict-mcp-config",
+        "--model", "claude-haiku-4-5",
+        "--no-session-persistence",
+        "--tools", "",
+        "--permission-mode", "bypassPermissions",
+        prompt_with_image,
+    ]
+    try:
+        result = subprocess.run(
+            argv,
+            capture_output=True,
+            text=True,
+            timeout=_CAPTCHA_SOLVE_TIMEOUT_S,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return None
+
+    if result.returncode != 0:
+        return None
+
+    raw = result.stdout.strip().lower()
+    if not raw:
+        return None
+
+    first_word = raw.split()[0].rstrip(".,!?;:'\"")
+    if not first_word or len(first_word) > _CAPTCHA_SOLVE_MAX_ANSWER_LEN:
+        return None
+
+    return first_word
 
 
 def _fetch_once(
