@@ -740,3 +740,36 @@ def test_solve_captcha_loop_raises_after_3_failed_attempts():
     assert mock_solve.call_count == 3
     assert page.fill_calls == [("#ans", "wrong")] * 3
     assert page.click_calls == ["#jar"] * 3
+
+
+def test_solve_captcha_loop_propagates_extract_failure_without_retry():
+    """_extract_captcha_image raising inside the loop bypasses the 3-attempt
+    counter and propagates to the outer fetch_rendered_html retry layer.
+
+    This pins the current behaviour: when the page is still recognised as
+    a captcha wall (all four markers present) but the embedded image data
+    URI is malformed (e.g. BB changes its src encoding), ParseError
+    propagates immediately rather than silently consuming the 3-attempt
+    budget. fetch_rendered_html's outer retry layer catches it and
+    re-launches the browser.
+
+    We corrupt the data URI prefix so the four captcha markers stay
+    intact (so _is_captcha_page returns True and the loop enters), but
+    _CAPTCHA_IMG_RE cannot find a match.
+    """
+    from scrapers.bb_forex import _solve_captcha_loop
+
+    captcha_html = (FIXTURES_DIR / "bb_forex_captcha_page.html").read_text(encoding="utf-8")
+    # Break the data URI so the image regex fails to match, but leave all
+    # four captcha markers intact so _is_captcha_page still returns True.
+    broken_html = captcha_html.replace("data:image/png;base64,", "data:broken,")
+    page = _FakePage(content_returns=[])  # not consulted — extract fails before any submit
+
+    with patch("scrapers.bb_forex._solve_captcha_via_claude") as mock_solve:
+        with pytest.raises(ParseError, match="no captcha image"):
+            _solve_captcha_loop(page, broken_html, timeout_ms=30000)
+    # Solver should never be called when extraction fails
+    assert mock_solve.call_count == 0
+    # No fill/click attempts
+    assert page.fill_calls == []
+    assert page.click_calls == []
