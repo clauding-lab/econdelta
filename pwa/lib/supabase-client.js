@@ -12,10 +12,15 @@
 //   bundle.sources_status — {source: {status, last_success, ...}}
 //   bundle.updated_at    — ISO timestamp
 //   tickers              — [{key, group, label, unit, val, delta, spark, fmt}, ...]
-//   series               — {metric_id: [v0, v1, ..., v89]} 90-day arrays (null gaps)
-//   days                 — [{date, dt, trading}, ...] 90-day calendar
-//   history              — raw metric_history rows (90-day window)
+//   series               — {metric_id: [v0, v1, ..., v(N-1)]} N-day arrays (null gaps)
+//   days                 — [{date, dt, trading}, ...] N-day calendar
+//   history              — raw metric_history rows (N-day window)
 //   runs                 — {source: [{date, startedAt, finishedAt, durationMs, status, error}]}
+//
+// N = RUN_WINDOW_DAYS (currently 60). Adjust here and the dashboard label in
+// pwa/pages/runs.jsx stays in lockstep via the same constant.
+
+const RUN_WINDOW_DAYS = 60;
 
 (function(){
   const cfg = window.ED_SUPABASE_CONFIG;
@@ -130,26 +135,26 @@
     if(!dashRes.ok) throw new Error(`RPC ${dashRes.status}: ${await dashRes.text()}`);
     const dashboard = await dashRes.json();
 
-    // Direct REST: 90-day metric_history.
-    const since = new Date(Date.now() - 90*24*3600*1000).toISOString().slice(0,10);
+    // Direct REST: N-day metric_history.
+    const since = new Date(Date.now() - RUN_WINDOW_DAYS*24*3600*1000).toISOString().slice(0,10);
     const histRes = await fetch(
       `${cfg.url}/rest/v1/metric_history?as_of=gte.${since}&select=metric_id,value,as_of&order=as_of.asc&limit=20000`,
       { headers: HEADERS }
     );
     const history = histRes.ok ? await histRes.json() : [];
 
-    // Direct REST: 90-day run_logs.
-    const sinceTs = new Date(Date.now() - 90*24*3600*1000).toISOString();
+    // Direct REST: N-day run_logs.
+    const sinceTs = new Date(Date.now() - RUN_WINDOW_DAYS*24*3600*1000).toISOString();
     const runsRes = await fetch(
       `${cfg.url}/rest/v1/run_logs?started_at=gte.${sinceTs}&select=*&order=started_at.asc&limit=10000`,
       { headers: HEADERS }
     );
     const runRows = runsRes.ok ? await runsRes.json() : [];
 
-    // Build 90-day calendar.
+    // Build N-day calendar.
     const today = new Date();
     const days = [];
-    for (let i = 89; i >= 0; i--) {
+    for (let i = RUN_WINDOW_DAYS - 1; i >= 0; i--) {
       const d = new Date(today.getTime() - i * 24 * 3600 * 1000);
       days.push({
         date: d.toISOString().slice(0, 10),
@@ -166,7 +171,7 @@
       histByMetric[r.metric_id][r.as_of] = r.value;
     });
 
-    // Build per-metric 90-day series (null where missing).
+    // Build per-metric N-day series (null where missing).
     const series = {};
     Object.keys(histByMetric).forEach(metric_id => {
       series[metric_id] = dayKeys.map(d => histByMetric[metric_id][d] ?? null);
@@ -205,7 +210,7 @@
           delta = pctChange(todayVal, priorVal);
         }
 
-        // Sparkline: last 30 of the 90-day series. For DSE indices, mask non-trading days.
+        // Sparkline: last 30 of the N-day series. For DSE indices, mask non-trading days.
         let spark = null;
         if (arr && arr.length >= 5) {
           const last30 = arr.slice(-30);

@@ -1,9 +1,10 @@
 // EconDelta — mock data generator
-// Realistic shape matching the repo's schemas, 90 days of history.
+// Realistic shape matching the repo's schemas, N days of history.
+// Keep DAYS in sync with RUN_WINDOW_DAYS in pwa/lib/supabase-client.js.
 
 (function(){
   const TODAY = new Date('2026-05-02T10:35:00Z');
-  const DAYS = 90;
+  const DAYS = 60;
 
   // Seeded PRNG for stable mock data
   let _seed = 42;

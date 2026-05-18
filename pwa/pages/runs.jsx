@@ -4,13 +4,14 @@ const { useState: useStateR } = React;
 
 // Per-source cadence label shown next to the commit graph.
 // Add a row when a new scraper lands.
+// Keep in sync with the systemd timer OnCalendar values on ExonVPS.
 const CADENCES = {
   fetch:            '05:00 BDT daily',
   bb_forex:         '05:05 BDT daily (+ 06:00 retry)',
   commodity_prices: '05:08 BDT daily',
   dse_market:       '05:11 BDT trading days',
-  parse:            '05:16 BDT daily (+ 05:55 retry)',
-  aggregate:        '05:20 BDT daily (+ 06:10 retry)',
+  parse:            '10:30 BDT daily (+ 11:55 retry)',
+  aggregate:        '13:00 BDT daily (+ 14:00 retry)',
 };
 
 function PageRuns(){
@@ -45,7 +46,7 @@ function PageRuns(){
     <React.Fragment>
       <PageHead kicker="Pipeline · operational health" title="Run dashboard"
         meta={<React.Fragment>
-          <div><b>window</b>&nbsp;&nbsp; last 90 days</div>
+          <div><b>window</b>&nbsp;&nbsp; last 60 days</div>
           <div><b>sources</b>&nbsp; {allSources.length} instrumented</div>
           <div><b>alerting</b>&nbsp; Discord webhook</div>
         </React.Fragment>}
@@ -157,7 +158,7 @@ function SourceRunGraph({ srcKey, runs, filter, onSelect }){
       <div className="topline">
         <div className="nm">{SOURCE_LABELS[srcKey] || srcKey}</div>
         <div className="stats">
-          <span>last 90d &nbsp; <b>{ok}</b>/{total} ok</span>
+          <span>last 60d &nbsp; <b>{ok}</b>/{total} ok</span>
           &nbsp;·&nbsp; cadence {cadence}
         </div>
       </div>
