@@ -113,7 +113,7 @@ const RUN_WINDOW_DAYS = 60;
     {
       key: 'Government Finance',
       lede: 'NBR collections and revenue performance.',
-      metrics: ['nbr_fytd_collected_dailystar', 'nbr_customs_collected_cr', 'nbr_vat_collected_cr', 'nbr_it_collected_cr'],
+      metrics: ['nbr_fytd_collected_cr', 'nbr_customs_collected_cr', 'nbr_vat_collected_cr', 'nbr_it_collected_cr'],
     },
     {
       key: 'External Sector',

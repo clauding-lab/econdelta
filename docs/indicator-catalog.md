@@ -6,7 +6,7 @@
 python3 scripts/build_catalog.py > docs/indicator-catalog.md
 ```
 
-**68** scraped indicators × **35** brief aliases × **12** unit conversions × **2** derived = **117** total entries.
+**66** scraped indicators × **36** brief aliases × **12** unit conversions × **2** derived = **116** total entries.
 
 Read the data contract for column semantics and query examples: [`data-contract.md`](data-contract.md).
 
@@ -38,8 +38,8 @@ Read the data contract for column semantics and query examples: [`data-contract.
 | commodities (brief alias) | `food_onion_local_bdt` | `rate` | daily | DAM | [20.0, 400.0] | Alias of `food_onion_local` — Retail price — Local onion (BDT/kg) |
 | commodities (brief alias) | `food_rice_coarse_bdt` | `rate` | daily | DAM | [20.0, 200.0] | Alias of `food_rice_coarse` — Retail price — Aman coarse rice (BDT/kg) |
 | commodities (brief alias) | `food_sugar_local_bdt` | `rate` | daily | DAM | [50.0, 250.0] | Alias of `food_sugar_local` — Retail price — Sugar local (BDT/kg) |
-| derived (cross-source) | `nbr_fytd_collected_cr` | `amount_bdt_crore` | monthly | — | — | NBR fiscal-year-to-date collection — confirmed mean of TBS and Daily Star sources when within 5% tolerance, else the larger figure. |
-| derived (cross-source) | `nbr_fytd_cross_check` | `string` | monthly | — | — | Cross-check status for nbr_fytd_collected_cr: 'confirmed', 'mismatch_X.X%', 'tbs_only', or 'dailystar_only'. Strings only land in latest.json — NOT in metric_history (writer filters strings). |
+| derived (cross-source) | `nbr_fytd_collected_cr` | `amount_bdt_crore` | monthly | — | — | NBR fiscal-year-to-date collection — sourced canonically from tax_revenue (BB PDF, deterministic parse, 5% anomaly threshold). News corroborators (TBS, Daily Star) retired 2026-05-25. |
+| derived (cross-source) | `nbr_fytd_cross_check` | `string` | monthly | — | — | Cross-check status for nbr_fytd_collected_cr — now always 'single_source_tax_revenue' since the news corroborator path was retired 2026-05-25. Strings only land in latest.json — NOT in metric_history (writer filters strings). |
 | equities | `dse_sector_heat` | `sector_dict` | daily | DSE | [-50.0, 50.0] | DSE Sector Heat (8 sectors, % avg) |
 | external_sector | `bop_summary` | `amount_usd_bn` | monthly | BB | [-20.0, 20.0] | BOP Summary |
 | external_sector | `categorywise_export` | `amount_usd_bn` | fiscal_year | BB | [0.0, 60.0] | Categorywise Export |
@@ -64,8 +64,6 @@ Read the data contract for column semantics and query examples: [`data-contract.
 | government_finance | `domestic_borrowing_for_budget_deficit` | `amount_bdt_crore` | monthly | BB | [0.0, 400000.0] | Domestic Borrowing for Budget Deficit |
 | government_finance | `foreign_borrowing_for_budget_deficit` | `amount_bdt_crore` | monthly | BB | [0.0, 200000.0] | Foreign Borrowing for Budget Deficit |
 | government_finance | `nbr_customs_collected_cr` | `amount_bdt_crore` | monthly | TBS | [10000.0, 800000.0] | NBR FYTD Customs Collection (BDT crore) |
-| government_finance | `nbr_fytd_collected_dailystar` | `amount_bdt_crore` | monthly | Daily Star | [50000.0, 1000000.0] | NBR FYTD Collection — Daily Star (BDT crore) |
-| government_finance | `nbr_fytd_collected_tbs` | `amount_bdt_crore` | monthly | TBS | [50000.0, 1000000.0] | NBR FYTD Collection — TBS (BDT crore) |
 | government_finance | `nbr_it_collected_cr` | `amount_bdt_crore` | monthly | TBS | [10000.0, 800000.0] | NBR FYTD Income Tax Collection (BDT crore) |
 | government_finance | `nbr_vat_collected_cr` | `amount_bdt_crore` | monthly | TBS | [10000.0, 800000.0] | NBR FYTD VAT Collection (BDT crore) |
 | government_finance | `non_bank_borrowing_for_deficit_financing` | `amount_bdt_crore` | monthly | BB | [0.0, 200000.0] | Non-bank borrowing for Deficit Financing |
@@ -74,6 +72,7 @@ Read the data contract for column semantics and query examples: [`data-contract.
 | government_finance | `tax_gdp_ratio` | `percent` | quarterly |  | [0.0, 30.0] | Tax-GDP Ratio |
 | government_finance | `tax_revenue` | `amount_bdt_crore` | monthly | BB | [0.0, 500000.0] | Tax Revenue |
 | government_finance | `total_revenue_budget_vs_actual` | `amount_bdt_crore` | monthly |  | [0.0, 600000.0] | Total Revenue Budget vs Actual |
+| government_finance (brief alias) | `nbr_fytd_collected_cr` | `amount_bdt_crore` | monthly | BB | [0.0, 500000.0] | Alias of `tax_revenue` — Tax Revenue |
 | government_finance (brief conversion) | `fiscal_bank_borrow_trn` | `amount_bdt_crore` | monthly | BB | — | Conversion of `bank_borrowing_for_deficit_financing` × 1e-05 — Bank Borrowing for Deficit Financing |
 | government_finance (brief conversion) | `fiscal_foreign_borrow_trn` | `amount_bdt_crore` | monthly | BB | — | Conversion of `foreign_borrowing_for_budget_deficit` × 1e-05 — Foreign Borrowing for Budget Deficit |
 | government_finance (brief conversion) | `fiscal_govt_borrow_trn` | `amount_bdt_crore` | monthly | BB | — | Conversion of `domestic_borrowing_for_budget_deficit` × 1e-05 — Domestic Borrowing for Budget Deficit |
