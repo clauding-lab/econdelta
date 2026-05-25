@@ -389,6 +389,12 @@ BRIEF_ALIASES: dict[str, str] = {
     "macro_credit_growth": "private_sector_credit_yoy_pct",
     # remittance — bn→mn unit conversion is in BRIEF_CONVERSIONS below.
     # fiscal — crore→trillion conversions are in BRIEF_CONVERSIONS below.
+    # NBR FYTD canonical: tax_revenue from the BB PDF (deterministic parse,
+    # 5% anomaly threshold). News corroborators (nbr_fytd_collected_tbs,
+    # nbr_fytd_collected_dailystar) retired 2026-05-25 — both tag-listing
+    # pages drifted onto articles covering different fiscal-year windows,
+    # so the cross-check flapped.
+    "nbr_fytd_collected_cr":    "tax_revenue",
     # banking primitives
     "banking_broad_money":      "broad_money",
     "banking_reserve_money":    "reserve_money",
@@ -455,11 +461,6 @@ BRIEF_CONVERSIONS: dict[str, tuple[str, float]] = {
     "nbr_customs_bn":   ("nbr_customs_collected_cr", 0.01),
 }
 
-# NBR cross-check tolerance (relative). TBS and Daily Star independently
-# report NBR FYTD collection; a >5% gap is treated as a mismatch (likely a
-# transcription error or stale article in one source).
-NBR_CROSS_CHECK_TOLERANCE = 0.05
-
 
 def _flatten_dict_indicators(data: dict) -> None:
     """Explode dict-shaped indicator values into per-key numeric entries.
@@ -482,10 +483,9 @@ def _flatten_dict_indicators(data: dict) -> None:
 
 
 def _apply_brief_aliases(data: dict) -> None:
-    """Mutate `data` in place: surface EconDelta keys under brief-key names,
-    apply unit conversions, and run the NBR cross-check between TBS and
-    Daily Star sources. Idempotent: if a brief_key already exists it's left
-    untouched (so a hand-set value upstream wins).
+    """Mutate `data` in place: surface EconDelta keys under brief-key names
+    and apply unit conversions. Idempotent: if a brief_key already exists
+    it's left untouched (so a hand-set value upstream wins).
     """
     _flatten_dict_indicators(data)
 
@@ -499,30 +499,8 @@ def _apply_brief_aliases(data: dict) -> None:
             if isinstance(v, (int, float)):
                 data[brief_key] = round(v * mult, 2)
 
-    nbr_tbs = data.get("nbr_fytd_collected_tbs")
-    nbr_ds = data.get("nbr_fytd_collected_dailystar")
-    if "nbr_fytd_collected_cr" in data:
-        return
-    if isinstance(nbr_tbs, (int, float)) and isinstance(nbr_ds, (int, float)):
-        delta = abs(nbr_tbs - nbr_ds) / max(nbr_tbs, nbr_ds)
-        if delta <= NBR_CROSS_CHECK_TOLERANCE:
-            data["nbr_fytd_collected_cr"] = round((nbr_tbs + nbr_ds) / 2, 2)
-            data["nbr_fytd_cross_check"] = "confirmed"
-        else:
-            # Cumulative collection only grows during a fiscal year; the
-            # larger number is more likely to be the later-month report.
-            data["nbr_fytd_collected_cr"] = max(nbr_tbs, nbr_ds)
-            data["nbr_fytd_cross_check"] = f"mismatch_{delta:.2%}"
-            logger.warning(
-                "NBR cross-check mismatch: TBS=%s DS=%s delta=%.2f%%",
-                nbr_tbs, nbr_ds, delta * 100,
-            )
-    elif isinstance(nbr_tbs, (int, float)):
-        data["nbr_fytd_collected_cr"] = nbr_tbs
-        data["nbr_fytd_cross_check"] = "tbs_only"
-    elif isinstance(nbr_ds, (int, float)):
-        data["nbr_fytd_collected_cr"] = nbr_ds
-        data["nbr_fytd_cross_check"] = "dailystar_only"
+    if "nbr_fytd_collected_cr" in data and "nbr_fytd_cross_check" not in data:
+        data["nbr_fytd_cross_check"] = "single_source_tax_revenue"
 
 
 def _titleize(metric_id: str) -> str:

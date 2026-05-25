@@ -965,52 +965,6 @@
       "anomaly_threshold": 0.20
     },
     {
-      "id": "nbr_fytd_collected_tbs",
-      "name": "NBR FYTD Collection — TBS (BDT crore)",
-      "domain": "government_finance",
-      "cadence": "monthly",
-      "fetch": {
-        "type": "html",
-        "url": "https://www.tbsnews.net/nbr",
-        "task": "Latest reported NBR fiscal-year-to-date total revenue collection in BDT crore.",
-        "discover": "latest_article_link",
-        "article_pattern": "/nbr/[^\"]*(revenue|collect|target|shortfall)"
-      },
-      "parse": {
-        "deterministic": "html_footer_ticker",
-        "llm_prompt": "nbr_news_extract.txt",
-        "value_type": "amount_bdt_crore",
-        "valid_range": [
-          50000.0,
-          1000000.0
-        ]
-      },
-      "anomaly_threshold": 0.30
-    },
-    {
-      "id": "nbr_fytd_collected_dailystar",
-      "name": "NBR FYTD Collection — Daily Star (BDT crore)",
-      "domain": "government_finance",
-      "cadence": "monthly",
-      "fetch": {
-        "type": "html",
-        "url": "https://www.thedailystar.net/tags/nbr",
-        "task": "Latest reported NBR fiscal-year-to-date total revenue collection in BDT crore.",
-        "discover": "latest_article_link",
-        "article_pattern": "/business/[^\"]*nbr[^\"]*(revenue|collect|target|shortfall|miss)"
-      },
-      "parse": {
-        "deterministic": "html_footer_ticker",
-        "llm_prompt": "nbr_news_extract.txt",
-        "value_type": "amount_bdt_crore",
-        "valid_range": [
-          50000.0,
-          1000000.0
-        ]
-      },
-      "anomaly_threshold": 0.30
-    },
-    {
       "id": "nbr_vat_collected_cr",
       "name": "NBR FYTD VAT Collection (BDT crore)",
       "domain": "government_finance",

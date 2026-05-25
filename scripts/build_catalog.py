@@ -48,16 +48,18 @@ DERIVED_KEYS: list[tuple[str, str, str, str]] = [
         "nbr_fytd_collected_cr",
         "amount_bdt_crore",
         "monthly",
-        "NBR fiscal-year-to-date collection — confirmed mean of TBS and "
-        "Daily Star sources when within 5% tolerance, else the larger figure.",
+        "NBR fiscal-year-to-date collection — sourced canonically from "
+        "tax_revenue (BB PDF, deterministic parse, 5% anomaly threshold). "
+        "News corroborators (TBS, Daily Star) retired 2026-05-25.",
     ),
     (
         "nbr_fytd_cross_check",
         "string",
         "monthly",
-        "Cross-check status for nbr_fytd_collected_cr: 'confirmed', "
-        "'mismatch_X.X%', 'tbs_only', or 'dailystar_only'. Strings only "
-        "land in latest.json — NOT in metric_history (writer filters strings).",
+        "Cross-check status for nbr_fytd_collected_cr — now always "
+        "'single_source_tax_revenue' since the news corroborator path was "
+        "retired 2026-05-25. Strings only land in latest.json — NOT in "
+        "metric_history (writer filters strings).",
     ),
 ]
 

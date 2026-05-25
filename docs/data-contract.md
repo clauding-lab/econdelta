@@ -174,8 +174,8 @@ Browse-by-section:
   `domestic_borrowing_for_budget_deficit`,
   `foreign_borrowing_for_budget_deficit`,
   `bank_borrowing_for_deficit_financing`, `nsc_outstanding`, plus
-  brief-aliased `fiscal_*`, plus `nbr_fytd_collected_tbs`,
-  `nbr_fytd_collected_dailystar`, derived `nbr_fytd_collected_cr`
+  brief-aliased `fiscal_*` and `nbr_fytd_collected_cr` (canonical from
+  `tax_revenue` since the news corroborators were retired 2026-05-25)
 - **External sector** — `bop_summary`, `categorywise_export`,
   `categorywise_fy_import_breakdown`, `monthly_remittance`,
   `fy_remittance`, `remittance_by_country`, plus brief-aliased
