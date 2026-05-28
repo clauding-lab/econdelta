@@ -217,6 +217,77 @@ def test_dse_sector_heat_flatten_noop_when_indicator_absent():
     assert all(not k.startswith("dse_sector_heat_") for k in data)
 
 
+def test_call_money_rate_flattens_to_per_tenor_keys_and_promotes_1d():
+    """``call_money_rate`` parser emits dict[tenor, rate] for 4 tenors
+    (1D/7D/14D/90D); aggregate splits it into 4 numeric keys so Supabase
+    metric_history persists each, AND promotes the 1D (overnight) rate to
+    the scalar ``call_money_rate`` itself. BB convention: "call money
+    rate" without modifier means overnight. The promotion makes the
+    existing ``banking_call_money_rate`` brief alias actually work."""
+    data = {
+        "call_money_rate": {"1D": 9.50, "7D": 9.75, "14D": 10.10, "90D": 10.50},
+    }
+    _apply_brief_aliases(data)
+    # 4 per-tenor scalars
+    assert data["call_money_rate_1d"] == 9.50
+    assert data["call_money_rate_7d"] == 9.75
+    assert data["call_money_rate_14d"] == 10.10
+    assert data["call_money_rate_90d"] == 10.50
+    # 1D promoted to the headline scalar — dict replaced
+    assert data["call_money_rate"] == 9.50
+    # Brief alias bridges the headline scalar via BRIEF_ALIASES
+    assert data["banking_call_money_rate"] == 9.50
+
+
+def test_call_money_rate_flatten_idempotent_per_tenor():
+    """If a per-tenor key was hand-set upstream (e.g. by a future direct
+    parser), the flatten step leaves it alone."""
+    data = {
+        "call_money_rate": {"1D": 9.50, "7D": 9.75, "14D": 10.10, "90D": 10.50},
+        "call_money_rate_1d": 8.00,  # pre-set
+    }
+    _apply_brief_aliases(data)
+    assert data["call_money_rate_1d"] == 8.00  # untouched
+    assert data["call_money_rate_7d"] == 9.75
+    assert data["call_money_rate_14d"] == 10.10
+    assert data["call_money_rate_90d"] == 10.50
+
+
+def test_call_money_rate_flatten_skips_non_numeric_tenor():
+    """Defensive: a malformed tenor entry (string, None) is dropped, the
+    other tenors still flatten and the 1D promotion still runs."""
+    data = {
+        "call_money_rate": {"1D": 9.50, "7D": "n/a", "14D": None, "90D": 10.50},
+    }
+    _apply_brief_aliases(data)
+    assert data["call_money_rate_1d"] == 9.50
+    assert data["call_money_rate_90d"] == 10.50
+    assert "call_money_rate_7d" not in data
+    assert "call_money_rate_14d" not in data
+    # 1D still promoted
+    assert data["call_money_rate"] == 9.50
+
+
+def test_call_money_rate_already_scalar_is_left_untouched():
+    """If a future direct PDF scraper writes ``call_money_rate`` as a
+    scalar directly, the flatten step is a no-op (isinstance dict check
+    short-circuits) — the upstream value wins."""
+    data = {"call_money_rate": 9.50}
+    _apply_brief_aliases(data)
+    assert data["call_money_rate"] == 9.50
+    # No per-tenor keys minted
+    assert all(not k.startswith("call_money_rate_") for k in data)
+    # Brief alias still bridges the scalar
+    assert data["banking_call_money_rate"] == 9.50
+
+
+def test_call_money_rate_flatten_noop_when_indicator_absent():
+    data = {"some_other_key": 1.0}
+    _apply_brief_aliases(data)
+    assert "call_money_rate" not in data
+    assert all(not k.startswith("call_money_rate_") for k in data)
+
+
 def test_multi_tenor_yield_aliases_feed_yield_curve():
     """Phase 2.3 V5: brief's §07 builder reads tbond_tbill_{182,364}d and
     tbond_bond_{5y,10y}; EconDelta scrapes them as tbill_182d_yield etc.
