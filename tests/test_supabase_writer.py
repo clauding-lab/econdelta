@@ -142,3 +142,36 @@ def test_upsert_batches_large_payloads():
     )
     assert n == 1200
     assert sess.post.call_count == 3
+
+
+# ---------------------------------------------------------------------------
+# Observability — silent drops now warn (regression guard for PR #31 class).
+# ---------------------------------------------------------------------------
+
+def test_rows_from_data_scalar_does_not_warn(caplog):
+    """Scalar values build a row and produce no warning — keep the happy path quiet."""
+    with caplog.at_level("WARNING", logger="supabase_writer"):
+        rows = _rows_from_data({"foo": 1.0}, date(2026, 5, 2), "EconDelta")
+    assert len(rows) == 1
+    assert rows[0]["metric_id"] == "foo"
+    assert not [r for r in caplog.records if r.levelname == "WARNING"]
+
+
+def test_rows_from_data_dict_triggers_warning(caplog):
+    """A dict value is dropped (no row built) and logs a warning naming the metric_id and type."""
+    with caplog.at_level("WARNING", logger="supabase_writer"):
+        rows = _rows_from_data({"foo": {"a": 1.0}}, date(2026, 5, 2), "EconDelta")
+    assert rows == []
+    warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert len(warnings) == 1
+    msg = warnings[0].getMessage()
+    assert "metric_id=foo" in msg
+    assert "type=dict" in msg
+
+
+def test_rows_from_data_bool_stays_silent(caplog):
+    """Booleans are filtered without a warning — pre-existing behavior, by design."""
+    with caplog.at_level("WARNING", logger="supabase_writer"):
+        rows = _rows_from_data({"foo": True}, date(2026, 5, 2), "EconDelta")
+    assert rows == []
+    assert not [r for r in caplog.records if r.levelname == "WARNING"]

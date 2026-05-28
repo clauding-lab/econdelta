@@ -95,6 +95,18 @@ def _rows_from_data(
                 "value": value,
                 "source": source,
             })
+        else:
+            # Non-scalar shapes (dict, list, str, None, ...) are silently
+            # dropped here by design — but the silent part is the bug.
+            # PR #31 traced months of zero rows for ``call_money_rate`` to a
+            # dict-shaped parser output landing in this exact branch. Warn so
+            # the next shape mismatch surfaces on the first fire, not in a
+            # weekly review. A flattener is the proper fix when one is wired
+            # in ``aggregate_latest._flatten_dict_indicators``.
+            logger.warning(
+                "supabase_writer: dropping non-scalar value for metric_id=%s (type=%s)",
+                metric_id, type(value).__name__,
+            )
     return rows
 
 
