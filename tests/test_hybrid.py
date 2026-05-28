@@ -11,14 +11,14 @@ def _ticker_artifact(tmp_path):
     p = tmp_path / "x.html"
     p.write_text("<html><body>Policy Rate 10.0%</body></html>")
     return FetchResult(
-        indicator_id="policy_rate_slf_sdf", artifact_path=p, artifact_type="html",
+        indicator_id="policy_rate_repo", artifact_path=p, artifact_type="html",
         fetched_at=datetime.now(timezone.utc), source_url="x", sha256="x"*64, cache_hit=False,
     )
 
 
 def test_deterministic_path_emits_value_when_sonnet_agrees(tmp_path):
     indicator = {
-        "id": "policy_rate_slf_sdf", "name": "Policy Rate", "domain": "money_market",
+        "id": "policy_rate_repo", "name": "Policy Rate", "domain": "money_market",
         "cadence": "daily",
         "fetch": {"task": "Policy Rate"},
         "parse": {"deterministic": "html_footer_ticker", "value_type": "percent",

@@ -593,30 +593,70 @@
       }
     },
     {
-      "id": "policy_rate_slf_sdf",
-      "name": "Policy Rate, SLF, SDF",
+      "id": "policy_rate_repo",
+      "name": "Policy Rate (Repo)",
       "domain": "money_market",
-      "cadence": "daily",
+      "cadence": "monthly",
       "fetch": {
-        "type": "html",
-        "url": "https://www.bb.org.bd/en/",
-        "task": "last end of the webpage"
+        "type": "pdf",
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
+        "task": "page=10 col=Policy rate (repo)",
+        "discover": "latest_pdf_link"
       },
       "parse": {
-        "deterministic": "html_footer_ticker",
-        "llm_prompt": "html_footer_ticker.txt",
+        "deterministic": "pdf_table_column_latest",
+        "llm_prompt": "pdf_table_column_latest.txt",
         "value_type": "percent",
         "valid_range": [
-          0.5,
-          25.0
+          3.0,
+          15.0
         ]
       },
-      "anomaly_threshold": 1.0,
-      "alternate": {
-        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
+      "anomaly_threshold": 0.5
+    },
+    {
+      "id": "policy_rate_sdf",
+      "name": "Policy Rate Corridor — SDF (floor)",
+      "domain": "money_market",
+      "cadence": "monthly",
+      "fetch": {
         "type": "pdf",
-        "task": "Go to page 7 of the doc, first table"
-      }
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
+        "task": "page=10 col=SDF rate",
+        "discover": "latest_pdf_link"
+      },
+      "parse": {
+        "deterministic": "pdf_table_column_latest",
+        "llm_prompt": "pdf_table_column_latest.txt",
+        "value_type": "percent",
+        "valid_range": [
+          3.0,
+          12.0
+        ]
+      },
+      "anomaly_threshold": 0.5
+    },
+    {
+      "id": "policy_rate_slf",
+      "name": "Policy Rate Corridor — SLF (ceiling)",
+      "domain": "money_market",
+      "cadence": "monthly",
+      "fetch": {
+        "type": "pdf",
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
+        "task": "page=10 col=SLF rate",
+        "discover": "latest_pdf_link"
+      },
+      "parse": {
+        "deterministic": "pdf_table_column_latest",
+        "llm_prompt": "pdf_table_column_latest.txt",
+        "value_type": "percent",
+        "valid_range": [
+          4.0,
+          16.0
+        ]
+      },
+      "anomaly_threshold": 0.5
     },
     {
       "id": "call_money_rate",

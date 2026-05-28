@@ -20,7 +20,7 @@ def fixture_artifact(tmp_path: Path) -> FetchResult:
     p = tmp_path / "page.html"
     p.write_text(_HTML)
     return FetchResult(
-        indicator_id="policy_rate_slf_sdf",
+        indicator_id="policy_rate_repo",
         artifact_path=p,
         artifact_type="html",
         fetched_at=datetime.now(timezone.utc),

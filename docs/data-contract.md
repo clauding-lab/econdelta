@@ -160,7 +160,9 @@ Browse-by-section:
 - **Inflation / macro** — `general_inflation`, `food_inflation`,
   `non_food_inflation`, `private_sector_credit`, plus brief-aliased
   `macro_cpi_headline`, `macro_cpi_food`, `macro_credit_growth`
-- **Money market** — `policy_rate_slf_sdf`, `call_money_rate`,
+- **Money market** — `policy_rate_repo`, `policy_rate_slf`,
+  `policy_rate_sdf` (3-line corridor from BB MEI bulletin, monthly),
+  `call_money_rate`,
   `treasury_bill_outstanding` (BDT mn), `treasury_bond_outstanding` (BDT mn),
   `bill_bond_rates` (= 91-day T-Bill yield), `gsec_auction`, plus
   brief-aliased `tbill_outstanding_cr`, `tbond_outstanding_cr`,
@@ -199,7 +201,7 @@ Each indicator has an expected refresh cadence declared in
 
 | Cadence | Fresh-by threshold | Example |
 |---------|-------------------|---------|
-| `daily` | 24 hours | `usd_bdt_*`, `policy_rate_slf_sdf`, food prices |
+| `daily` | 24 hours | `usd_bdt_*`, food prices |
 | `weekly` | 8 days (192h) | `fx_reserve_gross_and_bpm6` |
 | `monthly` | 35 days (840h) | `general_inflation`, `monthly_remittance` |
 | `quarterly` | 100 days (2400h) | `banking_npl_pct`, `banking_car_pct` |
