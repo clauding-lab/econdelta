@@ -430,7 +430,7 @@ def test_aggregator_emits_v3_domains_and_freshness(
                 "version": "3.0",
                 "indicators": [
                     {
-                        "id": "policy_rate_slf_sdf",
+                        "id": "policy_rate_repo",
                         "name": "Policy Rate",
                         "domain": "money_market",
                         "cadence": "daily",
@@ -447,11 +447,11 @@ def test_aggregator_emits_v3_domains_and_freshness(
             }
         )
     )
-    (tmp_path / "data" / "policy_rate_slf_sdf").mkdir()
-    (tmp_path / "data" / "policy_rate_slf_sdf" / "2026-04-30.json").write_text(
+    (tmp_path / "data" / "policy_rate_repo").mkdir()
+    (tmp_path / "data" / "policy_rate_repo" / "2026-04-30.json").write_text(
         json.dumps(
             {
-                "indicator_id": "policy_rate_slf_sdf",
+                "indicator_id": "policy_rate_repo",
                 "name": "Policy Rate",
                 "domain": "money_market",
                 "cadence": "daily",
@@ -470,8 +470,8 @@ def test_aggregator_emits_v3_domains_and_freshness(
     assert bundle["schema_version"] == "3.0"
     assert "domains" in bundle
     assert "money_market" in bundle["domains"]
-    assert "policy_rate_slf_sdf" in bundle["domains"]["money_market"]
-    assert bundle["data"]["policy_rate_slf_sdf"] == 10.0  # also flat in data
+    assert "policy_rate_repo" in bundle["domains"]["money_market"]
+    assert bundle["data"]["policy_rate_repo"] == 10.0  # also flat in data
     assert bundle["freshness"]["indicators_total"] == 1
     assert bundle["freshness"]["indicators_fresh"] == 1
 

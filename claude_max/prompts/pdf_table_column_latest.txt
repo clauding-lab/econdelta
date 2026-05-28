@@ -1,0 +1,30 @@
+You are extracting an economic indicator from a Bangladesh Bank PDF.
+
+Indicator: {indicator_name}
+Instruction: {instruction}
+Value type: {value_type}
+Valid range: {valid_range}
+
+The instruction has the form `page=<N> col=<column-header-text>`. Locate the
+table on page N. Find the column whose header text matches the requested label
+(treat whitespace and case loosely — multi-line headers like "Policy rate\n(repo)"
+should match "Policy rate (repo)"). Return the value in the most recent month's
+row of that column.
+
+Skip footer rows that begin with "Source:" or "Note:" and group-label rows
+("FY25", "FY26", etc.) that aren't a month. The latest data row is whichever
+month-named row appears last in the table.
+
+Numbers may use commas (1,234,567 = 1234567). Strip commas and return a single
+number.
+
+<<<PDF_TEXT>>>
+{pdf_text}
+<<<END>>>
+
+RULES:
+- If you locate a candidate number matching the instruction, RETURN IT as `value`. Never put a number inside `reason` while leaving value=null — commit to the best-fit number.
+- Only return value=null when the data is genuinely absent from the provided text (empty extract, table truncated before the data, content is a CAPTCHA/bot-challenge page).
+- Reply ONLY with strict JSON of the form:
+
+{{"value": <number-or-null>, "reason": "<1 sentence on where you found it OR why it is missing>"}}

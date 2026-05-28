@@ -6,7 +6,7 @@
 python3 scripts/build_catalog.py > docs/indicator-catalog.md
 ```
 
-**66** scraped indicators × **36** brief aliases × **12** unit conversions × **2** derived = **116** total entries.
+**68** scraped indicators × **36** brief aliases × **12** unit conversions × **2** derived = **118** total entries.
 
 Read the data contract for column semantics and query examples: [`data-contract.md`](data-contract.md).
 
@@ -111,7 +111,9 @@ Read the data contract for column semantics and query examples: [`data-contract.
 | money_market | `gross_npl_ratio` | `percent` | quarterly | BB | [0.0, 50.0] | Gross NPL Ratio (Banking Sector) |
 | money_market | `gsec_auction` | `amount_bdt_crore` | daily | BB | [0.0, 50000.0] | Next GSEC Auction Notional |
 | money_market | `interbank_repo_data` | `amount_bdt_crore` | daily | BB | [0.0, 100000.0] | Interbank Repo Data |
-| money_market | `policy_rate_slf_sdf` | `percent` | daily | BB | [0.5, 25.0] | Policy Rate, SLF, SDF |
+| money_market | `policy_rate_repo` | `percent` | monthly | BB | [3.0, 15.0] | Policy Rate (Repo) |
+| money_market | `policy_rate_sdf` | `percent` | monthly | BB | [3.0, 12.0] | Policy Rate Corridor — SDF (floor) |
+| money_market | `policy_rate_slf` | `percent` | monthly | BB | [4.0, 16.0] | Policy Rate Corridor — SLF (ceiling) |
 | money_market | `tbill_182d_yield` | `percent` | daily | BB | [0.0, 25.0] | 182-Day T-Bill Cut-Off Yield |
 | money_market | `tbill_364d_yield` | `percent` | daily | BB | [0.0, 25.0] | 364-Day T-Bill Cut-Off Yield |
 | money_market | `tbond_10y_yield` | `percent` | weekly | BB | [0.0, 25.0] | 10-Year BGTB Cut-Off Yield |
