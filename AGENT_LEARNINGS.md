@@ -37,6 +37,20 @@ When something ships broken, when a methodology gap is exposed, or when a smoke 
 
 ## Entries (most recent first)
 
+## 2026-05-28 — A warn-on-X observability rule needs an allow-list of routine non-X
+
+**Trigger:** Multi-agent review of PR #33 (`logger.warning` at the writer's non-scalar drop branch) caught that the warning would fire on every successful aggregate run.
+
+**What went wrong:** PR #33's stated purpose was "surface the next PR #31-class silent drop on day 1". The implementation added an unconditional `logger.warning` at the non-scalar branch of `_rows_from_data`. But the `data` dict reaching the writer routinely carries four by-design non-numeric keys: `reserves_date` (str), `trading_day` (str), `nbr_fytd_cross_check` (str), and `commodity_change_pct` (dict). The warning would fire on each of them every aggregate run — multiple identical warnings per day, indefinitely — which would desensitize the operator to the very signal the warning was trying to create.
+
+**Lesson:** When adding a "warn on shape X" observability rule, first audit the codebase for routine, by-design occurrences of shape X. If any exist, build an allow-list before shipping the warning. Otherwise the warning becomes the noise it's trying to detect, and the next real bug lands inside a stream of identical false positives.
+
+**Prevention:** Before adding any `logger.warning` at a filter boundary, grep the upstream call sites for assignments to the filtered structure (in this case, `grep -nE 'data\["[a-z_]+"\]\s*=\s*[^0-9a-z_.]' aggregate_latest.py`). For each routine non-numeric assignment found, either (a) move it out of the filtered dict, or (b) add the key to an allow-list and skip silently.
+
+**Hotfix:** PR #33 (`77a36b7`) — added `_KNOWN_NON_HISTORY_KEYS` frozenset checked before the warning. Tests cover `str` warns, `None` warns, allow-list silent, and allow-list silent even with unexpected shape.
+
+**Cross-references:** PR #33 (`77a36b7`), PR #32 (`958a00e`) — Entry 4 caveat documents the allow-list requirement.
+
 ## 2026-05-28 — BB MEI bulletin page numbering shifts edition-to-edition
 
 **Trigger:** Investigating where corridor rates (Repo / SDF / SLF) live in the BB Monthly Economic Indicators (MEI) bulletin PDF, for PR #30.
