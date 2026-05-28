@@ -471,6 +471,16 @@ def _flatten_dict_indicators(data: dict) -> None:
     so each lands in Supabase and the brief can read them via the standard
     history path. Idempotent: per-sector keys already in `data` are left
     alone.
+
+    Same treatment for ``call_money_rate``: the parser returns a 4-tenor
+    dict ``{1D, 7D, 14D, 90D}``; we fan it out to per-tenor numeric keys
+    (``call_money_rate_1d``, ``_7d``, ``_14d``, ``_90d``) AND promote the
+    1D (overnight) value to the scalar ``call_money_rate`` itself — BB
+    convention: "call money rate" without modifier means overnight. The
+    promotion replaces the dict in place so the Supabase writer's
+    scalar-only filter persists the headline rate, which in turn makes
+    the existing ``BRIEF_ALIASES["banking_call_money_rate"] = "call_money_rate"``
+    mapping start working.
     """
     sector_heat = data.get("dse_sector_heat")
     if isinstance(sector_heat, dict):
@@ -480,6 +490,20 @@ def _flatten_dict_indicators(data: dict) -> None:
             key = "dse_sector_heat_" + str(sector).lower().replace(" ", "_")
             if key not in data:
                 data[key] = float(pct)
+
+    call_money = data.get("call_money_rate")
+    if isinstance(call_money, dict):
+        for tenor, rate in call_money.items():
+            if not isinstance(rate, (int, float)):
+                continue
+            key = "call_money_rate_" + str(tenor).lower()
+            if key not in data:
+                data[key] = float(rate)
+        overnight = call_money.get("1D")
+        if isinstance(overnight, (int, float)):
+            # Mutate dict → scalar so the Supabase writer (scalars only)
+            # persists the headline overnight rate as ``call_money_rate``.
+            data["call_money_rate"] = float(overnight)
 
 
 def _apply_brief_aliases(data: dict) -> None:
