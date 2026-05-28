@@ -142,3 +142,91 @@ def test_upsert_batches_large_payloads():
     )
     assert n == 1200
     assert sess.post.call_count == 3
+
+
+# ---------------------------------------------------------------------------
+# Observability — silent drops now warn (regression guard for PR #31 class).
+# ---------------------------------------------------------------------------
+
+def test_rows_from_data_scalar_does_not_warn(caplog):
+    """Scalar values build a row and produce no warning — keep the happy path quiet."""
+    with caplog.at_level("WARNING", logger="supabase_writer"):
+        rows = _rows_from_data({"foo": 1.0}, date(2026, 5, 2), "EconDelta")
+    assert len(rows) == 1
+    assert rows[0]["metric_id"] == "foo"
+    assert not [r for r in caplog.records if r.levelname == "WARNING"]
+
+
+def test_rows_from_data_dict_triggers_warning(caplog):
+    """A dict value is dropped (no row built) and logs a warning naming the metric_id and type."""
+    with caplog.at_level("WARNING", logger="supabase_writer"):
+        rows = _rows_from_data({"foo": {"a": 1.0}}, date(2026, 5, 2), "EconDelta")
+    assert rows == []
+    warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert len(warnings) == 1
+    msg = warnings[0].getMessage()
+    assert "metric_id=foo" in msg
+    assert "type=dict" in msg
+
+
+def test_rows_from_data_bool_stays_silent(caplog):
+    """Booleans are filtered without a warning — pre-existing behavior, by design."""
+    with caplog.at_level("WARNING", logger="supabase_writer"):
+        rows = _rows_from_data({"foo": True}, date(2026, 5, 2), "EconDelta")
+    assert rows == []
+    assert not [r for r in caplog.records if r.levelname == "WARNING"]
+
+
+def test_rows_from_data_unknown_str_triggers_warning(caplog):
+    """An unexpected string value warns — strings aren't numeric history."""
+    with caplog.at_level("WARNING", logger="supabase_writer"):
+        rows = _rows_from_data({"foo": "bar"}, date(2026, 5, 2), "EconDelta")
+    assert rows == []
+    warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert len(warnings) == 1
+    msg = warnings[0].getMessage()
+    assert "metric_id=foo" in msg
+    assert "type=str" in msg
+
+
+def test_rows_from_data_none_triggers_warning(caplog):
+    """A None value warns — usually a parser-returned-nothing bug worth surfacing."""
+    with caplog.at_level("WARNING", logger="supabase_writer"):
+        rows = _rows_from_data({"foo": None}, date(2026, 5, 2), "EconDelta")
+    assert rows == []
+    warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert len(warnings) == 1
+    assert "type=NoneType" in warnings[0].getMessage()
+
+
+def test_rows_from_data_known_non_history_keys_silent(caplog):
+    """Known metadata keys (reserves_date, trading_day, nbr_fytd_cross_check,
+    commodity_change_pct) are skipped silently — they're by-design non-numeric
+    and would otherwise spam a warning on every successful aggregate run.
+    """
+    data = {
+        "reserves_date": "2026-05-28",
+        "trading_day": "2026-05-28",
+        "nbr_fytd_cross_check": "single_source_tax_revenue",
+        "commodity_change_pct": {"brent": 1.2, "gold": -0.3},
+        "usd_bdt_mid": 122.75,  # control: this one SHOULD become a row
+    }
+    with caplog.at_level("WARNING", logger="supabase_writer"):
+        rows = _rows_from_data(data, date(2026, 5, 2), "EconDelta")
+    assert len(rows) == 1
+    assert rows[0]["metric_id"] == "usd_bdt_mid"
+    assert not [r for r in caplog.records if r.levelname == "WARNING"]
+
+
+def test_rows_from_data_known_key_with_unexpected_shape_stays_silent(caplog):
+    """If a known-metadata key arrives with an unexpected shape (e.g. None
+    from a parser failure), still skip silently — the allow-list is the
+    authority on whether to warn. The shape isn't the signal here; the
+    indicator-id classification is.
+    """
+    with caplog.at_level("WARNING", logger="supabase_writer"):
+        rows = _rows_from_data(
+            {"reserves_date": None}, date(2026, 5, 2), "EconDelta",
+        )
+    assert rows == []
+    assert not [r for r in caplog.records if r.levelname == "WARNING"]

@@ -39,6 +39,24 @@ _BATCH_SIZE = 500
 _DEFAULT_TIMEOUT = 30
 _DEFAULT_SOURCE = "EconDelta"
 
+# Keys in ``data`` that are by-design metadata, not numeric history rows.
+# Skipped silently — the writer's non-scalar warning (below) is reserved for
+# genuinely unexpected shapes. Update this set when adding a new metadata key
+# in ``aggregate_latest.py`` (search for ``data[`` assignments returning
+# non-numeric values). Tests: ``tests/test_supabase_writer.py``.
+#
+#   reserves_date           — ISO date string from bb_forex.reserves
+#   trading_day             — date label string from dse_market
+#   nbr_fytd_cross_check    — provenance tag ("single_source_tax_revenue")
+#   commodity_change_pct    — dict of {commodity_key: pct}; per-commodity
+#                             prices are already in ``data`` as scalars
+_KNOWN_NON_HISTORY_KEYS = frozenset({
+    "reserves_date",
+    "trading_day",
+    "nbr_fytd_cross_check",
+    "commodity_change_pct",
+})
+
 
 class SupabaseWriteError(Exception):
     """Raised when the Supabase upsert fails fatally."""
@@ -83,6 +101,9 @@ def _rows_from_data(
     rows: list[dict] = []
     overrides = source_as_of_map or {}
     for metric_id, value in data.items():
+        if metric_id in _KNOWN_NON_HISTORY_KEYS:
+            # By-design metadata key — never a numeric history row.
+            continue
         if isinstance(value, bool):
             # `bool` is a subclass of `int` in Python — exclude explicitly so
             # any ``status: true``-style flag in the snapshot doesn't slip in.
@@ -95,6 +116,19 @@ def _rows_from_data(
                 "value": value,
                 "source": source,
             })
+        else:
+            # Genuinely unexpected non-scalar shape (dict, list, str, None, ...)
+            # for a key that ISN'T in ``_KNOWN_NON_HISTORY_KEYS``. PR #31 traced
+            # months of zero rows for ``call_money_rate`` to a dict-shaped parser
+            # output landing here. Warn so the next shape mismatch surfaces on
+            # the first fire, not in a weekly review. Proper fix is either to
+            # add a flatten rule in ``aggregate_latest._flatten_dict_indicators``
+            # (for numeric series fan-out) or to add the key to
+            # ``_KNOWN_NON_HISTORY_KEYS`` above (for genuine metadata).
+            logger.warning(
+                "supabase_writer: dropping non-scalar value for metric_id=%s (type=%s)",
+                metric_id, type(value).__name__,
+            )
     return rows
 
 
