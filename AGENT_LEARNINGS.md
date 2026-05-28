@@ -83,15 +83,15 @@ When something ships broken, when a methodology gap is exposed, or when a smoke 
 
 **Trigger:** Investigating why `call_money_rate` had 0 rows in Supabase `metric_history` despite the scraper being configured `cadence: daily` for ~6+ months.
 
-**What went wrong:** The Supabase writer at `utils/supabase_writer.py:86-90` filters to scalar values only — `dict` and other non-numeric types are silently dropped. The `html_call_money` parser legitimately returns a dict of 4 tenors `{"1D": 9.50, "7D": 9.75, "14D": 10.10, "90D": 10.50}`. The aggregator's `_flatten_dict_indicators` knows how to fan dicts into per-key scalars, but only handles `dse_sector_heat` (the precedent pattern). `call_money_rate` was never added to the flattener. So every day for months: parser succeeds → aggregator passes the dict through → writer skips it → Supabase row count stayed at 0. **Zero log lines anywhere flagged the drop.**
+**What went wrong:** The Supabase writer's `_rows_from_data` scalar gate (`utils/supabase_writer.py`) filters to numeric values only — `dict` and other non-numeric types are silently dropped. The `html_call_money` parser legitimately returns a dict of 4 tenors `{"1D": 9.50, "7D": 9.75, "14D": 10.10, "90D": 10.50}`. The aggregator's `_flatten_dict_indicators` knows how to fan dicts into per-key scalars, but only handles `dse_sector_heat` (the precedent pattern). `call_money_rate` was never added to the flattener. So every day for months: parser succeeds → aggregator passes the dict through → writer skips it → Supabase row count stayed at 0. **Zero log lines anywhere flagged the drop.**
 
-**Lesson:** Silent filtering is the worst kind of bug — there's no signal that anything is wrong until someone notices the absence. The aggregator's flatten step is the right pattern but it scales by manual per-indicator registration; observability at the writer boundary is the missing complement.
+**Lesson:** Silent filtering is the worst kind of bug — there's no signal that anything is wrong until someone notices the absence. The aggregator's flatten step is the right pattern but it scales by manual per-indicator registration; observability at the writer boundary is the missing complement. **Caveat:** a naive warn-on-all-non-scalars warning fires daily on by-design metadata keys (e.g. `reserves_date`, `trading_day`, `nbr_fytd_cross_check`, `commodity_change_pct`) — observability that warns on every clean run is noise, not signal. Combine the warning with a small allow-list of known-metadata keys.
 
-**Prevention:** A `logger.warning("supabase_writer: dropping non-scalar value for metric_id=%s (type=%s)", metric_id, type(value).__name__)` at the filter boundary would have caught this on the day the parser shipped.
+**Prevention:** A `logger.warning("supabase_writer: dropping non-scalar value for metric_id=%s (type=%s)", metric_id, type(value).__name__)` at the filter boundary, gated on an allow-list of known-metadata keys, would have caught this on the day the parser shipped without spamming alerts daily.
 
-**Hotfix:** PR #31 (`556ba05`) — extended `_flatten_dict_indicators` to handle `call_money_rate`. Follow-up `logger.warning` PR being filed separately.
+**Hotfix:** PR #31 (`556ba05`) — extended `_flatten_dict_indicators` to handle `call_money_rate`. Follow-up observability via PR #33 (`logger.warning` at writer boundary + allow-list).
 
-**Cross-references:** PR #31 (`556ba05`), AGENTS.md landmine 8 (BRIEF_ALIASES auto-promotion).
+**Cross-references:** PR #31 (`556ba05`), PR #33 (observability follow-up), AGENTS.md landmine 8 (BRIEF_ALIASES auto-promotion).
 
 ## 2026-05-25 — NBR FYTD news scrapers retired due to time-window drift
 
