@@ -12,13 +12,13 @@ StartLimitBurst=3
 
 [Service]
 Type=oneshot
-User=adnan
-Group=adnan
-WorkingDirectory=/home/adnan/econdelta
+User=adnan-local
+Group=adnan-local
+WorkingDirectory=/home/adnan-local/econdelta
 EnvironmentFile=/etc/econdelta.env
 # CLAUDE_BINARY lets parse_all find `claude` from cron/systemd PATH
-Environment="CLAUDE_BINARY=/home/adnan/.npm-global/bin/claude"
-ExecStart=/home/adnan/econdelta/.venv/bin/python -m parse_all
+Environment="CLAUDE_BINARY=/usr/bin/claude"
+ExecStart=/home/adnan-local/econdelta/.venv/bin/python -m parse_all
 
 # Resource limits — pdfplumber + claude -p subprocess
 MemoryMax=1500M
@@ -31,16 +31,16 @@ PrivateTmp=true
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=/home/adnan/econdelta/data /home/adnan/econdelta/logs
+ReadWritePaths=/home/adnan-local/econdelta/data /home/adnan-local/econdelta/logs /home/adnan-local/.claude
 
 # Timeouts + retry on transient failures
-TimeoutStartSec=1800
+TimeoutStartSec=3600
 Restart=on-failure
 RestartSec=300
 
 # Logging
-StandardOutput=append:/home/adnan/econdelta/logs/parse-systemd.log
-StandardError=append:/home/adnan/econdelta/logs/parse-systemd.log
+StandardOutput=append:/home/adnan-local/econdelta/logs/parse-systemd.log
+StandardError=append:/home/adnan-local/econdelta/logs/parse-systemd.log
 SyslogIdentifier=econdelta-parse
 
 [Install]

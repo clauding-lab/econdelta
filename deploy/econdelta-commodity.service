@@ -11,17 +11,13 @@ StartLimitBurst=3
 
 [Service]
 Type=oneshot
-User=adnan
-Group=adnan
-WorkingDirectory=/home/adnan/econdelta
+User=adnan-local
+Group=adnan-local
+WorkingDirectory=/home/adnan-local/econdelta
 EnvironmentFile=/etc/econdelta.env
-ExecStart=/home/adnan/econdelta/.venv/bin/python -m scrapers.commodity_prices
+ExecStart=/home/adnan-local/econdelta/.venv/bin/python -m scrapers.commodity_prices
 
-# Resource limits to protect Notifyr and Mission Control on the same VPS.
-# TasksMax must be >= ~150 because Playwright/Chromium spawns dozens of
-# helper processes (renderer, GPU, network, zygote, utility); a tighter
-# cap silently stalls the network-service spawn and Page.goto hangs to
-# its own timeout. 512 matches the working V2/V3 fetch + parse units.
+# Resource limits to protect Notifyr and Mission Control on the same VPS
 MemoryMax=500M
 MemoryHigh=400M
 CPUQuota=50%
@@ -32,7 +28,7 @@ PrivateTmp=true
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=/home/adnan/econdelta/data /home/adnan/econdelta/logs
+ReadWritePaths=/home/adnan-local/econdelta/data /home/adnan-local/econdelta/logs
 
 # Timeouts + retry on transient failures
 TimeoutStartSec=120
@@ -40,8 +36,8 @@ Restart=on-failure
 RestartSec=300
 
 # Logging — systemd journal + append to file
-StandardOutput=append:/home/adnan/econdelta/logs/commodity_prices-systemd.log
-StandardError=append:/home/adnan/econdelta/logs/commodity_prices-systemd.log
+StandardOutput=append:/home/adnan-local/econdelta/logs/commodity_prices-systemd.log
+StandardError=append:/home/adnan-local/econdelta/logs/commodity_prices-systemd.log
 SyslogIdentifier=econdelta-commodity
 
 [Install]

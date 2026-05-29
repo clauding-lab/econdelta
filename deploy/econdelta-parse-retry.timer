@@ -1,9 +1,9 @@
 [Unit]
-Description=EconDelta parse retry — fires daily at 23:55 UTC (05:55 BDT) so a flaked claude at the 05:16 primary fire gets a second chance before the 06:10 aggregate-retry rebuilds latest.json
+Description=EconDelta parse retry — fires daily at 05:55 UTC (11:55 BDT) so a flaked claude at the 10:30 primary fire gets a second chance before the aggregate-retry rebuilds latest.json
 Requires=econdelta-parse.service
 
 [Timer]
-OnCalendar=*-*-* 23:55:00 UTC
+OnCalendar=*-*-* 05:55:00 UTC
 Unit=econdelta-parse.service
 Persistent=true
 RandomizedDelaySec=60

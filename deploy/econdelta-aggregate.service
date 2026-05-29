@@ -11,15 +11,13 @@ StartLimitBurst=3
 
 [Service]
 Type=oneshot
-User=adnan
-Group=adnan
-WorkingDirectory=/home/adnan/econdelta
+User=adnan-local
+Group=adnan-local
+WorkingDirectory=/home/adnan-local/econdelta
 EnvironmentFile=/etc/econdelta.env
-ExecStart=/home/adnan/econdelta/.venv/bin/python -m aggregate_latest
+ExecStart=/home/adnan-local/econdelta/.venv/bin/python -m aggregate_latest
 
-# Resource limits — aggregator runs claude_max which spawns the claude CLI
-# subprocess + MCP servers; needs more task slots than naive Python work.
-# 512 matches the working V2/V3 fetch + parse units.
+# Resource limits — aggregator is light
 MemoryMax=250M
 MemoryHigh=200M
 CPUQuota=50%
@@ -30,16 +28,16 @@ PrivateTmp=true
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=/home/adnan/econdelta/data /home/adnan/econdelta/logs
+ReadWritePaths=/home/adnan-local/econdelta/data /home/adnan-local/econdelta/logs
 
 # Timeouts + retry on transient failures
-TimeoutStartSec=30
+TimeoutStartSec=600
 Restart=on-failure
 RestartSec=300
 
 # Logging — systemd journal + append to file
-StandardOutput=append:/home/adnan/econdelta/logs/aggregate-systemd.log
-StandardError=append:/home/adnan/econdelta/logs/aggregate-systemd.log
+StandardOutput=append:/home/adnan-local/econdelta/logs/aggregate-systemd.log
+StandardError=append:/home/adnan-local/econdelta/logs/aggregate-systemd.log
 SyslogIdentifier=econdelta-aggregate
 
 [Install]

@@ -10,12 +10,14 @@ if [[ "$(id -u)" -ne 0 ]]; then
   exit 1
 fi
 
-for t in econdelta-forex econdelta-commodity econdelta-aggregate econdelta-dse econdelta-fetch econdelta-parse; do
+for t in econdelta-forex econdelta-commodity econdelta-aggregate econdelta-dse econdelta-fetch econdelta-parse \
+         econdelta-forex-retry econdelta-aggregate-retry econdelta-parse-retry; do
   systemctl disable --now "${t}.timer" 2>/dev/null || true
 done
 
 rm -f /etc/systemd/system/econdelta-*.service
 rm -f /etc/systemd/system/econdelta-*.timer
+rm -rf /etc/systemd/system/econdelta-*.service.d
 rm -f /etc/logrotate.d/econdelta
 
 systemctl daemon-reload
