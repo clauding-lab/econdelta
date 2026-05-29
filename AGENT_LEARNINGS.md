@@ -37,6 +37,22 @@ When something ships broken, when a methodology gap is exposed, or when a smoke 
 
 ## Entries (most recent first)
 
+## 2026-05-29 — parse.service down for days: `claude` writes `~/.claude.json`, blocked by `ProtectHome` sandbox
+
+**Trigger:** All daily EconDelta metrics in Supabase were stale since 2026-05-25 (newest on-disk snapshot for every daily indicator = 2026-05-25); `run_logs` showed `econdelta-parse.service` `status=fail exit_code=1 error=null` on every cron run.
+
+**What went wrong:** `parse_all.main()` aborts (`return 1`) when `_claude_preflight()` fails. The preflight (`claude --print`) was exiting 1 with `API Error: EROFS: read-only file system, open '/home/adnan-local/.claude.json'`. The service runs under `ProtectHome=read-only` with `ReadWritePaths=… /home/adnan-local/.claude` — which carves out the `.claude/` **directory** but NOT the sibling `.claude.json` **file**. The `claude` CLI writes `~/.claude.json` (project history, startup counter, etc.) on each run; under read-only `$HOME` that write fails → preflight fails all 3 attempts → parse aborts before producing any snapshot. The 2026-05-17 fix had carved out `.claude/` for the OAuth credential refresh, but the CLI also writes the top-level `.json`. The same gap silently disabled `aggregate`'s Opus review (`opus review skipped: review_skipped: claude_exit_1`), so daily data was being written unreviewed.
+
+**Diagnosis trap (cost me 3 wrong hypotheses):** the real error was in `logs/parse-systemd.log` (the unit's `StandardError=append:…`), NOT journald — so `journalctl` greps came up empty and I first suspected the OAuth token, then the model name, then "intermittent claude availability". Manual/`systemd-run` repros PASSED because they omitted the sandbox OR `.claude.json` had no pending write at that instant (the failure is state-dependent on whether claude needs to persist). Only reading the redirected log file surfaced the EROFS.
+
+**Lesson:** When a hardened systemd unit (`ProtectHome=read-only`/`ProtectSystem=strict`) shells out to a stateful CLI, that CLI may write config OUTSIDE your carve-outs — and a directory carve-out does NOT cover a sibling file. Also: find a sandboxed service's real errors in its `StandardError=`/`StandardOutput=` target, not journald.
+
+**Prevention:** Probe writability under the real sandbox: `systemd-run -p ProtectHome=read-only -p ReadWritePaths=… --uid=adnan-local python3 -c "open('/home/adnan-local/.claude.json','r+')"` → expect success (got `OSError 30 Read-only file system` before the fix, `WRITABLE` after). Any service invoking `claude` needs BOTH `~/.claude/` and `~/.claude.json` in `ReadWritePaths`.
+
+**Hotfix:** systemd drop-ins `/etc/systemd/system/econdelta-{parse,aggregate}.service.d/10-claude-json-writable.conf` adding `ReadWritePaths=/home/adnan-local/.claude.json`; `daemon-reload`; `reset-failed`; restart. Parse warmup then `exit=0` and the run produced fresh snapshots. **NOTE:** the repo `deploy/econdelta-*.service` files are STALE (they use `/home/adnan`, not the deployed `/home/adnan-local`) — the drop-ins live only on the box; reconciling the repo deploy/ files with the deployed units is a separate task.
+
+**Cross-references:** auto-memory `project_econdelta_parse_401.md` (this is the 2026-05-25 regression of the 05-17 OAuth fix — same "preflight fails" symptom, different write path); global `~/.claude/AGENT_LEARNINGS.md` 2026-05-29; corridor entry below (same triage session).
+
 ## 2026-05-29 — New parser file shipped without wiring it into `parse_all`'s import block
 
 **Trigger:** YieldScope's CorridorViz (PR #4) rendered "Demo", not live data. Triage found `policy_rate_repo/sdf/slf` had **0 rows** in Supabase despite PR #30 deploying cleanly to ExonVPS (HEAD `9142807`).
