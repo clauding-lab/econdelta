@@ -1,9 +1,9 @@
 [Unit]
-Description=EconDelta aggregate retry — fires daily at 00:10 UTC (06:10 BDT), 10 min after forex retry, so retried BB data lands in latest.json before brief.cli reads it
+Description=EconDelta aggregate retry — fires daily at 08:00 UTC (14:00 BDT), 1 h after primary aggregate, so any flaked aggregate at 13:00 gets a second chance before end-of-day
 Requires=econdelta-aggregate.service
 
 [Timer]
-OnCalendar=*-*-* 00:10:00 UTC
+OnCalendar=*-*-* 08:00:00 UTC
 Unit=econdelta-aggregate.service
 Persistent=true
 RandomizedDelaySec=30

@@ -1,9 +1,9 @@
 [Unit]
-Description=Run EconDelta aggregator daily at 23:20 UTC (05:20 BDT next day)
+Description=Run EconDelta aggregator daily at 07:00 UTC (13:00 BDT) — runs after parse (10:30 + 11:55) so todays parse output lands in latest.json same-day
 Requires=econdelta-aggregate.service
 
 [Timer]
-OnCalendar=*-*-* 23:20:00 UTC
+OnCalendar=*-*-* 07:00:00 UTC
 Persistent=true
 RandomizedDelaySec=30
 
