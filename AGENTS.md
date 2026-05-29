@@ -99,6 +99,10 @@ Pre-merge smoke list for backend changes:
 
 15. **`docs/indicator-catalog.md` is auto-generated.** Don't hand-edit. Edit `scripts/build_catalog.py` (for derived-key entries) or `config/sources-v3.json` (for scraped indicators), then regenerate.
 
+16. **A new parser must be wired into `parse_all.py`'s auto-import block.** Adding `parsers/<x>.py` (with its `@register("<x>")` decorator) plus a `sources-v3.json` entry is NOT enough — the decorator only runs on import, and production builds `REGISTRY` from the explicit `import parsers.<x>` list near the top of `parse_all.py`. Forget it and you get `parse_one raised … "no parser registered for '<x>'"`, the indicator silently produces 0 rows, and unit tests STILL pass (they import the parser module directly, which triggers the decorator). Guard: `tests/test_parser_registry_coverage.py` runs in a subprocess and fails if any `sources-v3.json` deterministic parser isn't registered via `parse_all`'s own imports. (2026-05-29, PR #35 — the policy-rate corridor was dark for a day.)
+
+17. **Services that shell out to `claude` under `ProtectHome=read-only` need `~/.claude.json` in `ReadWritePaths`, not just `~/.claude/`.** The CLI writes its state file `~/.claude.json` (a sibling of the `.claude/` dir) on each run; under the read-only home that write hits `EROFS`, the parse preflight fails all 3 attempts, and `parse_all` aborts (exit 1) before parsing anything. `econdelta-parse` and `econdelta-aggregate` carry `*.service.d/10-claude-json-writable.conf` drop-ins (committed in `deploy/`) that add the carve-out. Diagnose sandboxed-service failures in `logs/<unit>-systemd.log` (the unit's `StandardError=append:` target), NOT journald — that's why the failure was invisible for 4 days. (2026-05-29 — every daily Supabase value was a stale carry-forward while parse was dead.)
+
 ## Communication & timezone
 
 - **All times in BDT (UTC+6).** When generating timestamps, dates, or schedules, convert to BDT and label it. UTC appears in some systemd unit files and `scraped_at` ISO strings — convert before showing to Adnan.
