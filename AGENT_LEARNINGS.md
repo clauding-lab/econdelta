@@ -37,6 +37,20 @@ When something ships broken, when a methodology gap is exposed, or when a smoke 
 
 ## Entries (most recent first)
 
+## 2026-05-29 — New parser file shipped without wiring it into `parse_all`'s import block
+
+**Trigger:** YieldScope's CorridorViz (PR #4) rendered "Demo", not live data. Triage found `policy_rate_repo/sdf/slf` had **0 rows** in Supabase despite PR #30 deploying cleanly to ExonVPS (HEAD `9142807`).
+
+**What went wrong:** PR #30 added `parsers/pdf_table_column_latest.py` (with its `@register("pdf_table_column_latest")` decorator) plus three `sources-v3.json` entries, but never added `import parsers.pdf_table_column_latest` to `parse_all.py`'s "auto-import all parser modules so they register" block (lines 17-26). The decorator only runs on import, so in production the parser was absent from `REGISTRY`. Every scheduled parse logged `parse_one raised for policy_rate_repo: "no parser registered for 'pdf_table_column_latest'; have: [...9 others...]"` (caught + skipped per-indicator). Being brand-new metrics, the corridor rates had no prior snapshot for `aggregate` to carry forward → 0 Supabase rows. The parser code itself was correct: direct invocation on the fetched April-2026 MEI PDF returned 10.00 / 7.50 / 11.50.
+
+**Lesson:** A parser/plugin that self-registers via an import-time decorator is invisible in production until something actually imports the module. Shipping the file + the config entry is not enough — the module must be wired into the entry point's explicit import list.
+
+**Prevention:** Added `tests/test_parser_registry_coverage.py` — a **subprocess-isolated** test asserting every `parse.deterministic` in `sources-v3.json` is present in `REGISTRY` after importing `parse_all`. It runs in a fresh interpreter so it exercises parse_all's OWN import block, not registration leaked in by sibling test modules. PR #30's 26 tests passed precisely because they import the parser module directly (triggering `@register`), masking the missing production wiring — this test closes that blind spot.
+
+**Hotfix:** One-line add of `import parsers.pdf_table_column_latest  # noqa: F401` to `parse_all.py`'s auto-import block (this PR), plus the regression test above.
+
+**Cross-references:** PR #30 (`121969b`, introduced the gap); YieldScope PR #4 (blocked consumer); global `~/.claude/AGENT_LEARNINGS.md` (generalizes to any decorator-registry import-wiring). **Separate finding, deferred:** `parse_all.main()`'s Claude preflight gate aborts the *entire* parse — including deterministic parsers that need no LLM — whenever the `claude` CLI is briefly unreachable. Result: parse emitted **no new snapshots 2026-05-25 → 05-29**, so daily Supabase values are stale carry-forwards. Flagged as an architectural decision, not patched here.
+
 ## 2026-05-28 — A warn-on-X observability rule needs an allow-list of routine non-X
 
 **Trigger:** Multi-agent review of PR #33 (`logger.warning` at the writer's non-scalar drop branch) caught that the warning would fire on every successful aggregate run.
