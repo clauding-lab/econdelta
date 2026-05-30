@@ -76,3 +76,15 @@ def test_happy_path_writes_and_returns_0():
     assert row["week_of"]  # set
     assert row["featured_anomalies"][0]["value"] == 9.34  # Python's number, merged in
     assert row["model"]  # provenance recorded
+
+
+def test_no_history_returns_1():
+    with patch.object(orch, "_collect_history", return_value={}), \
+         patch.object(orch, "notify") as mock_notify, \
+         patch.object(orch, "upsert_briefing") as mock_write, \
+         patch.object(orch, "run_max") as mock_run:
+        rc = orch.main()
+    assert rc == 1
+    mock_write.assert_not_called()
+    mock_run.assert_not_called()
+    mock_notify.assert_called_once()

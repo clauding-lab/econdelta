@@ -27,7 +27,10 @@ ProtectHome=read-only
 ReadWritePaths=/home/adnan-local/econdelta/data /home/adnan-local/econdelta/logs /home/adnan-local/.claude
 
 TimeoutStartSec=3600
+# exit 2 = data stale (gate skip), not a transient failure — don't retry/re-alert.
+# Retry only genuine failures (exit 1: Claude/validation/network).
 Restart=on-failure
+RestartPreventExitStatus=2
 RestartSec=600
 
 StandardOutput=append:/home/adnan-local/econdelta/logs/briefing-systemd.log

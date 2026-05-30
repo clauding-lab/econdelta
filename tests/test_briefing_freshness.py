@@ -46,3 +46,11 @@ def test_data_as_of_is_min_core_as_of():
               "policy_rate_repo": date(2026, 5, 1), "some_fiscal": date(2026, 5, 10)}
     r = assess_freshness(latest, CADENCE, CORE, TODAY, aggregate_ok_recent=True)
     assert r.data_as_of == date(2026, 5, 1)  # oldest core reading
+
+
+def test_absent_core_metric_trips_gate():
+    # policy_rate_repo is core but entirely missing from history -> must skip
+    latest = {"call_money_rate": date(2026, 5, 29), "tbond_5y_yield": date(2026, 5, 26)}
+    r = assess_freshness(latest, CADENCE, CORE, TODAY, aggregate_ok_recent=True)
+    assert r.core_stale is True
+    assert any("absent" in reason for reason in r.reasons)

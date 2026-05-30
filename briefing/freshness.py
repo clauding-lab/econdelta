@@ -17,6 +17,9 @@ from datetime import date
 _STALE_DAYS_BY_CADENCE = {
     "daily": 1, "weekly": 8, "monthly": 35, "quarterly": 100, "fiscal_year": 400,
 }
+# NOTE: a 1-day 'daily' window means a Monday briefing honestly skips when the
+# freshest daily reading predates Sunday — e.g. BD public holidays when BB
+# didn't publish. That's an intentional skip (no briefing on stale data), not a bug.
 _DEFAULT_STALE_DAYS = 35
 
 
@@ -55,6 +58,14 @@ def assess_freshness(latest_as_of_by_metric: dict[str, date],
             reasons.append(f"core metric stale: {metric_id} (as_of {as_of})")
         else:
             stale_series.append(metric_id)
+
+    # A core metric entirely absent from history (scraper/Supabase gap, or a
+    # first run with no data) is at least as dangerous as a stale as_of — never
+    # publish a briefing whose core series is simply missing.
+    for core_id in core_ids:
+        if core_id not in latest_as_of_by_metric:
+            core_stale = True
+            reasons.append(f"core metric absent from history: {core_id}")
 
     core_as_ofs = [d for m, d in latest_as_of_by_metric.items() if m in core_ids]
     data_as_of = min(core_as_ofs) if core_as_ofs else today

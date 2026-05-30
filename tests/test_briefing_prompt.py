@@ -52,3 +52,20 @@ def test_build_prompt_includes_week_and_candidate_ids():
                      prior_briefings=[], open_threads=[], week_of="2026-06-01")
     assert "2026-06-01" in p
     assert "call_money_rate:change" in p
+
+
+def test_validate_rejects_empty_why():
+    bad = _ok_output()
+    bad["featured_anomalies"][0]["why"] = "   "
+    with pytest.raises(BriefingValidationError, match="why"):
+        validate_output(bad, VALID_IDS)
+
+
+def test_build_prompt_trims_oversized_prior_to_valid_json():
+    import json
+    huge = [{"week_of": f"2026-W{i:02d}", "body": "x" * 50_000} for i in range(8)]
+    p = build_prompt(digest={}, candidates=[], prior_briefings=huge,
+                     open_threads=[], week_of="2026-06-01")
+    block = p.split("PRIOR BRIEFINGS (newest first):\n")[1].split("\n\nOPEN THREADS:")[0]
+    parsed = json.loads(block)  # raises if mid-object truncated
+    assert len(parsed) < 8  # some oldest briefings were dropped to fit

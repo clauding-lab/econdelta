@@ -44,13 +44,23 @@ OPEN THREADS:
 """
 
 
+_MAX_PRIOR_CHARS = 120_000
+
+
 def build_prompt(*, digest: dict, candidates: list[dict], prior_briefings: list[dict],
                  open_threads: list[dict], week_of: str) -> str:
+    # Trim WHOLE prior briefings (newest-first) until the block fits, so the model
+    # never receives a mid-object-truncated, malformed JSON list.
+    prior = list(prior_briefings)
+    prior_json = json.dumps(prior, indent=2, default=str)
+    while len(prior_json) > _MAX_PRIOR_CHARS and len(prior) > 1:
+        prior = prior[:-1]
+        prior_json = json.dumps(prior, indent=2, default=str)
     return PROMPT_TEMPLATE.format(
         week_of=week_of,
         digest_json=json.dumps(digest, indent=2, default=str),
         candidates_json=json.dumps(candidates, indent=2, default=str),
-        prior_briefings_json=json.dumps(prior_briefings, indent=2, default=str)[:120_000],
+        prior_briefings_json=prior_json,
         open_threads_json=json.dumps(open_threads, indent=2, default=str),
     )
 
@@ -73,8 +83,9 @@ def validate_output(parsed: Any, valid_candidate_ids: set[str]) -> dict:
         cid = f.get("candidate_id") if isinstance(f, dict) else None
         if cid not in valid_candidate_ids:
             raise BriefingValidationError(f"unknown candidate_id: {cid!r}")
-        if not isinstance(f.get("why"), str):
-            raise BriefingValidationError("featured anomaly missing 'why'")
+        why = f.get("why")
+        if not isinstance(why, str) or not why.strip():
+            raise BriefingValidationError("featured anomaly missing or empty 'why'")
 
     threads = parsed.get("updated_threads", [])
     if not isinstance(threads, list):
