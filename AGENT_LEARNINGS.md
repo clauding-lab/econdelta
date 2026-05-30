@@ -37,6 +37,20 @@ When something ships broken, when a methodology gap is exposed, or when a smoke 
 
 ## Entries (most recent first)
 
+## 2026-05-30 — Weekly-briefing freshness gate passed when a CORE metric had ZERO history rows
+
+**Trigger:** Adversarial final code review of the weekly-briefing branch (PR #39) flagged a CRITICAL: `briefing/freshness.assess_freshness` could return `core_stale=False` when a core series was entirely absent from `metric_history`.
+
+**What went wrong:** The gate iterated only metrics PRESENT in `latest_as_of_by_metric` — built from `_collect_history`, which skips metrics returning zero rows. A core metric with a total Supabase/scraper gap was never evaluated, so it couldn't trip the gate; the briefing would generate against silently-missing core data. Staleness logic was right for present-but-old metrics but had no concept of "absent".
+
+**Lesson:** A freshness/completeness check that iterates "what's present" cannot detect "what's missing." When a set of REQUIRED keys must all be fresh, iterate the required set and treat absence as the worst case — don't only iterate what arrived.
+
+**Prevention:** `assess_freshness` now loops `core_ids` and sets `core_stale=True` for any id absent from history (test `test_absent_core_metric_trips_gate`). Meta-lesson: a whole-branch final review is non-optional — the per-task spec/quality reviews never ran for this module because the execution workflow died before reaching it (see global `AGENT_LEARNINGS.md` 2026-05-30).
+
+**Hotfix:** `briefing/freshness.py` absent-core loop + test (commit `3e039f8`).
+
+**Cross-references:** PR #39; global `AGENT_LEARNINGS.md` 2026-05-30 (workflow fragility — why per-task review coverage was incomplete); AGENTS.md landmines 18-20.
+
 ## 2026-05-29 — parse.service down for days: `claude` writes `~/.claude.json`, blocked by `ProtectHome` sandbox
 
 **Trigger:** All daily EconDelta metrics in Supabase were stale since 2026-05-25 (newest on-disk snapshot for every daily indicator = 2026-05-25); `run_logs` showed `econdelta-parse.service` `status=fail exit_code=1 error=null` on every cron run.
