@@ -38,6 +38,23 @@ def test_get_metric_history_raises_on_http_error():
         get_metric_history("x", days=10, url="https://x.supabase.co", key="k", session=sess)
 
 
+def test_get_metric_history_raises_on_network_error():
+    sess = MagicMock(spec=requests.Session)
+    sess.get.side_effect = requests.exceptions.ConnectionError("dns lookup failed")
+    with pytest.raises(SupabaseReadError, match="network error"):
+        get_metric_history("x", days=10, url="https://x.supabase.co", key="k", session=sess)
+
+
+def test_get_raises_read_error_when_credentials_missing(monkeypatch):
+    """Missing creds at read time must surface as SupabaseReadError (not the
+    writer's SupabaseWriteError) so read callers can catch their own type."""
+    monkeypatch.delenv("SUPABASE_URL", raising=False)
+    monkeypatch.delenv("SUPABASE_SERVICE_ROLE_KEY", raising=False)
+    monkeypatch.delenv("SUPABASE_SERVICE_KEY", raising=False)
+    with pytest.raises(SupabaseReadError, match="SUPABASE_URL"):
+        get_metric_history("x", days=10)
+
+
 def test_get_recent_run_ok_true_when_recent():
     recent = (datetime.now(timezone.utc) - timedelta(hours=3)).isoformat()
     sess = _session([{"started_at": recent}])

@@ -2,24 +2,52 @@
 
 The repo has no Supabase SELECT helper (utils/supabase_writer.py is POST/PATCH
 only; opus_review.load_history reads LOCAL archive JSON). This module adds the
-read side, mirroring the writer's style: reuse _resolve_credentials, accept a
-session= for injection, and RAISE on failure (reads are load-bearing for the
-briefing — unlike run_logs writes, they must not silently degrade).
+read side, mirroring the writer's style: accept a session= for injection, and
+RAISE on failure (reads are load-bearing for the briefing — unlike run_logs
+writes, they must not silently degrade).
+
+Credential resolution is intentionally local (not imported from
+supabase_writer): the writer's ``_resolve_credentials`` raises
+``SupabaseWriteError``, which is the wrong error type for a read caller. The
+reader owns ``_resolve_credentials`` here so a missing
+``SUPABASE_URL``/``SUPABASE_SERVICE_ROLE_KEY`` surfaces as ``SupabaseReadError``,
+keeping the read error contract clean for callers that catch it.
 """
 from __future__ import annotations
 
+import os
 from datetime import datetime, timezone
 from typing import Any
 
 import requests
 
-from utils.supabase_writer import _resolve_credentials
-
 _DEFAULT_TIMEOUT = 30
 
 
 class SupabaseReadError(RuntimeError):
-    """Raised when a PostgREST GET fails or returns non-2xx."""
+    """Raised when a PostgREST GET fails, returns non-2xx, or has no credentials."""
+
+
+def _resolve_credentials(url: str | None, key: str | None) -> tuple[str, str]:
+    """Resolve Supabase URL + key from kwargs or env, raising ``SupabaseReadError``.
+
+    Mirrors ``supabase_writer._resolve_credentials`` but raises the read-side
+    error type so a missing-credentials failure at read time is catchable by
+    callers handling ``SupabaseReadError`` (not the writer's exception).
+    """
+    resolved_url = url or os.environ.get("SUPABASE_URL")
+    resolved_key = (
+        key
+        or os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+        or os.environ.get("SUPABASE_SERVICE_KEY")
+    )
+    if not resolved_url:
+        raise SupabaseReadError("SUPABASE_URL not set in env or kwargs")
+    if not resolved_key:
+        raise SupabaseReadError(
+            "SUPABASE_SERVICE_ROLE_KEY (or SUPABASE_SERVICE_KEY) not set in env or kwargs"
+        )
+    return resolved_url.rstrip("/"), resolved_key
 
 
 def _get(path: str, *, url: str | None, key: str | None,
