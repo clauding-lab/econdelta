@@ -49,6 +49,10 @@ SUPABASE_SERVICE_ROLE_KEY=
 CLAUDE_CODE_OAUTH_TOKEN=
 ECONDELTA_HOME=$REPO_ROOT
 ECONDELTA_DRY_RUN=0
+# Weekly briefing (briefing/ package). The pinned box CLI (claude 2.1.104) caps
+# --effort at 'max'; 'xhigh' (the code default, valid on newer CLIs) is rejected there.
+BRIEFING_EFFORT=max
+# BRIEFING_MODEL=claude-opus-4-8   # uncomment if 'opus[1m]' does not resolve on the box CLI
 EOF
   chmod 0640 "$ENV_FILE"
   chown "root:$SERVICE_USER" "$ENV_FILE"
