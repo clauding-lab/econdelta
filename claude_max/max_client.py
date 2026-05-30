@@ -1,7 +1,7 @@
 """Subprocess wrapper around the `claude -p` Max CLI.
 
 Mirrors brief/claude/max_client.py from the-brief. EconDelta-side:
-  - Default model: claude-opus-4-6 (matches the-brief)
+  - Default model: claude-opus-4-8 (matches the-brief)
   - Default effort: high (matches the-brief)
 
 No Anthropic API calls. Auth is via the OS user's ~/.claude/.credentials.json
@@ -45,7 +45,7 @@ class MaxCallResult:
 def run_max(
     *,
     prompt: str,
-    model: str = "claude-opus-4-6",
+    model: str = "claude-opus-4-8",
     timeout_s: int = 1800,
     claude_binary: str | None = None,
     effort: str = "high",
