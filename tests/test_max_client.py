@@ -52,7 +52,7 @@ def test_run_max_raises_on_timeout():
             run_max(prompt="hi", timeout_s=1)
 
 
-def test_run_max_uses_opus_4_6_default():
+def test_run_max_uses_opus_4_8_default():
     captured: dict = {}
 
     def fake_run(argv, **kw):
@@ -62,4 +62,4 @@ def test_run_max_uses_opus_4_6_default():
     with patch("subprocess.run", side_effect=fake_run):
         run_max(prompt="hi")
     assert "--model" in captured["argv"]
-    assert "claude-opus-4-6" in captured["argv"]
+    assert "claude-opus-4-8" in captured["argv"]
