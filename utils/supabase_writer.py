@@ -201,6 +201,29 @@ def upsert_metric_history(
     return upserted
 
 
+def upsert_briefing(row, *, url=None, service_key=None, timeout=_DEFAULT_TIMEOUT, session=None):
+    """Upsert one weekly briefing row (PK week_of). Raises SupabaseWriteError on failure.
+
+    Unlike run_logs helpers (which swallow errors), this RAISES — a failed
+    briefing write must be visible so the job returns non-zero.
+    """
+    base_url, key = _resolve_credentials(url, service_key)
+    endpoint = f"{base_url}/rest/v1/briefings?on_conflict=week_of"
+    headers = {
+        "apikey": key,
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+        "Prefer": "resolution=merge-duplicates,return=minimal",
+    }
+    sess = session or requests.Session()
+    try:
+        resp = sess.post(endpoint, json=row, headers=headers, timeout=timeout)
+    except requests.RequestException as e:
+        raise SupabaseWriteError(f"briefing upsert network error: {e}") from e
+    if resp.status_code not in (200, 201, 204):
+        raise SupabaseWriteError(f"briefing upsert returned HTTP {resp.status_code}: {resp.text[:200]}")
+
+
 # ============================================================================
 # Run logging helpers — write to public.run_logs for the PWA Runs page
 # ============================================================================
