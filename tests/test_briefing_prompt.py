@@ -52,6 +52,7 @@ def test_build_prompt_includes_week_and_candidate_ids():
                      prior_briefings=[], open_threads=[], week_of="2026-06-01")
     assert "2026-06-01" in p
     assert "call_money_rate:change" in p
+    assert "Markdown" in p  # body must instruct segmented markdown (sub-headings + bullets)
 
 
 def test_validate_rejects_empty_why():
