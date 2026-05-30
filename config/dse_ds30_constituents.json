@@ -1,0 +1,16 @@
+{
+  "_doc": "DS30 index constituent list — the 30 blue-chip trading codes that make up the DSE 30 index. Sourced from https://dsebd.org/dse30_share.php (the dedicated 30-row members table). Used by the one-time DSE day-end-close backfill (scripts/backfill_dse_dayend.py) to enumerate which scrips to pull per-share daily closes for. metric_id pattern: dse_close_<CODE>.",
+  "_status": "POPULATED 2026-05-30 from the live DS30 members table. DSE rebalances DS30 semi-annually (Jan / Jul) — re-run the DS30 list fetch and regenerate this file after each rebalance. Brief-side reads are keyed by metric_id, so dropped constituents keep their historical rows; new constituents need a fresh backfill over the desired window.",
+  "_source": "https://dsebd.org/dse30_share.php",
+  "_archive_source": "https://www.dsebd.org/day_end_archive.php?startDate=YYYY-MM-DD&endDate=YYYY-MM-DD&inst=<CODE>&archive=data",
+  "_as_of": "2026-05-30",
+  "_count": 30,
+  "constituents": [
+    "BATBC", "BEACONPHAR", "BRACBANK", "BSC", "BSCPLC",
+    "BSRMSTEEL", "BXPHARMA", "CITYBANK", "DELTALIFE", "EBL",
+    "FINEFOODS", "GP", "IDLC", "JAMUNAOIL", "KOHINOOR",
+    "LANKABAFIN", "LHB", "LINDEBD", "LOVELLO", "MJLBD",
+    "MPETROLEUM", "OLYMPIC", "PADMAOIL", "PRIMEBANK", "PUBALIBANK",
+    "RENATA", "ROBI", "SQURPHARMA", "UNIQUEHRL", "WALTONHIL"
+  ]
+}
