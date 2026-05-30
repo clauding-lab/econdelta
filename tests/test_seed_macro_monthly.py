@@ -53,6 +53,22 @@ class TestKeyMap:
         ids = {m.metric_id for m in KEY_MAP.values()}
         assert "yield_1y_monthly" not in ids
 
+    def test_backfilled_reserve_and_yield_rungs_present(self):
+        # 2026-05-30: wired archive series that were present-but-unmapped —
+        # BPM6/net reserves + the 91D/182D/15Y yield rungs — to complete The
+        # Brief's reserves two-line chart and full 8-tenor yield ladder.
+        assert KEY_MAP["fxBPM6"].metric_id == "net_reserves_bpm6_usd_bn_monthly"
+        assert KEY_MAP["tb91"].metric_id == "tbill_91d_yield_monthly"
+        assert KEY_MAP["tb182"].metric_id == "tbill_182d_yield_monthly"
+        assert KEY_MAP["tr15y"].metric_id == "yield_15y_monthly"
+        # Full bill+bond ladder now mappable (8 tenors).
+        ladder = {m.metric_id for m in KEY_MAP.values()}
+        for tenor in ("tbill_91d_yield_monthly", "tbill_182d_yield_monthly",
+                      "tbill_364d_yield_monthly", "yield_2y_monthly",
+                      "yield_5y_monthly", "yield_10y_monthly",
+                      "yield_15y_monthly", "yield_20y_monthly"):
+            assert tenor in ladder, tenor
+
     def test_dsex_turnover_absent(self):
         # Per SHAPE_NOTES: no upstream turnover series; chart will use dsex only.
         ids = {m.metric_id for m in KEY_MAP.values()}
