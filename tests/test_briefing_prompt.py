@@ -1,6 +1,6 @@
 import pytest
-from briefing.prompt import build_prompt, validate_output, BriefingValidationError
 
+from briefing.prompt import BriefingValidationError, build_prompt, validate_output
 
 VALID_IDS = {"call_money_rate:change", "tbond_5y_yield:zscore"}
 
@@ -33,13 +33,15 @@ def test_validate_rejects_none():
 
 
 def test_validate_rejects_missing_title():
-    bad = _ok_output(); del bad["title"]
+    bad = _ok_output()
+    del bad["title"]
     with pytest.raises(BriefingValidationError, match="title"):
         validate_output(bad, VALID_IDS)
 
 
 def test_validate_rejects_bad_thread_status():
-    bad = _ok_output(); bad["updated_threads"][0]["status"] = "maybe"
+    bad = _ok_output()
+    bad["updated_threads"][0]["status"] = "maybe"
     with pytest.raises(BriefingValidationError, match="status"):
         validate_output(bad, VALID_IDS)
 

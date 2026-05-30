@@ -1,7 +1,9 @@
 from datetime import date
 from unittest.mock import patch
-from claude_max.max_client import MaxCallResult
+
 import briefing.__main__ as orch
+from briefing.freshness import FreshnessResult
+from claude_max.max_client import MaxCallResult
 
 
 def _history(metric_id, latest_value, latest_as_of="2026-05-29"):
@@ -11,8 +13,8 @@ def _history(metric_id, latest_value, latest_as_of="2026-05-29"):
 
 def _patches(core_stale=False, parsed=None):
     """Common monkeypatch set for the orchestrator's collaborators."""
-    fresh = orch.FreshnessResult(core_stale=core_stale, stale_series=[],
-                                 data_as_of=date(2026, 5, 29), reasons=["x"] if core_stale else [])
+    fresh = FreshnessResult(core_stale=core_stale, stale_series=[],
+                            data_as_of=date(2026, 5, 29), reasons=["x"] if core_stale else [])
     result = MaxCallResult(raw_text="{}", parsed=parsed, usage={}, total_cost_usd=0.0)
     return fresh, result
 

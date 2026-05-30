@@ -1,5 +1,6 @@
 from datetime import date
-from briefing.freshness import assess_freshness, FreshnessResult
+
+from briefing.freshness import assess_freshness
 
 TODAY = date(2026, 5, 30)
 CADENCE = {"call_money_rate": "daily", "tbond_5y_yield": "weekly",

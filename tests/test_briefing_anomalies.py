@@ -1,4 +1,4 @@
-from briefing.anomalies import compute_candidates, AnomalyCandidate
+from briefing.anomalies import compute_candidates
 
 
 def _series(values):

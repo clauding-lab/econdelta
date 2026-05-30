@@ -13,14 +13,14 @@ import os
 import sys
 from datetime import date, datetime, timedelta, timezone
 
+from briefing import config
+from briefing.anomalies import compute_candidates
+from briefing.freshness import assess_freshness
+from briefing.prompt import BriefingValidationError, build_prompt, validate_output
 from claude_max.max_client import MaxCallError, run_max
 from utils.notifier import notify
 from utils.supabase_reader import get_metric_history, get_recent_briefings, get_recent_run_ok
 from utils.supabase_writer import upsert_briefing
-from briefing import config
-from briefing.anomalies import compute_candidates
-from briefing.freshness import FreshnessResult, assess_freshness
-from briefing.prompt import BriefingValidationError, build_prompt, validate_output
 
 logger = logging.getLogger("briefing")
 
