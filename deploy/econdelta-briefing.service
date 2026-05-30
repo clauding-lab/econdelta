@@ -1,0 +1,38 @@
+[Unit]
+Description=EconDelta — Weekly ALCO briefing (Opus 4.8 1M, xhigh)
+Documentation=https://github.com/clauding-lab/econdelta
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=3600
+StartLimitBurst=2
+
+[Service]
+Type=oneshot
+User=adnan-local
+Group=adnan-local
+WorkingDirectory=/home/adnan-local/econdelta
+EnvironmentFile=/etc/econdelta.env
+Environment="CLAUDE_BINARY=/usr/bin/claude"
+ExecStart=/home/adnan-local/econdelta/.venv/bin/python -m briefing
+
+MemoryMax=1500M
+MemoryHigh=1200M
+CPUQuota=200%
+TasksMax=512
+
+PrivateTmp=true
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/adnan-local/econdelta/data /home/adnan-local/econdelta/logs /home/adnan-local/.claude
+
+TimeoutStartSec=3600
+Restart=on-failure
+RestartSec=600
+
+StandardOutput=append:/home/adnan-local/econdelta/logs/briefing-systemd.log
+StandardError=append:/home/adnan-local/econdelta/logs/briefing-systemd.log
+SyslogIdentifier=econdelta-briefing
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,11 @@
+[Unit]
+Description=Run EconDelta weekly ALCO briefing Mondays at 01:00 UTC (07:00 BDT) — uses the prior week's confirmed-fresh aggregate; freshness gate guards staleness
+Requires=econdelta-briefing.service
+
+[Timer]
+OnCalendar=Mon *-*-* 01:00:00 UTC
+Persistent=true
+RandomizedDelaySec=120
+
+[Install]
+WantedBy=timers.target

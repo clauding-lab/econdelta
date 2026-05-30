@@ -81,7 +81,7 @@ systemctl daemon-reload
 # Enable timers (not services — services are triggered by timers). Includes the
 # retry timers (forex/aggregate/parse) that backstop the primary daily fires.
 for t in econdelta-forex econdelta-commodity econdelta-aggregate econdelta-dse econdelta-fetch econdelta-parse \
-         econdelta-forex-retry econdelta-aggregate-retry econdelta-parse-retry; do
+         econdelta-forex-retry econdelta-aggregate-retry econdelta-parse-retry econdelta-briefing; do
   systemctl enable --now "${t}.timer"
 done
 
