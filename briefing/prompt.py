@@ -21,10 +21,16 @@ continuity, and (4) the current OPEN THREADS you have been tracking.
 Return ONLY a JSON object with this exact shape:
 {{
   "title": "<a sharp one-line headline>",
-  "body": "<3-5 tight paragraphs; reference figures only from the digest/candidates>",
+  "body": "<GitHub-flavored Markdown — see FORMAT below; reference figures only from the digest/candidates>",
   "featured_anomalies": [{{"candidate_id": "<MUST be one of the provided candidate ids>", "why": "<one line of ALCO relevance>"}}],
   "updated_threads": [{{"id": "<stable slug>", "thread": "<short name>", "status": "open|resolved", "since_week": "<ISO week>", "note": "<follow-through>"}}]
 }}
+
+FORMAT the body for sharp, scannable reading by a banker on mobile — NOT one long paragraph:
+- Open with a 1-2 sentence lede.
+- Then 2-4 `## ` sub-headings (e.g. "What moved", "Drivers", "ALCO implications", "Watch").
+- Under each, lead with `- ` bullet points for the key figures and takeaways; keep prose to at most one short connective sentence per section.
+- Keep it tight — UNDER ~250 words total. Use `**bold**` sparingly, for the single most important figure.
 
 Carry forward the open threads: mark resolved ones resolved, keep live ones open with an updated note, \
 and add new threads for newly material developments. Do not feature an anomaly whose candidate_id is \
