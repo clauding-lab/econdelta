@@ -21,7 +21,10 @@ def _row():
     }
 
 
-def test_upsert_briefing_posts_with_week_of_on_conflict():
+def test_upsert_briefing_posts_with_week_of_on_conflict(monkeypatch):
+    # conftest sets ECONDELTA_SKIP_SUPABASE=1 globally; clear it so the real
+    # write path runs (matches test_run_logging.py convention).
+    monkeypatch.delenv("ECONDELTA_SKIP_SUPABASE", raising=False)
     sess = _session()
     upsert_briefing(_row(), url="https://x.supabase.co", service_key="sk_test", session=sess)
     args, kwargs = sess.post.call_args
@@ -31,7 +34,17 @@ def test_upsert_briefing_posts_with_week_of_on_conflict():
     assert kwargs["json"]["week_of"] == "2026-05-25"
 
 
-def test_upsert_briefing_raises_on_http_error():
+def test_upsert_briefing_raises_on_http_error(monkeypatch):
+    monkeypatch.delenv("ECONDELTA_SKIP_SUPABASE", raising=False)
     sess = _session(status=400)
     with pytest.raises(SupabaseWriteError, match="HTTP 400"):
         upsert_briefing(_row(), url="https://x.supabase.co", service_key="sk_test", session=sess)
+
+
+def test_upsert_briefing_skips_when_skip_supabase_set(monkeypatch):
+    # ECONDELTA_SKIP_SUPABASE=1 must short-circuit before any POST, consistent
+    # with log_run_start/log_run_end/upsert_metric_definitions_seed.
+    monkeypatch.setenv("ECONDELTA_SKIP_SUPABASE", "1")
+    sess = _session()
+    upsert_briefing(_row(), url="https://x.supabase.co", service_key="sk_test", session=sess)
+    sess.post.assert_not_called()

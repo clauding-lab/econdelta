@@ -207,6 +207,8 @@ def upsert_briefing(row, *, url=None, service_key=None, timeout=_DEFAULT_TIMEOUT
     Unlike run_logs helpers (which swallow errors), this RAISES — a failed
     briefing write must be visible so the job returns non-zero.
     """
+    if os.environ.get("ECONDELTA_SKIP_SUPABASE") == "1":
+        return
     base_url, key = _resolve_credentials(url, service_key)
     endpoint = f"{base_url}/rest/v1/briefings?on_conflict=week_of"
     headers = {
