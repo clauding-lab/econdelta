@@ -6,7 +6,7 @@
 python3 scripts/build_catalog.py > docs/indicator-catalog.md
 ```
 
-**74** scraped indicators × **36** brief aliases × **12** unit conversions × **5** derived = **127** total entries.
+**76** scraped indicators × **36** brief aliases × **12** unit conversions × **5** derived = **129** total entries.
 
 Read the data contract for column semantics and query examples: [`data-contract.md`](data-contract.md).
 
@@ -115,6 +115,7 @@ Read the data contract for column semantics and query examples: [`data-contract.
 | monetary_aggregates (brief alias) | `macro_credit_growth` | `percent` | monthly | BB | [-30.0, 50.0] | Alias of `private_sector_credit_yoy_pct` — Private Sector Credit Growth YoY |
 | monetary_aggregates (brief conversion) | `fiscal_nsc_outstanding` | `amount_bdt_crore` | monthly | BB | — | Conversion of `nsc_outstanding` × 1e-05 — NSC outstanding |
 | money_market | `banking_sector_crar` | `percent` | quarterly | BB | [-50.0, 30.0] | Banking Sector CAR (Capital Adequacy Ratio) |
+| money_market | `bb_repo_usage_cr` | `amount_bdt_crore` | daily | BB | [0.0, 200000.0] | BB Central-Bank Repo Usage (Repo accepted amount from BB auction press release, BDT crore; usage LEVEL only). DISTINCT from interbank_repo_data (bank-to-bank) — this is central-bank repo (BB lending to banks). BB has largely STOPPED routine daily repo lending (shifting to SLF/ALS), so on many days the Repo line is ABSENT: a null is returned and NO new row is written that day — never a stale carry-forward and never a fabricated measured 0. YieldScope MUST apply an as_of-freshness guard (it returns the most-recent EXISTING row, which on a no-repo day is weeks old). |
 | money_market | `bill_bond_rates` | `percent` | daily | BB | [0.0, 25.0] | 91-Day T-Bill Cut-Off Yield |
 | money_market | `call_money_rate` | `percent` | daily | BB | [0.0, 25.0] | Call money rate |
 | money_market | `gross_npl_ratio` | `percent` | quarterly | BB | [0.0, 50.0] | Gross NPL Ratio (Banking Sector) |
@@ -123,6 +124,7 @@ Read the data contract for column semantics and query examples: [`data-contract.
 | money_market | `policy_rate_repo` | `percent` | monthly | BB | [3.0, 15.0] | Policy Rate (Repo) |
 | money_market | `policy_rate_sdf` | `percent` | monthly | BB | [3.0, 12.0] | Policy Rate Corridor — SDF (floor) |
 | money_market | `policy_rate_slf` | `percent` | monthly | BB | [4.0, 16.0] | Policy Rate Corridor — SLF (ceiling) |
+| money_market | `slf_draw_cr` | `amount_bdt_crore` | daily | BB | [0.0, 200000.0] | SLF Drawdown (Standing Lending Facility accepted amount, BDT crore; usage/DRAW LEVEL only — SLF is uncapped-on-demand, BB publishes NO 'limit', so this is intentionally draw-only with NO 'vs limit' denominator. DAILY: one BB auction-result press release per business day; no new row is written on a day with no SLF print.) |
 | money_market | `tbill_182d_yield` | `percent` | daily | BB | [0.0, 25.0] | 182-Day T-Bill Cut-Off Yield |
 | money_market | `tbill_364d_yield` | `percent` | daily | BB | [0.0, 25.0] | 364-Day T-Bill Cut-Off Yield |
 | money_market | `tbond_10y_yield` | `percent` | weekly | BB | [0.0, 25.0] | 10-Year BGTB Cut-Off Yield |

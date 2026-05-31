@@ -26,6 +26,7 @@ import parsers.pdf_table_latest  # noqa: F401
 import parsers.pdf_table_row  # noqa: F401
 import parsers.pdf_table_total  # noqa: F401
 import parsers.pdf_mfr_row  # noqa: F401
+import parsers.html_auction_press_row  # noqa: F401
 
 REPO_ROOT = Path(__file__).resolve().parent
 DEFAULT_CONFIG = REPO_ROOT / "config" / "sources-v3.json"
