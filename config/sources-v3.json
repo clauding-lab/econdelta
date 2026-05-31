@@ -1866,6 +1866,50 @@
         ]
       },
       "anomaly_threshold": 0.5
+    },
+    {
+      "id": "npl_by_ownership",
+      "name": "Gross NPL ratio by bank ownership (SOCB / PCB / FCB / Specialised), percent. 4-row ownership cluster from the BB Financial Stability Report (FSR) body. Parser returns a dict {socb,pcb,fcb,specialised}; aggregate_latest._flatten_ownership_cluster fans it out into the 4 scalar metrics npl_socb_pct / npl_pcb_pct / npl_fcb_pct / npl_specialised_pct (the call-money fan-out precedent — no schema change). NPL is inherently a ratio (bad loans / that segment's loans) published as a %, so the segment value IS a percent; there is no level to store. SOCB is normally the highest.",
+      "domain": "banking",
+      "cadence": "quarterly",
+      "fetch": {
+        "type": "pdf",
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/2/60",
+        "task": "Open the latest Financial Stability Report (FSR). Find the table giving the Gross NPL ratio (gross non-performing loans as a percent of total loans) broken down by bank ownership group: State-Owned Commercial Banks (SOCB / SCB), Private Commercial Banks (PCB), Foreign Commercial Banks (FCB), and Specialised Banks (SB / development banks). Read the MOST RECENT period column for each of the four groups. cluster=npl. Return the four percent values keyed by segment {socb,pcb,fcb,specialised}. VPS-confirm the page number, the exact ownership-group row labels, and which column is the latest quarter.",
+        "discover": "latest_pdf_link"
+      },
+      "parse": {
+        "deterministic": "pdf_fsr_ownership_cluster",
+        "llm_prompt": "pdf_fsr_npl_by_ownership.txt",
+        "value_type": "percent",
+        "valid_range": [
+          0.0,
+          100.0
+        ]
+      },
+      "anomaly_threshold": 0.25
+    },
+    {
+      "id": "deposits_by_ownership",
+      "name": "Bank deposits by ownership (SOCB / PCB / FCB / Specialised), BDT crore LEVELS (NOT shares). 4-row ownership cluster from the BB Financial Stability Report (FSR) body. Parser returns a dict {socb,pcb,fcb,specialised}; aggregate_latest._flatten_ownership_cluster fans it out into the 4 scalar metrics deposits_socb_cr / deposits_pcb_cr / deposits_fcb_cr / deposits_specialised_cr (the call-money fan-out precedent — no schema change). Stores LEVELS in BDT crore, not pre-computed shares: the YieldScope donut computes shares from the levels (null-safe) so they sum to 100% and stay consistent with deposits_of_the_system.",
+      "domain": "banking",
+      "cadence": "quarterly",
+      "fetch": {
+        "type": "pdf",
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/2/60",
+        "task": "Open the latest Financial Stability Report (FSR). Find the table giving total bank DEPOSITS (in BDT crore) broken down by bank ownership group: State-Owned Commercial Banks (SOCB / SCB), Private Commercial Banks (PCB), Foreign Commercial Banks (FCB), and Specialised Banks (SB / development banks). Read the MOST RECENT period column for each of the four groups and return the absolute deposit LEVEL in BDT crore (NOT a percentage share). cluster=deposits. Return the four crore values keyed by segment {socb,pcb,fcb,specialised}. VPS-confirm the page number, the exact ownership-group row labels, the latest-quarter column, and the published unit (convert to crore if the table is in BDT billion/million).",
+        "discover": "latest_pdf_link"
+      },
+      "parse": {
+        "deterministic": "pdf_fsr_ownership_cluster",
+        "llm_prompt": "pdf_fsr_deposits_by_ownership.txt",
+        "value_type": "amount_bdt_crore",
+        "valid_range": [
+          0.0,
+          30000000.0
+        ]
+      },
+      "anomaly_threshold": 0.1
     }
   ]
 }

@@ -6,7 +6,7 @@
 python3 scripts/build_catalog.py > docs/indicator-catalog.md
 ```
 
-**76** scraped indicators × **36** brief aliases × **12** unit conversions × **5** derived = **129** total entries.
+**78** scraped indicators × **36** brief aliases × **12** unit conversions × **5** derived = **131** total entries.
 
 Read the data contract for column semantics and query examples: [`data-contract.md`](data-contract.md).
 
@@ -14,6 +14,8 @@ Read the data contract for column semantics and query examples: [`data-contract.
 
 | Section | metric_id | Unit | Cadence | Source | Valid range | Description |
 |---------|-----------|------|---------|--------|-------------|-------------|
+| banking | `deposits_by_ownership` | `amount_bdt_crore` | quarterly | BB | [0.0, 30000000.0] | Bank deposits by ownership (SOCB / PCB / FCB / Specialised), BDT crore LEVELS (NOT shares). 4-row ownership cluster from the BB Financial Stability Report (FSR) body. Parser returns a dict {socb,pcb,fcb,specialised}; aggregate_latest._flatten_ownership_cluster fans it out into the 4 scalar metrics deposits_socb_cr / deposits_pcb_cr / deposits_fcb_cr / deposits_specialised_cr (the call-money fan-out precedent — no schema change). Stores LEVELS in BDT crore, not pre-computed shares: the YieldScope donut computes shares from the levels (null-safe) so they sum to 100% and stay consistent with deposits_of_the_system. |
+| banking | `npl_by_ownership` | `percent` | quarterly | BB | [0.0, 100.0] | Gross NPL ratio by bank ownership (SOCB / PCB / FCB / Specialised), percent. 4-row ownership cluster from the BB Financial Stability Report (FSR) body. Parser returns a dict {socb,pcb,fcb,specialised}; aggregate_latest._flatten_ownership_cluster fans it out into the 4 scalar metrics npl_socb_pct / npl_pcb_pct / npl_fcb_pct / npl_specialised_pct (the call-money fan-out precedent — no schema change). NPL is inherently a ratio (bad loans / that segment's loans) published as a %, so the segment value IS a percent; there is no level to store. SOCB is normally the highest. |
 | commodities | `food_atta_packet` | `rate` | daily | DAM | [20.0, 200.0] | Retail price — Atta packaged (BDT/kg) |
 | commodities | `food_chicken_farm` | `rate` | daily | DAM | [80.0, 400.0] | Retail price — Farm chicken (BDT/kg) |
 | commodities | `food_egg_red` | `rate` | daily | DAM | [20.0, 150.0] | Retail price — Red farm egg (BDT/4 pcs) |

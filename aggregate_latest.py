@@ -681,6 +681,55 @@ def _flatten_dict_indicators(data: dict) -> None:
             # persists the headline overnight rate as ``call_money_rate``.
             data["call_money_rate"] = float(overnight)
 
+    _flatten_ownership_cluster(
+        data,
+        source_key="npl_by_ownership",
+        key_prefix="npl_",
+        key_suffix="_pct",
+    )
+    _flatten_ownership_cluster(
+        data,
+        source_key="deposits_by_ownership",
+        key_prefix="deposits_",
+        key_suffix="_cr",
+    )
+
+
+def _flatten_ownership_cluster(
+    data: dict, *, source_key: str, key_prefix: str, key_suffix: str
+) -> None:
+    """Explode a 4-way bank-ownership cluster dict into per-segment scalars (S10).
+
+    The ``pdf_fsr_ownership_cluster`` parser returns a dict keyed by the four
+    canonical ownership segments — ``{"socb": .., "pcb": .., "fcb": ..,
+    "specialised": ..}`` — for two FSR clusters:
+
+      - ``npl_by_ownership``      → ``npl_socb_pct`` / ``npl_pcb_pct`` /
+                                    ``npl_fcb_pct`` / ``npl_specialised_pct``
+                                    (per-segment NPL ratio, percent).
+      - ``deposits_by_ownership`` → ``deposits_socb_cr`` / ``deposits_pcb_cr`` /
+                                    ``deposits_fcb_cr`` / ``deposits_specialised_cr``
+                                    (per-segment deposit LEVEL, BDT crore — NOT
+                                    a share; the donut computes shares downstream
+                                    so they stay consistent with
+                                    ``deposits_of_the_system``).
+
+    Mirrors the ``call_money_rate`` / ``dse_sector_heat`` fan-out: we mint one
+    numeric key per segment BEFORE the Supabase writer's scalar-only filter
+    drops the dict (landmine C). Idempotent: a per-segment key already in
+    ``data`` is left alone. No-op when the cluster indicator is absent or the
+    value isn't a dict.
+    """
+    cluster = data.get(source_key)
+    if not isinstance(cluster, dict):
+        return
+    for segment, value in cluster.items():
+        if not isinstance(value, (int, float)):
+            continue
+        key = f"{key_prefix}{str(segment).lower()}{key_suffix}"
+        if key not in data:
+            data[key] = float(value)
+
 
 def _apply_brief_aliases(data: dict) -> None:
     """Mutate `data` in place: surface EconDelta keys under brief-key names
