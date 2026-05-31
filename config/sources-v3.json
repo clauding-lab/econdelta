@@ -1639,6 +1639,31 @@
       }
     },
     {
+      "id": "current_account_balance",
+      "name": "Current Account Balance",
+      "domain": "macro",
+      "cadence": "monthly",
+      "fetch": {
+        "type": "html",
+        "url": "https://www.bb.org.bd/en/index.php/econdata/bop",
+        "task": "row=Current Account col=2 -- the Current Account Balance line of the BoP table, in USD billion; negative = deficit. NOT the Overall Balance row."
+      },
+      "parse": {
+        "deterministic": "html_table_row",
+        "llm_prompt": "current_account_balance.txt",
+        "value_type": "amount_usd_bn",
+        "valid_range": [
+          -20.0,
+          20.0
+        ]
+      },
+      "alternate": {
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
+        "type": "pdf",
+        "task": "On page 31, the Current Account Balance row of the BoP table, USD billion, negative = deficit. NOT the Overall Balance row."
+      }
+    },
+    {
       "id": "interbank_repo_data",
       "name": "Interbank Repo Data",
       "domain": "money_market",

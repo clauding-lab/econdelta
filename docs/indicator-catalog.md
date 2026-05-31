@@ -6,7 +6,7 @@
 python3 scripts/build_catalog.py > docs/indicator-catalog.md
 ```
 
-**68** scraped indicators × **36** brief aliases × **12** unit conversions × **2** derived = **118** total entries.
+**69** scraped indicators × **36** brief aliases × **12** unit conversions × **2** derived = **119** total entries.
 
 Read the data contract for column semantics and query examples: [`data-contract.md`](data-contract.md).
 
@@ -87,6 +87,7 @@ Read the data contract for column semantics and query examples: [`data-contract.
 | inflation (brief alias) | `macro_cpi_food` | `percent` | monthly | BB | [0.0, 50.0] | Alias of `food_inflation` — Food Inflation |
 | inflation (brief alias) | `macro_cpi_headline` | `percent` | monthly | BB | [0.0, 50.0] | Alias of `general_inflation` — General Inflation |
 | inflation (brief alias) | `macro_cpi_nonfood` | `percent` | monthly | BB | [0.0, 50.0] | Alias of `non_food_inflation` — Non-Food Inflation |
+| macro | `current_account_balance` | `amount_usd_bn` | monthly | BB | [-20.0, 20.0] | Current Account Balance |
 | macro | `gdp` | `amount_bdt_crore` | quarterly | BB | [0.0, 100000000.0] | GDP |
 | monetary_aggregates | `broad_money` | `amount_bdt_crore` | monthly | BB | [0.0, 30000000.0] | Broad Money |
 | monetary_aggregates | `currency_outside_bank` | `amount_bdt_crore` | monthly | BB | [0.0, 5000000.0] | Currency Outside Bank |
