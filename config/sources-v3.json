@@ -175,10 +175,11 @@
       "name": "Tax Revenue",
       "domain": "government_finance",
       "cadence": "monthly",
+      "cumulative": true,
       "fetch": {
         "type": "pdf",
         "url": "https://www.bb.org.bd/en/index.php/publication/publictn/5/27",
-        "task": "Go to latest available PDF, Component 9",
+        "task": "Go to the latest available PDF, Component 9 (NBR tax revenue). Return the CUMULATIVE fiscal-year-to-date (July to the latest reported month) NBR tax revenue total in BDT crore — the running cumulative total, which mid-year is typically 200,000+ crore. NEVER return a single month's collection or a target/shortfall figure.",
         "discover": "latest_pdf_link"
       },
       "parse": {
@@ -1009,6 +1010,7 @@
       "name": "NBR FYTD VAT Collection (BDT crore)",
       "domain": "government_finance",
       "cadence": "monthly",
+      "cumulative": true,
       "fetch": {
         "type": "html",
         "url": "https://www.tbsnews.net/nbr",
@@ -1032,6 +1034,7 @@
       "name": "NBR FYTD Income Tax Collection (BDT crore)",
       "domain": "government_finance",
       "cadence": "monthly",
+      "cumulative": true,
       "fetch": {
         "type": "html",
         "url": "https://www.tbsnews.net/nbr",
@@ -1055,6 +1058,7 @@
       "name": "NBR FYTD Customs Collection (BDT crore)",
       "domain": "government_finance",
       "cadence": "monthly",
+      "cumulative": true,
       "fetch": {
         "type": "html",
         "url": "https://www.tbsnews.net/nbr",

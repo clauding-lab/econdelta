@@ -16,6 +16,7 @@ commas and return a single number.
 RULES:
 - If you locate a candidate number matching the instruction, RETURN IT as `value`. Never put a number inside `reason` while leaving value=null — commit to the best-fit number.
 - Only return value=null when the data is genuinely absent from the provided text (empty extract, the named component not present, content is a CAPTCHA/bot-challenge page).
+- If the instruction asks for a fiscal-year-to-date (FYTD) or CUMULATIVE figure, return the running cumulative total, NEVER a single month's value. A cumulative FYTD figure only grows during a fiscal year.
 - Reply ONLY with strict JSON of the form:
 
 {{"value": <number-or-null>, "reason": "<1 sentence on where you found it OR why it is missing>"}}

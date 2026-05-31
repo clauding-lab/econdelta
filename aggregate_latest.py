@@ -43,6 +43,12 @@ STALE_THRESHOLDS_HOURS_BY_CADENCE: dict[str, float] = {
     "fy": 400 * 24.0,         # 9600h
 }
 
+# Cumulative-figure guard: a fiscal-year-to-date total can only rise within a FY.
+CUMULATIVE_DROP_TOLERANCE = 0.05   # >5% same-FY drop ⇒ implausible
+FISCAL_YEAR_START_MONTH = 7        # Bangladesh FY = July–June
+# Granular Opus reject: quarantine up to this many flagged fields; more ⇒ hard reject.
+MAX_QUARANTINE_FIELDS = 5
+
 logger = logging.getLogger("aggregate_latest")
 
 
@@ -228,6 +234,33 @@ def _load_last_good_snapshot(indicator_id: str, *, max_days_back: int = 60) -> d
     return None
 
 
+def _prior_good_snapshot(indicator_id: str, today: date) -> dict | None:
+    """Most-recent good snapshot strictly BEFORE `today` (by scraped_at date).
+
+    Unlike _load_last_good_snapshot, this excludes today's own snapshot — the
+    cumulative guard must compare today's value against a genuinely prior value.
+    """
+    d = DATA_DIR / indicator_id
+    if not d.exists():
+        return None
+    for path in sorted(d.glob("*.json"), reverse=True):
+        try:
+            blob = json.loads(path.read_text())
+        except (json.JSONDecodeError, OSError):
+            continue
+        if _is_bad_snapshot(blob):
+            continue
+        try:
+            scraped = datetime.fromisoformat(
+                blob["scraped_at"].replace("Z", "+00:00")
+            ).date()
+        except (KeyError, ValueError):
+            continue
+        if scraped < today:
+            return blob
+    return None
+
+
 def _is_fresh(snapshot: dict, now: datetime) -> bool:
     """Return True if the snapshot is within its cadence staleness threshold."""
     cadence = snapshot.get("cadence", "daily")
@@ -240,6 +273,72 @@ def _is_fresh(snapshot: dict, now: datetime) -> bool:
         return age_hours <= threshold
     except (KeyError, ValueError):
         return False
+
+
+def _fiscal_year(d: date) -> int:
+    """Bangladesh fiscal year (July–June). Returns the FY-start calendar year."""
+    return d.year if d.month >= FISCAL_YEAR_START_MONTH else d.year - 1
+
+
+def _is_cumulative_regression(
+    today_value: object,
+    prior_value: object,
+    today_date: date,
+    prior_date: date,
+) -> bool:
+    """True if a cumulative (FYTD) figure dropped implausibly within the same FY.
+
+    A cumulative fiscal-year-to-date total can only rise within a fiscal year.
+    A drop beyond CUMULATIVE_DROP_TOLERANCE in the SAME fiscal year is a parse
+    error. A drop across the July FY boundary is the legitimate annual reset.
+    """
+    if not isinstance(today_value, (int, float)) or isinstance(today_value, bool):
+        return False
+    if not isinstance(prior_value, (int, float)) or isinstance(prior_value, bool):
+        return False
+    if prior_value <= 0:
+        return False
+    if _fiscal_year(today_date) != _fiscal_year(prior_date):
+        return False  # FY reset — drop is legitimate
+    return today_value < prior_value * (1 - CUMULATIVE_DROP_TOLERANCE)
+
+
+def _quarantine_flagged(
+    data: dict[str, Any],
+    flagged_ids: list[str],
+    history: list[dict[str, Any]],
+) -> tuple[dict[str, Any], list[str], bool]:
+    """Quarantine Opus-flagged fields instead of rejecting the whole snapshot.
+
+    Returns (cleaned_data, quarantined_ids, hard_reject).
+    hard_reject is True when the verdict is untrustworthy or too broad:
+      * any flagged id is not present in `data`, or
+      * more than MAX_QUARANTINE_FIELDS ids are flagged.
+    Otherwise each flagged id is replaced with its most-recent good value from
+    `history` (newest-last list of archived `.data` dicts); if no historical
+    value exists, the field is dropped.
+    """
+    present = [fid for fid in flagged_ids if fid in data]
+    if len(present) != len(flagged_ids):
+        return data, [], True   # unmappable flagged id ⇒ don't trust the verdict
+    if len(present) > MAX_QUARANTINE_FIELDS:
+        return data, [], True   # too broadly broken to publish
+
+    cleaned = dict(data)
+    quarantined: list[str] = []
+    for fid in present:
+        last_good = None
+        for snap in reversed(history):  # newest-last ⇒ reversed = newest-first
+            v = (snap.get("data") or {}).get(fid)
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
+                last_good = v
+                break
+        if last_good is not None:
+            cleaned[fid] = last_good
+        else:
+            cleaned.pop(fid, None)
+        quarantined.append(fid)
+    return cleaned, quarantined, False
 
 
 def _build_v3_blocks(
@@ -296,6 +395,32 @@ def _build_v3_blocks(
                 historical.get("_stale_from", "?"),
             )
             snapshot = historical
+
+        # Cumulative-monotonicity guard: a FYTD/cumulative total can't fall within
+        # a fiscal year. If it did (parser/LLM mis-read), fall back to the prior
+        # good value, marked stale — see docs/.../nbr-guard-granular-reject.
+        elif ind.get("cumulative"):
+            prior = _prior_good_snapshot(indicator_id, now.date())
+            if prior is not None:
+                try:
+                    prior_date = datetime.fromisoformat(
+                        prior["scraped_at"].replace("Z", "+00:00")
+                    ).date()
+                except (KeyError, ValueError):
+                    prior_date = None
+                if prior_date is not None and _is_cumulative_regression(
+                    snapshot.get("value"), prior.get("value"), now.date(), prior_date
+                ):
+                    logger.error(
+                        "cumulative regression for %s: today=%s < prior-good=%s (same FY) "
+                        "— stale-fallback to %s",
+                        indicator_id, snapshot.get("value"), prior.get("value"),
+                        prior.get("scraped_at", "?"),
+                    )
+                    indicators_failed += 1
+                    prior = {**prior, "_provenance": "stale_fallback",
+                             "_stale_from": prior.get("scraped_at")}
+                    snapshot = prior
 
         fresh = _is_fresh(snapshot, now) and snapshot.get("_provenance") != "stale_fallback"
         if fresh:
@@ -638,20 +763,45 @@ def main() -> int:
             if verdict.get("skipped"):
                 logger.info("opus review skipped: %s", reason)
             elif status == "reject":
-                missing = verdict.get("missing", [])
-                anomalies = verdict.get("anomalies", [])
-                logger.error(
-                    "opus review REJECTED: %s | missing=%s | anomalies=%d",
-                    reason, missing[:5], len(anomalies),
+                missing = verdict.get("missing", []) or []
+                anomalies = verdict.get("anomalies", []) or []
+                flagged = [a.get("indicator") for a in anomalies if a.get("indicator")]
+                flagged = list({*flagged, *missing})
+                cleaned, quarantined, hard_reject = _quarantine_flagged(data, flagged, history)
+                if hard_reject:
+                    logger.error(
+                        "opus review REJECTED (hard): %s | missing=%s | anomalies=%d "
+                        "(unmappable or >%d fields) — keeping yesterday's latest.json",
+                        reason, missing[:5], len(anomalies), MAX_QUARANTINE_FIELDS,
+                    )
+                    notify(
+                        "warn",
+                        "EconDelta Opus review rejected today's data",
+                        f"reason: {reason}\nmissing: {missing[:5]}\nanomalies: {len(anomalies)}\n"
+                        f"keeping yesterday's latest.json — retry timers will re-run.",
+                    )
+                    return 1
+                # Granular path: quarantine the flagged fields, publish the rest.
+                logger.warning(
+                    "opus review reject → quarantined %d field(s): %s | reason: %s",
+                    len(quarantined), quarantined, reason,
                 )
                 notify(
                     "warn",
-                    "EconDelta Opus review rejected today's data",
-                    f"reason: {reason}\nmissing: {missing[:5]}\nanomalies: {len(anomalies)}\n"
-                    f"keeping yesterday's latest.json — retry timers will re-run; "
-                    f"if next aggregate-retry's review also rejects, brief publishes against yesterday's data.",
+                    "EconDelta published with fields quarantined",
+                    f"reason: {reason}\nquarantined: {quarantined}\n"
+                    f"these fields use last-good values; the rest published fresh.",
                 )
-                return 1
+                data = cleaned
+                bundle = LatestBundle(
+                    schema_version="3.0",
+                    updated_at=now,
+                    sources_status=sources_status,
+                    data=data,
+                    domains=domains,
+                    freshness=freshness,
+                    alerts=alerts,
+                )
             else:
                 logger.info("opus review OK: %s (confidence=%s)", reason, verdict.get("confidence"))
 
