@@ -6,7 +6,7 @@
 python3 scripts/build_catalog.py > docs/indicator-catalog.md
 ```
 
-**78** scraped indicators × **36** brief aliases × **12** unit conversions × **5** derived = **131** total entries.
+**78** scraped indicators × **36** brief aliases × **12** unit conversions × **8** derived = **134** total entries.
 
 Read the data contract for column semantics and query examples: [`data-contract.md`](data-contract.md).
 
@@ -42,9 +42,12 @@ Read the data contract for column semantics and query examples: [`data-contract.
 | commodities (brief alias) | `food_sugar_local_bdt` | `rate` | daily | DAM | [50.0, 250.0] | Alias of `food_sugar_local` — Retail price — Sugar local (BDT/kg) |
 | derived (cross-source) | `crr_utilisation_pct` | `percent` | monthly | — | — | Derived (S2): deposits_held_with_bb_crr / deposits_of_the_system × 100 — CRR balance held with BB as a % of total system deposits (NOT the regulated statutory maintenance ratio; no hardcoded policy rate). Computed in aggregate_latest._compute_reserve_utilisation, null/zero-denominator safe. Lands in metric_history under its own id. |
 | derived (cross-source) | `imf_eff_outstanding_sdr_mn` | `amount_sdr_mn` | monthly | — | — | Scraper-only (S5): Bangladesh's Extended Arrangements (EFF) outstanding under the combined ECF/EFF/RSF programme, in SDR Million, pulled directly from the IMF 'Financial Position in the Fund' page by scrapers/imf_eff.py (NO BD egress; no config indicator). Reported natively in SDR — NOT converted to USD (SDR/USD drifts). Lands in metric_history under its own id; as_of = the IMF month-end position date. |
+| derived (cross-source) | `lng_price_usd_mmbtu` | `amount_usd_mmbtu` | monthly | — | — | Scraper-only (S11): Liquefied natural gas (Japan) benchmark from the World Bank 'Pink Sheet' Monthly Prices sheet, in USD per mmbtu — the sheet's native unit (carried in the id). Pulled directly from the CMO monthly .xlsx by scrapers/world_bank_pink_sheet.py via stdlib zip/XML (NO BD egress, no new dependency, no config indicator). Lands in metric_history under its own id; as_of = the latest reporting month's end. |
 | derived (cross-source) | `nbr_fytd_collected_cr` | `amount_bdt_crore` | monthly | — | — | NBR fiscal-year-to-date collection — sourced canonically from tax_revenue (BB PDF, deterministic parse, 5% anomaly threshold). News corroborators (TBS, Daily Star) retired 2026-05-25. |
 | derived (cross-source) | `nbr_fytd_cross_check` | `string` | monthly | — | — | Cross-check status for nbr_fytd_collected_cr — now always 'single_source_tax_revenue' since the news corroborator path was retired 2026-05-25. Strings only land in latest.json — NOT in metric_history (writer filters strings). |
+| derived (cross-source) | `palm_oil_price_usd_mt` | `amount_usd_mt` | monthly | — | — | Scraper-only (S11): Palm oil benchmark from the World Bank 'Pink Sheet' Monthly Prices sheet, in USD per metric ton — the sheet's native unit (carried in the id). Pulled by scrapers/world_bank_pink_sheet.py via stdlib zip/XML (NO BD egress, no new dependency, no config indicator). as_of = the latest reporting month's end. |
 | derived (cross-source) | `slr_utilisation_pct` | `percent` | monthly | — | — | Derived (S2): excess_liquid_asset_total_minimum / deposits_of_the_system × 100 — excess liquid assets over the statutory SLR minimum as a % of total system deposits (NOT the regulated maintenance ratio). Computed in aggregate_latest._compute_reserve_utilisation, null/zero-denominator safe. |
+| derived (cross-source) | `wheat_price_usd_mt` | `amount_usd_mt` | monthly | — | — | Scraper-only (S11): Wheat (US SRW) benchmark from the World Bank 'Pink Sheet' Monthly Prices sheet, in USD per metric ton — the sheet's native unit (carried in the id). Pulled by scrapers/world_bank_pink_sheet.py via stdlib zip/XML (NO BD egress, no new dependency, no config indicator). as_of = the latest reporting month's end. |
 | equities | `dse_sector_heat` | `sector_dict` | daily | DSE | [-50.0, 50.0] | DSE Sector Heat (8 sectors, % avg) |
 | external_sector | `bop_summary` | `amount_usd_bn` | monthly | BB | [-20.0, 20.0] | BOP Summary |
 | external_sector | `categorywise_export` | `amount_usd_bn` | fiscal_year | BB | [0.0, 60.0] | Categorywise Export |
