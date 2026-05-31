@@ -6,7 +6,7 @@
 python3 scripts/build_catalog.py > docs/indicator-catalog.md
 ```
 
-**73** scraped indicators × **36** brief aliases × **12** unit conversions × **5** derived = **126** total entries.
+**74** scraped indicators × **36** brief aliases × **12** unit conversions × **5** derived = **127** total entries.
 
 Read the data contract for column semantics and query examples: [`data-contract.md`](data-contract.md).
 
@@ -79,6 +79,7 @@ Read the data contract for column semantics and query examples: [`data-contract.
 | government_finance | `tax_gdp_ratio` | `percent` | quarterly |  | [0.0, 30.0] | Tax-GDP Ratio |
 | government_finance | `tax_revenue` | `amount_bdt_crore` | monthly | BB | [0.0, 500000.0] | Tax Revenue |
 | government_finance | `total_revenue_budget_vs_actual` | `amount_bdt_crore` | monthly |  | [0.0, 600000.0] | Total Revenue Budget vs Actual |
+| government_finance | `ways_means_usage_cr` | `amount_bdt_crore` | monthly | BB | [0.0, 500000.0] | Ways & Means Advances Usage (BB overdraft to government; usage LEVEL only — there is NO published monthly limit/ceiling cell, so this is intentionally usage-only with NO 'vs limit' denominator. CEIC sources Tk120,000cr Nov-2025 vs Tk90,924cr Oct-2025.) |
 | government_finance (brief alias) | `nbr_fytd_collected_cr` | `amount_bdt_crore` | monthly | BB | [0.0, 500000.0] | Alias of `tax_revenue` — Tax Revenue |
 | government_finance (brief conversion) | `fiscal_bank_borrow_trn` | `amount_bdt_crore` | monthly | BB | — | Conversion of `bank_borrowing_for_deficit_financing` × 1e-05 — Bank Borrowing for Deficit Financing |
 | government_finance (brief conversion) | `fiscal_foreign_borrow_trn` | `amount_bdt_crore` | monthly | BB | — | Conversion of `foreign_borrowing_for_budget_deficit` × 1e-05 — Foreign Borrowing for Budget Deficit |

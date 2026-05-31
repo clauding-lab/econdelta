@@ -1788,6 +1788,33 @@
         ]
       },
       "anomaly_threshold": 0.25
+    },
+    {
+      "id": "ways_means_usage_cr",
+      "name": "Ways & Means Advances Usage (BB overdraft to government; usage LEVEL only — there is NO published monthly limit/ceiling cell, so this is intentionally usage-only with NO 'vs limit' denominator. CEIC sources Tk120,000cr Nov-2025 vs Tk90,924cr Oct-2025.)",
+      "domain": "government_finance",
+      "cadence": "monthly",
+      "fetch": {
+        "type": "pdf",
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
+        "task": "BB Major Economic Indicators (MEI), government-finance section: the 'Ways and Means Advances' (WMA, BB overdraft to government) outstanding/usage row, Tk-crore column. This is the USAGE level — do NOT extract or fabricate a limit/ceiling (none is published in this table). page=14 table=1 row=Ways and Means col=2 (VPS-confirm the page/table/row/col indices against the latest MEI edition layout — MEI page numbers shift edition-to-edition; prefer the 'Ways and Means' row-label match over the absolute page index).",
+        "discover": "latest_pdf_link"
+      },
+      "parse": {
+        "deterministic": "pdf_table_row",
+        "llm_prompt": "pdf_table_row.txt",
+        "value_type": "amount_bdt_crore",
+        "valid_range": [
+          0.0,
+          500000.0
+        ]
+      },
+      "anomaly_threshold": 0.25,
+      "alternate": {
+        "url": "https://mof.gov.bd/site/page/debt-bulletin",
+        "type": "pdf",
+        "task": "Latest MoF Debt Bulletin: the short-term/overdraft financing table, the 'Ways and Means Advances' (WMA) outstanding row, Tk-crore column. Usage level only — no limit. page=1 table=1 row=Ways and Means col=2 (VPS-confirm indices against the latest bulletin layout)."
+      }
     }
   ]
 }
