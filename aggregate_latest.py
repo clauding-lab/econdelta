@@ -404,6 +404,32 @@ def _build_v3_blocks(
             )
             snapshot = historical
 
+        # Cumulative-monotonicity guard: a FYTD/cumulative total can't fall within
+        # a fiscal year. If it did (parser/LLM mis-read), fall back to the prior
+        # good value, marked stale — see docs/.../nbr-guard-granular-reject.
+        elif ind.get("cumulative"):
+            prior = _prior_good_snapshot(indicator_id, now.date())
+            if prior is not None:
+                try:
+                    prior_date = datetime.fromisoformat(
+                        prior["scraped_at"].replace("Z", "+00:00")
+                    ).date()
+                except (KeyError, ValueError):
+                    prior_date = None
+                if prior_date is not None and _is_cumulative_regression(
+                    snapshot.get("value"), prior.get("value"), now.date(), prior_date
+                ):
+                    logger.error(
+                        "cumulative regression for %s: today=%s < prior-good=%s (same FY) "
+                        "— stale-fallback to %s",
+                        indicator_id, snapshot.get("value"), prior.get("value"),
+                        prior.get("scraped_at", "?"),
+                    )
+                    indicators_failed += 1
+                    prior = {**prior, "_provenance": "stale_fallback",
+                             "_stale_from": prior.get("scraped_at")}
+                    snapshot = prior
+
         fresh = _is_fresh(snapshot, now) and snapshot.get("_provenance") != "stale_fallback"
         if fresh:
             indicators_fresh += 1

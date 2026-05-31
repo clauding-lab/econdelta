@@ -70,3 +70,46 @@ class TestPriorGoodSnapshot:
         )
         monkeypatch.setattr(aggregate_latest, "DATA_DIR", tmp_path)
         assert aggregate_latest._prior_good_snapshot("tax_revenue", date(2026, 5, 31)) is None
+
+
+class TestGuardInBuildBlocks:
+    def _write(self, root, ind_id, dates_values):
+        d = root / ind_id
+        d.mkdir()
+        for ds, val in dates_values:
+            (d / f"{ds}.json").write_text(
+                f'{{"value": {val}, "scraped_at": "{ds}T05:00:00+00:00", '
+                f'"_provenance": "llm_extracted", "change_pct": null}}'
+            )
+
+    def test_cumulative_regression_uses_prior_good(self, tmp_path, monkeypatch):
+        from datetime import datetime, timezone
+
+        import aggregate_latest
+        self._write(tmp_path, "tax_revenue", [("2026-05-30", 287862.59), ("2026-05-31", 33522.0)])
+        monkeypatch.setattr(aggregate_latest, "DATA_DIR", tmp_path)
+        monkeypatch.setattr(
+            aggregate_latest, "_load_v3_registry",
+            lambda: [{"id": "tax_revenue", "domain": "government_finance",
+                      "cadence": "monthly", "cumulative": True}],
+        )
+        data_additions, _, _, _ = aggregate_latest._build_v3_blocks(
+            datetime(2026, 5, 31, 6, 0, tzinfo=timezone.utc)
+        )
+        # guard replaced the regressed 33522 with the prior-good 287862.59
+        assert data_additions["tax_revenue"] == 287862.59
+
+    def test_non_cumulative_drop_is_untouched(self, tmp_path, monkeypatch):
+        from datetime import datetime, timezone
+
+        import aggregate_latest
+        self._write(tmp_path, "some_level", [("2026-05-30", 100.0), ("2026-05-31", 10.0)])
+        monkeypatch.setattr(aggregate_latest, "DATA_DIR", tmp_path)
+        monkeypatch.setattr(
+            aggregate_latest, "_load_v3_registry",
+            lambda: [{"id": "some_level", "domain": "macro", "cadence": "daily"}],
+        )
+        data_additions, _, _, _ = aggregate_latest._build_v3_blocks(
+            datetime(2026, 5, 31, 6, 0, tzinfo=timezone.utc)
+        )
+        assert data_additions["some_level"] == 10.0  # no guard for non-cumulative

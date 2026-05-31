@@ -175,6 +175,7 @@
       "name": "Tax Revenue",
       "domain": "government_finance",
       "cadence": "monthly",
+      "cumulative": true,
       "fetch": {
         "type": "pdf",
         "url": "https://www.bb.org.bd/en/index.php/publication/publictn/5/27",
@@ -228,6 +229,7 @@
       "name": "Non-NBR Tax Revenue (MoF MFR, FYTD)",
       "domain": "government_finance",
       "cadence": "monthly",
+      "cumulative": true,
       "fetch": {
         "type": "pdf",
         "url": "https://mof.gov.bd/pages/static-pages/6940329635ce18e1c055ef1a",
@@ -1026,6 +1028,7 @@
       "name": "NBR FYTD VAT Collection (BDT crore)",
       "domain": "government_finance",
       "cadence": "monthly",
+      "cumulative": true,
       "fetch": {
         "type": "html",
         "url": "https://www.tbsnews.net/nbr",
@@ -1049,6 +1052,7 @@
       "name": "NBR FYTD Income Tax Collection (BDT crore)",
       "domain": "government_finance",
       "cadence": "monthly",
+      "cumulative": true,
       "fetch": {
         "type": "html",
         "url": "https://www.tbsnews.net/nbr",
@@ -1072,6 +1076,7 @@
       "name": "NBR FYTD Customs Collection (BDT crore)",
       "domain": "government_finance",
       "cadence": "monthly",
+      "cumulative": true,
       "fetch": {
         "type": "html",
         "url": "https://www.tbsnews.net/nbr",
