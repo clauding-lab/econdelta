@@ -111,7 +111,7 @@ function Sidebar({ route }){
       <div className="brand">
         <div className="mark">/// EconDelta</div>
         <div className="name">Pipeline</div>
-        <div className="tag">main · 928b569 · v0.1</div>
+        <div className="tag">main · v1.0.0</div>
       </div>
       <nav>
         {items.map(g => (
@@ -319,7 +319,7 @@ function Masthead(){
         <div className="right">
           <div className="issue">Vol. 1, No. 122</div>
           <div className="date">2026-05-02 SAT</div>
-          <div className="smol">10:35 UTC · v0.1</div>
+          <div className="smol">10:35 UTC · v1.0.0</div>
           <div className="refreshRow">
             <button
               type="button"

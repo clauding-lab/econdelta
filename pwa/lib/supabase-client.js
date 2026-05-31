@@ -127,6 +127,57 @@ const RUN_WINDOW_DAYS = 60;
     return (today - prev) / prev;
   }
 
+  // Repository-wide stats for the front-page hero: two count=exact probes plus
+  // the earliest archive date. PostgREST returns the exact total in the
+  // Content-Range response header ("0-0/<total>") when Prefer: count=exact.
+  async function countExact(table){
+    const res = await fetch(
+      `${cfg.url}/rest/v1/${table}?select=metric_id&limit=1`,
+      { headers: { ...HEADERS, Prefer: 'count=exact' } }
+    );
+    if(!res.ok) return null;
+    const cr = res.headers.get('content-range') || '';
+    const total = parseInt(cr.split('/')[1], 10);
+    return Number.isFinite(total) ? total : null;
+  }
+
+  // Best-effort: any failure (or mock mode) returns null and the hero falls back
+  // to baked constants (see pages/latest.jsx). Never throws into bootstrap.
+  async function fetchRepoStats(){
+    try {
+      const [daily, archive, indicators, earliestRes] = await Promise.all([
+        countExact('metric_history'),
+        countExact('metric_history_monthly'),
+        countExact('metric_definitions'),
+        fetch(`${cfg.url}/rest/v1/metric_history_monthly?select=as_of&order=as_of.asc&limit=1`, { headers: HEADERS }),
+      ]);
+      // Any failed probe → fall back to baked constants. Showing a partial total
+      // (e.g. 4,912 when only the archive probe dropped) would be a confident wrong
+      // number, worse than the honest "10,000+" fallback.
+      if(daily == null || archive == null || indicators == null) return null;
+      let earliest = null;
+      if(earliestRes && earliestRes.ok){
+        const rows = await earliestRes.json();
+        earliest = (rows && rows[0] && rows[0].as_of) || null;
+      }
+      const nowYear = new Date().getUTCFullYear();
+      const backlogYears = earliest
+        ? nowYear - new Date(earliest + 'T00:00:00Z').getUTCFullYear()
+        : null;
+      return {
+        dataPoints: (daily || 0) + (archive || 0),
+        dailyRows: daily,
+        archiveRows: archive,
+        indicators,
+        earliest,
+        backlogYears,
+      };
+    } catch (e) {
+      console.warn('[EconDelta] repo stats fetch failed', e);
+      return null;
+    }
+  }
+
   async function bootstrap(){
     // Single RPC for definitions + values + sources_status.
     const dashRes = await fetch(`${cfg.url}/rest/v1/rpc/get_latest_dashboard`, {
@@ -256,6 +307,7 @@ const RUN_WINDOW_DAYS = 60;
 
     window.ED_DATA = {
       today,
+      stats: null,   // populated post-paint by fetchRepoStats() below; hero shows fallbacks until then
       dashboard,
       history,
       runs: runsBySource,
@@ -271,6 +323,17 @@ const RUN_WINDOW_DAYS = 60;
     };
 
     window.dispatchEvent(new CustomEvent('ed:data-changed'));
+
+    // Repo stats use slow count=exact probes — load them AFTER first paint so
+    // they don't gate the dashboard. The hero renders baked fallbacks until this
+    // resolves, then upgrades to live numbers. Best-effort: a failure (or any
+    // missing probe) leaves the fallback in place.
+    fetchRepoStats().then(stats => {
+      if (stats && window.ED_DATA) {
+        window.ED_DATA.stats = stats;
+        window.dispatchEvent(new CustomEvent('ed:data-changed'));
+      }
+    });
   }
 
   // Manual refresh — pull-to-refresh or button click.
