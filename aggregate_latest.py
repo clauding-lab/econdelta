@@ -866,20 +866,45 @@ def main() -> int:
             if verdict.get("skipped"):
                 logger.info("opus review skipped: %s", reason)
             elif status == "reject":
-                missing = verdict.get("missing", [])
-                anomalies = verdict.get("anomalies", [])
-                logger.error(
-                    "opus review REJECTED: %s | missing=%s | anomalies=%d",
-                    reason, missing[:5], len(anomalies),
+                missing = verdict.get("missing", []) or []
+                anomalies = verdict.get("anomalies", []) or []
+                flagged = [a.get("indicator") for a in anomalies if a.get("indicator")]
+                flagged = list({*flagged, *missing})
+                cleaned, quarantined, hard_reject = _quarantine_flagged(data, flagged, history)
+                if hard_reject:
+                    logger.error(
+                        "opus review REJECTED (hard): %s | missing=%s | anomalies=%d "
+                        "(unmappable or >%d fields) — keeping yesterday's latest.json",
+                        reason, missing[:5], len(anomalies), MAX_QUARANTINE_FIELDS,
+                    )
+                    notify(
+                        "warn",
+                        "EconDelta Opus review rejected today's data",
+                        f"reason: {reason}\nmissing: {missing[:5]}\nanomalies: {len(anomalies)}\n"
+                        f"keeping yesterday's latest.json — retry timers will re-run.",
+                    )
+                    return 1
+                # Granular path: quarantine the flagged fields, publish the rest.
+                logger.warning(
+                    "opus review reject → quarantined %d field(s): %s | reason: %s",
+                    len(quarantined), quarantined, reason,
                 )
                 notify(
                     "warn",
-                    "EconDelta Opus review rejected today's data",
-                    f"reason: {reason}\nmissing: {missing[:5]}\nanomalies: {len(anomalies)}\n"
-                    f"keeping yesterday's latest.json — retry timers will re-run; "
-                    f"if next aggregate-retry's review also rejects, brief publishes against yesterday's data.",
+                    "EconDelta published with fields quarantined",
+                    f"reason: {reason}\nquarantined: {quarantined}\n"
+                    f"these fields use last-good values; the rest published fresh.",
                 )
-                return 1
+                data = cleaned
+                bundle = LatestBundle(
+                    schema_version="3.0",
+                    updated_at=now,
+                    sources_status=sources_status,
+                    data=data,
+                    domains=domains,
+                    freshness=freshness,
+                    alerts=alerts,
+                )
             else:
                 logger.info("opus review OK: %s (confidence=%s)", reason, verdict.get("confidence"))
 
