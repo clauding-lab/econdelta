@@ -6,7 +6,7 @@
 python3 scripts/build_catalog.py > docs/indicator-catalog.md
 ```
 
-**70** scraped indicators × **36** brief aliases × **12** unit conversions × **4** derived = **122** total entries.
+**71** scraped indicators × **36** brief aliases × **12** unit conversions × **4** derived = **123** total entries.
 
 Read the data contract for column semantics and query examples: [`data-contract.md`](data-contract.md).
 
@@ -63,6 +63,7 @@ Read the data contract for column semantics and query examples: [`data-contract.
 | government_finance | `bank_borrowing_for_deficit_financing` | `amount_bdt_crore` | monthly | BB | [0.0, 400000.0] | Bank Borrowing for Deficit Financing |
 | government_finance | `budget_adpex_of_the_fy_vs_utilization` | `amount_bdt_crore` | fiscal_year |  | [0.0, 500000.0] | Budget ADPEx of the FY vs Utilization |
 | government_finance | `budget_opex_of_the_fy_vs_utilization` | `amount_bdt_crore` | fiscal_year |  | [0.0, 1000000.0] | Budget OpEx of the FY vs Utilization |
+| government_finance | `debt_gdp_ratio` | `percent` | quarterly | mof.gov.bd | [10.0, 100.0] | Debt-to-GDP Ratio (MoF Debt Bulletin latest print; IMF DataMapper supplies back-history via scrapers/imf_debt_gdp.py) |
 | government_finance | `domestic_borrowing_for_budget_deficit` | `amount_bdt_crore` | monthly | BB | [0.0, 400000.0] | Domestic Borrowing for Budget Deficit |
 | government_finance | `foreign_borrowing_for_budget_deficit` | `amount_bdt_crore` | monthly | BB | [0.0, 200000.0] | Foreign Borrowing for Budget Deficit |
 | government_finance | `nbr_customs_collected_cr` | `amount_bdt_crore` | monthly | TBS | [10000.0, 800000.0] | NBR FYTD Customs Collection (BDT crore) |

@@ -1722,6 +1722,28 @@
         ]
       },
       "anomaly_threshold": 0.05
+    },
+    {
+      "id": "debt_gdp_ratio",
+      "name": "Debt-to-GDP Ratio (MoF Debt Bulletin latest print; IMF DataMapper supplies back-history via scrapers/imf_debt_gdp.py)",
+      "domain": "government_finance",
+      "cadence": "quarterly",
+      "fetch": {
+        "type": "pdf",
+        "url": "https://mof.gov.bd/site/page/debt-bulletin",
+        "task": "Latest MoF Debt Bulletin: the summary debt table, the 'Total Public Debt as % of GDP' row. page=1 table=1 row=as % of GDP col=2 (VPS-confirm the page/table/row/col indices against the latest bulletin layout).",
+        "discover": "latest_pdf_link"
+      },
+      "parse": {
+        "deterministic": "pdf_table_row",
+        "llm_prompt": "pdf_table_row.txt",
+        "value_type": "percent",
+        "valid_range": [
+          10.0,
+          100.0
+        ]
+      },
+      "anomaly_threshold": 0.5
     }
   ]
 }

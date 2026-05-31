@@ -37,6 +37,20 @@ When something ships broken, when a methodology gap is exposed, or when a smoke 
 
 ## Entries (most recent first)
 
+## 2026-05-31 — IMF DataMapper (Akamai) BLOCKS spoofed browser UAs — opposite of BB's CAPTCHA wall
+
+**Trigger:** Building the IMF debt/GDP history scraper (`scrapers/imf_debt_gdp.py`, plan S4). The initial implementation cargo-culted a `Mozilla/5.0 ... Chrome` browser User-Agent (the reflex from BB/DSE scrapers that need a browser UA to get past their bot walls). The live no-egress smoke run returned **HTTP 403 "Access Denied"** from `www.imf.org/external/datamapper/api/v1/...`.
+
+**What went wrong:** The IMF DataMapper API sits behind **Akamai EdgeSuite**, whose bot rules do the OPPOSITE of BB's CAPTCHA: a spoofed browser UA is treated as bot-evasion and rejected (403), while an HONEST non-browser client (`curl/8.7.1`, python-`requests` default `python-requests/x.x`) is allowed (HTTP 200, full JSON). I had verified the source earlier with a bare `curl` (default curl UA → 200), then "hardened" the scraper with a browser UA and broke it. Two further traps: (1) the API ignores the `/COUNTRY` path segment and returns ALL 226 countries — filter `.values.<INDICATOR>.<ISO3>` client-side; (2) the `?country=BGD` query param is rejected by the same WAF.
+
+**Lesson:** Egress walls are not uniform — do NOT assume the BB browser-UA trick generalizes. For a new source, verify the EXACT client signature that earned the 200 (UA, headers, path vs query) and encode THAT, not a habit from a different publisher. A spoofed browser UA can be the thing that gets you blocked.
+
+**Prevention:** `fetch_imf_payload` sends NO custom User-Agent (requests default) with a comment forbidding a browser UA. Live no-egress smoke (`fetch_imf_payload()` + `parse_imf_series()`) is part of the S4 verification and would have caught this immediately had it run before the UA was added — run the live fetch for any NO-egress source before committing, not just the mocked unit tests.
+
+**Hotfix:** Removed the `_BROWSER_UA` constant + header from `scrapers/imf_debt_gdp.py`; live fetch then returned 29 years (2003-2031) of real BGD data (2024 = 41.0%).
+
+**Cross-references:** plan S4; landmine G/E adjacency (HTML cleaning / header-match); global `AGENT_LEARNINGS.md` (if promoted: "verify the exact 200 signature per source; browser-UA is not universal").
+
 ## 2026-05-30 — Weekly-briefing freshness gate passed when a CORE metric had ZERO history rows
 
 **Trigger:** Adversarial final code review of the weekly-briefing branch (PR #39) flagged a CRITICAL: `briefing/freshness.assess_freshness` could return `core_stale=False` when a core series was entirely absent from `metric_history`.
