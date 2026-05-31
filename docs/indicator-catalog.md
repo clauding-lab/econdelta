@@ -6,7 +6,7 @@
 python3 scripts/build_catalog.py > docs/indicator-catalog.md
 ```
 
-**71** scraped indicators × **36** brief aliases × **12** unit conversions × **4** derived = **123** total entries.
+**73** scraped indicators × **36** brief aliases × **12** unit conversions × **5** derived = **126** total entries.
 
 Read the data contract for column semantics and query examples: [`data-contract.md`](data-contract.md).
 
@@ -39,6 +39,7 @@ Read the data contract for column semantics and query examples: [`data-contract.
 | commodities (brief alias) | `food_rice_coarse_bdt` | `rate` | daily | DAM | [20.0, 200.0] | Alias of `food_rice_coarse` — Retail price — Aman coarse rice (BDT/kg) |
 | commodities (brief alias) | `food_sugar_local_bdt` | `rate` | daily | DAM | [50.0, 250.0] | Alias of `food_sugar_local` — Retail price — Sugar local (BDT/kg) |
 | derived (cross-source) | `crr_utilisation_pct` | `percent` | monthly | — | — | Derived (S2): deposits_held_with_bb_crr / deposits_of_the_system × 100 — CRR balance held with BB as a % of total system deposits (NOT the regulated statutory maintenance ratio; no hardcoded policy rate). Computed in aggregate_latest._compute_reserve_utilisation, null/zero-denominator safe. Lands in metric_history under its own id. |
+| derived (cross-source) | `imf_eff_outstanding_sdr_mn` | `amount_sdr_mn` | monthly | — | — | Scraper-only (S5): Bangladesh's Extended Arrangements (EFF) outstanding under the combined ECF/EFF/RSF programme, in SDR Million, pulled directly from the IMF 'Financial Position in the Fund' page by scrapers/imf_eff.py (NO BD egress; no config indicator). Reported natively in SDR — NOT converted to USD (SDR/USD drifts). Lands in metric_history under its own id; as_of = the IMF month-end position date. |
 | derived (cross-source) | `nbr_fytd_collected_cr` | `amount_bdt_crore` | monthly | — | — | NBR fiscal-year-to-date collection — sourced canonically from tax_revenue (BB PDF, deterministic parse, 5% anomaly threshold). News corroborators (TBS, Daily Star) retired 2026-05-25. |
 | derived (cross-source) | `nbr_fytd_cross_check` | `string` | monthly | — | — | Cross-check status for nbr_fytd_collected_cr — now always 'single_source_tax_revenue' since the news corroborator path was retired 2026-05-25. Strings only land in latest.json — NOT in metric_history (writer filters strings). |
 | derived (cross-source) | `slr_utilisation_pct` | `percent` | monthly | — | — | Derived (S2): excess_liquid_asset_total_minimum / deposits_of_the_system × 100 — excess liquid assets over the statutory SLR minimum as a % of total system deposits (NOT the regulated maintenance ratio). Computed in aggregate_latest._compute_reserve_utilisation, null/zero-denominator safe. |
@@ -63,6 +64,8 @@ Read the data contract for column semantics and query examples: [`data-contract.
 | government_finance | `bank_borrowing_for_deficit_financing` | `amount_bdt_crore` | monthly | BB | [0.0, 400000.0] | Bank Borrowing for Deficit Financing |
 | government_finance | `budget_adpex_of_the_fy_vs_utilization` | `amount_bdt_crore` | fiscal_year |  | [0.0, 500000.0] | Budget ADPEx of the FY vs Utilization |
 | government_finance | `budget_opex_of_the_fy_vs_utilization` | `amount_bdt_crore` | fiscal_year |  | [0.0, 1000000.0] | Budget OpEx of the FY vs Utilization |
+| government_finance | `debt_domestic_stock_cr` | `amount_bdt_crore` | quarterly | mof.gov.bd | [500000.0, 3000000.0] | Domestic Debt Outstanding Stock (MoF Debt Bulletin; FY25 ~Tk11.95tn). Stock level, NOT the deficit-financing flow domestic_borrowing_for_budget_deficit. |
+| government_finance | `debt_external_stock_cr` | `amount_bdt_crore` | quarterly | mof.gov.bd | [300000.0, 3000000.0] | External Debt Outstanding Stock (MoF Debt Bulletin; FY25 ~Tk9.49tn). Stock level, NOT the deficit-financing flow foreign_borrowing_for_budget_deficit. |
 | government_finance | `debt_gdp_ratio` | `percent` | quarterly | mof.gov.bd | [10.0, 100.0] | Debt-to-GDP Ratio (MoF Debt Bulletin latest print; IMF DataMapper supplies back-history via scrapers/imf_debt_gdp.py) |
 | government_finance | `domestic_borrowing_for_budget_deficit` | `amount_bdt_crore` | monthly | BB | [0.0, 400000.0] | Domestic Borrowing for Budget Deficit |
 | government_finance | `foreign_borrowing_for_budget_deficit` | `amount_bdt_crore` | monthly | BB | [0.0, 200000.0] | Foreign Borrowing for Budget Deficit |

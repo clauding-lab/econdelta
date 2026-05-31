@@ -80,6 +80,17 @@ DERIVED_KEYS: list[tuple[str, str, str, str]] = [
         "total system deposits (NOT the regulated maintenance ratio). Computed in "
         "aggregate_latest._compute_reserve_utilisation, null/zero-denominator safe.",
     ),
+    (
+        "imf_eff_outstanding_sdr_mn",
+        "amount_sdr_mn",
+        "monthly",
+        "Scraper-only (S5): Bangladesh's Extended Arrangements (EFF) outstanding "
+        "under the combined ECF/EFF/RSF programme, in SDR Million, pulled directly "
+        "from the IMF 'Financial Position in the Fund' page by scrapers/imf_eff.py "
+        "(NO BD egress; no config indicator). Reported natively in SDR — NOT "
+        "converted to USD (SDR/USD drifts). Lands in metric_history under its own "
+        "id; as_of = the IMF month-end position date.",
+    ),
 ]
 
 

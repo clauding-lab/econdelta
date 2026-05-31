@@ -1744,6 +1744,50 @@
         ]
       },
       "anomaly_threshold": 0.5
+    },
+    {
+      "id": "debt_domestic_stock_cr",
+      "name": "Domestic Debt Outstanding Stock (MoF Debt Bulletin; FY25 ~Tk11.95tn). Stock level, NOT the deficit-financing flow domestic_borrowing_for_budget_deficit.",
+      "domain": "government_finance",
+      "cadence": "quarterly",
+      "fetch": {
+        "type": "pdf",
+        "url": "https://mof.gov.bd/site/page/debt-bulletin",
+        "task": "Latest MoF Debt Bulletin: the summary debt-stock table, the 'Domestic Debt' (outstanding stock) row, Tk-crore column. page=1 table=1 row=Domestic Debt col=2 (VPS-confirm the page/table/row/col indices against the latest bulletin layout; shares the same PDF as debt_gdp_ratio and debt_external_stock_cr — one fetch).",
+        "discover": "latest_pdf_link"
+      },
+      "parse": {
+        "deterministic": "pdf_table_row",
+        "llm_prompt": "pdf_table_row.txt",
+        "value_type": "amount_bdt_crore",
+        "valid_range": [
+          500000.0,
+          3000000.0
+        ]
+      },
+      "anomaly_threshold": 0.25
+    },
+    {
+      "id": "debt_external_stock_cr",
+      "name": "External Debt Outstanding Stock (MoF Debt Bulletin; FY25 ~Tk9.49tn). Stock level, NOT the deficit-financing flow foreign_borrowing_for_budget_deficit.",
+      "domain": "government_finance",
+      "cadence": "quarterly",
+      "fetch": {
+        "type": "pdf",
+        "url": "https://mof.gov.bd/site/page/debt-bulletin",
+        "task": "Latest MoF Debt Bulletin: the summary debt-stock table, the 'External Debt' (outstanding stock) row, Tk-crore column. page=1 table=1 row=External Debt col=2 (VPS-confirm the page/table/row/col indices against the latest bulletin layout; shares the same PDF as debt_gdp_ratio and debt_domestic_stock_cr — one fetch).",
+        "discover": "latest_pdf_link"
+      },
+      "parse": {
+        "deterministic": "pdf_table_row",
+        "llm_prompt": "pdf_table_row.txt",
+        "value_type": "amount_bdt_crore",
+        "valid_range": [
+          300000.0,
+          3000000.0
+        ]
+      },
+      "anomaly_threshold": 0.25
     }
   ]
 }
