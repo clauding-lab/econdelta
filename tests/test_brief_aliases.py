@@ -288,6 +288,99 @@ def test_call_money_rate_flatten_noop_when_indicator_absent():
     assert all(not k.startswith("call_money_rate_") for k in data)
 
 
+def test_npl_by_ownership_flattens_to_four_percent_scalars():
+    """S10: the ``pdf_fsr_ownership_cluster`` parser emits a 4-key segment dict;
+    aggregate fans it out into npl_<segment>_pct scalars so Supabase
+    metric_history persists each. NPL is a percent (no level)."""
+    data = {
+        "npl_by_ownership": {
+            "socb": 44.7,
+            "pcb": 9.3,
+            "fcb": 5.0,
+            "specialised": 13.1,
+        },
+    }
+    _apply_brief_aliases(data)
+    assert data["npl_socb_pct"] == 44.7
+    assert data["npl_pcb_pct"] == 9.3
+    assert data["npl_fcb_pct"] == 5.0
+    assert data["npl_specialised_pct"] == 13.1
+    # SOCB plausibly highest (exit criterion).
+    assert data["npl_socb_pct"] == max(
+        data["npl_socb_pct"], data["npl_pcb_pct"],
+        data["npl_fcb_pct"], data["npl_specialised_pct"],
+    )
+    # Original dict still present for local latest.json consumers.
+    assert data["npl_by_ownership"]["socb"] == 44.7
+
+
+def test_deposits_by_ownership_flattens_to_four_crore_scalars():
+    """S10: deposits cluster fans out into deposits_<segment>_cr LEVELS in BDT
+    crore (NOT shares — the donut computes shares downstream)."""
+    data = {
+        "deposits_by_ownership": {
+            "socb": 365000.0,
+            "pcb": 1180000.0,
+            "fcb": 58000.0,
+            "specialised": 44000.0,
+        },
+    }
+    _apply_brief_aliases(data)
+    assert data["deposits_socb_cr"] == 365000.0
+    assert data["deposits_pcb_cr"] == 1180000.0
+    assert data["deposits_fcb_cr"] == 58000.0
+    assert data["deposits_specialised_cr"] == 44000.0
+
+
+def test_both_ownership_clusters_yield_eight_scalars():
+    """All 8 fanned-out scalars (4 NPL + 4 deposits) land from one pass."""
+    data = {
+        "npl_by_ownership": {"socb": 40.0, "pcb": 8.0, "fcb": 4.0, "specialised": 12.0},
+        "deposits_by_ownership": {
+            "socb": 350000.0, "pcb": 1100000.0, "fcb": 55000.0, "specialised": 42000.0,
+        },
+    }
+    _apply_brief_aliases(data)
+    minted = {
+        "npl_socb_pct", "npl_pcb_pct", "npl_fcb_pct", "npl_specialised_pct",
+        "deposits_socb_cr", "deposits_pcb_cr", "deposits_fcb_cr",
+        "deposits_specialised_cr",
+    }
+    assert minted <= data.keys()
+    assert all(isinstance(data[k], float) for k in minted)
+
+
+def test_ownership_cluster_flatten_skips_non_numeric_segment():
+    """Defensive: a malformed segment entry is dropped; others still flatten."""
+    data = {
+        "npl_by_ownership": {"socb": 44.7, "pcb": "n/a", "fcb": None, "specialised": 13.1},
+    }
+    _apply_brief_aliases(data)
+    assert data["npl_socb_pct"] == 44.7
+    assert data["npl_specialised_pct"] == 13.1
+    assert "npl_pcb_pct" not in data
+    assert "npl_fcb_pct" not in data
+
+
+def test_ownership_cluster_flatten_idempotent():
+    """A per-segment key hand-set upstream is left untouched."""
+    data = {
+        "npl_by_ownership": {"socb": 44.7, "pcb": 9.3, "fcb": 5.0, "specialised": 13.1},
+        "npl_socb_pct": 99.0,  # pre-set
+    }
+    _apply_brief_aliases(data)
+    assert data["npl_socb_pct"] == 99.0  # untouched
+    assert data["npl_pcb_pct"] == 9.3
+
+
+def test_ownership_cluster_flatten_noop_when_absent():
+    data = {"some_other_key": 1.0}
+    _apply_brief_aliases(data)
+    assert all(
+        not k.startswith(("npl_", "deposits_socb", "deposits_pcb")) for k in data
+    )
+
+
 def test_multi_tenor_yield_aliases_feed_yield_curve():
     """Phase 2.3 V5: brief's §07 builder reads tbond_tbill_{182,364}d and
     tbond_bond_{5y,10y}; EconDelta scrapes them as tbill_182d_yield etc.

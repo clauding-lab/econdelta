@@ -1,0 +1,35 @@
+You are extracting the PER-TENOR RESULTS from a Bangladesh Bank primary-auction
+result press release (titled like "Result of the Auction of Treasury Bills" /
+"... Treasury Bonds (BGTB) held on <date>"). The release reports, for each tenor
+auctioned that day, some or all of:
+
+  - size   : the ACCEPTED / allotted / issued amount, in BDT crore
+  - bid    : the TOTAL BID amount received, in BDT crore
+  - cover  : the BID-TO-COVER ratio (total bid / accepted), dimensionless
+  - wam    : the WEIGHTED-AVERAGE MATURITY in years (bonds only; bills omit it)
+  - cutoff : the CUT-OFF / weighted-average YIELD in percent
+
+Emit ONE object per tenor that the release actually reports. Use these EXACT
+canonical tenor labels:
+  T-bills: "91d", "182d", "364d"
+  T-bonds: "2y", "5y", "10y", "15y", "20y"
+
+RULES:
+- Include ONLY fields the release actually states for that tenor. Omit a field
+  (do not invent a 0 or a guess) when the release does not report it — e.g.
+  T-bills have no WAM, so omit "wam" for a bill row.
+- Numbers may use commas and a decimal (1,234.5 = 1234.5). Strip commas; return
+  plain numbers, not strings with units.
+- Include only tenors GENUINELY present in this release. A tenor not auctioned
+  that day must NOT appear. If the page is a CAPTCHA / bot-challenge / empty
+  page, return an empty list.
+- "auction_date" is the date the auctions were HELD (from the title's
+  "held on <date>"), as YYYY-MM-DD; include it on every row if recoverable.
+
+<<<HTML_TEXT>>>
+{html_text}
+<<<END>>>
+
+Reply ONLY with strict JSON of the form (no prose, no markdown fences):
+
+{{"rows": [{{"auction_date": "YYYY-MM-DD", "tenor": "182d", "size": 1234.5, "bid": 3210.0, "cover": 2.6, "cutoff": 11.45}}, ...]}}

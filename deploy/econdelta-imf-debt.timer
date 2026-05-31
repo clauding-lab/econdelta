@@ -1,0 +1,11 @@
+[Unit]
+Description=Run EconDelta IMF DataMapper debt/GDP scraper weekly (Sun 23:23 UTC / Mon 05:23 BDT). DataMapper figures update at most annually; weekly is ample.
+Requires=econdelta-imf-debt.service
+
+[Timer]
+OnCalendar=Sun *-*-* 23:23:00 UTC
+Persistent=true
+RandomizedDelaySec=120
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<!--
+  Synthetic fixture for scrapers/bb_auction.parse_auction_calendar.
+  Models the BB monetaryactivity/auc_calendar forward-issuance page: a mix of
+  PAST rows (must be dropped) and FUTURE per-tenor weekly rows (kept). Dates use
+  DD/MM/YYYY (BB's common calendar format). Numbers are illustrative.
+-->
+<html>
+<head><title>Bangladesh Bank — Auction Calendar</title></head>
+<body>
+<table border="1">
+  <tr>
+    <th>Auction Date</th>
+    <th>Instrument / Tenor</th>
+    <th>Notified Amount (Cr.)</th>
+  </tr>
+  <!-- past auctions — must be dropped by the forward filter -->
+  <tr><td>14/05/2026</td><td>91-Day T-Bill</td><td>3,000.00</td></tr>
+  <tr><td>21/05/2026</td><td>182-Day T-Bill</td><td>2,500.00</td></tr>
+  <!-- future auctions — kept -->
+  <tr><td>04/06/2026</td><td>91-Day T-Bill</td><td>3,000.00</td></tr>
+  <tr><td>04/06/2026</td><td>182-Day T-Bill</td><td>2,500.00</td></tr>
+  <tr><td>04/06/2026</td><td>364-Day T-Bill</td><td>2,000.00</td></tr>
+  <tr><td>11/06/2026</td><td>91-Day T-Bill</td><td>3,000.00</td></tr>
+  <tr><td>11/06/2026</td><td>5-Year BGTB</td><td>1,500.00</td></tr>
+  <tr><td>18/06/2026</td><td>91-Day T-Bill</td><td>3,000.00</td></tr>
+  <tr><td>25/06/2026</td><td>10-Year BGTB</td><td>1,000.00</td></tr>
+  <!-- a row with a blank notional — kept, notional omitted -->
+  <tr><td>02/07/2026</td><td>364-Day T-Bill</td><td></td></tr>
+</table>
+</body>
+</html>

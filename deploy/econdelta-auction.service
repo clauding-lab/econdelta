@@ -1,0 +1,52 @@
+[Unit]
+Description=EconDelta — BB primary-auction results + 12-week calendar scraper
+Documentation=https://github.com/clauding-lab/econdelta
+After=network-online.target
+Wants=network-online.target
+
+# Retry on transient failures (BB CAPTCHA/render hiccups). Up to 3 starts per
+# 30-min window — initial fire plus 2 retries.
+StartLimitIntervalSec=1800
+StartLimitBurst=3
+
+[Service]
+Type=oneshot
+User=adnan-local
+Group=adnan-local
+WorkingDirectory=/home/adnan-local/econdelta
+EnvironmentFile=/etc/econdelta.env
+ExecStart=/home/adnan-local/econdelta/.venv/bin/python -m scrapers.bb_auction
+
+# Resource limits. Sized between forex (Playwright/Chromium ~500M) and parse
+# (claude CLI run_max ~1500M): bb_auction does BOTH — it renders the BB listing +
+# calendar through the Playwright + claude-haiku CAPTCHA solver, and falls back to
+# run_max for LLM row extraction. VPS-TUNE if Chromium+claude overshoot.
+MemoryMax=1200M
+MemoryHigh=1000M
+CPUQuota=150%
+TasksMax=512
+
+# Hardening
+PrivateTmp=true
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+# bb_auction calls the claude CLI (haiku CAPTCHA solver + run_max), which writes
+# under ~/.claude/ each run; the sibling ~/.claude.json is added by the drop-in.
+# Both are needed under ProtectHome=read-only — same complete carve-out as
+# parse/briefing (AGENT_LEARNINGS 2026-05-29).
+ReadWritePaths=/home/adnan-local/econdelta/data /home/adnan-local/econdelta/logs /home/adnan-local/.claude
+
+# Timeouts + retry on transient failures. Generous: two solver-gated pages (up to
+# 3 CAPTCHA attempts each) plus a possible run_max LLM extraction fallback.
+TimeoutStartSec=900
+Restart=on-failure
+RestartSec=300
+
+# Logging — systemd journal + append to file
+StandardOutput=append:/home/adnan-local/econdelta/logs/bb_auction-systemd.log
+StandardError=append:/home/adnan-local/econdelta/logs/bb_auction-systemd.log
+SyslogIdentifier=econdelta-auction
+
+[Install]
+WantedBy=multi-user.target

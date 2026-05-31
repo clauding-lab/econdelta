@@ -1,0 +1,11 @@
+[Unit]
+Description=Run EconDelta World Bank Pink Sheet scraper daily at 23:17 UTC (05:17 BDT next day). Source updates monthly; the daily idempotent fire self-heals a missed month (upsert on (metric_id, as_of) stamps the latest reporting month).
+Requires=econdelta-pink-sheet.service
+
+[Timer]
+OnCalendar=*-*-* 23:17:00 UTC
+Persistent=true
+RandomizedDelaySec=60
+
+[Install]
+WantedBy=timers.target

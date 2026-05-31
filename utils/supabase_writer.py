@@ -201,6 +201,159 @@ def upsert_metric_history(
     return upserted
 
 
+# ============================================================================
+# Structured row-table writer — auction_results / auction_calendar (S8)
+# ----------------------------------------------------------------------------
+# metric_history is scalar-numeric-only and ``_rows_from_data`` keeps only
+# int/float — it CANNOT store a per-print auction row (multi-field) or a
+# forward-calendar row. These tables (db/migrations/0009_auction_results.sql)
+# hold the row-shaped data; this path POSTs whole rows, not flattened scalars.
+# Generic enough to serve both tables via the two thin wrappers below.
+# ============================================================================
+
+# Allowed columns per row-table — guards against a typo'd or stray key landing
+# in PostgREST (which would 400 the whole batch). The two PK columns are
+# always required; the rest are optional (a calendar row has no cover/wam, an
+# un-priced result field may be null).
+_AUCTION_RESULTS_COLUMNS = frozenset(
+    {"auction_date", "tenor", "size", "bid", "cover", "wam", "cutoff", "ingested_at"}
+)
+_AUCTION_CALENDAR_COLUMNS = frozenset(
+    {"auction_date", "tenor", "notional", "ingested_at"}
+)
+_AUCTION_PK = ("auction_date", "tenor")
+
+
+def _validate_auction_rows(
+    rows: list[Mapping[str, object]], allowed_columns: frozenset[str],
+) -> list[dict]:
+    """Validate + normalise row-table rows before POST.
+
+    Every row MUST carry both PK fields (auction_date, tenor); auction_date
+    is normalised to an ISO string if a ``date`` was passed. Unknown columns
+    are rejected (a stray key would 400 the whole PostgREST batch and is
+    almost certainly a caller bug, not data to silently drop).
+
+    Raises:
+        ValueError: missing PK field, or a column not in ``allowed_columns``.
+    """
+    out: list[dict] = []
+    for i, row in enumerate(rows):
+        for pk in _AUCTION_PK:
+            if row.get(pk) is None:
+                raise ValueError(
+                    f"auction row {i} missing required primary-key field {pk!r}"
+                )
+        unknown = set(row) - allowed_columns
+        if unknown:
+            raise ValueError(
+                f"auction row {i} has unknown column(s) {sorted(unknown)}; "
+                f"allowed: {sorted(allowed_columns)}"
+            )
+        normalised = dict(row)
+        ad = normalised["auction_date"]
+        if isinstance(ad, date):
+            normalised["auction_date"] = ad.isoformat()
+        out.append(normalised)
+    return out
+
+
+def upsert_auction_rows(
+    rows: list[Mapping[str, object]],
+    *,
+    table: str,
+    allowed_columns: frozenset[str],
+    url: str | None = None,
+    service_key: str | None = None,
+    timeout: int = _DEFAULT_TIMEOUT,
+    session: requests.Session | None = None,
+) -> int:
+    """Upsert row-shaped data into a structured table on (auction_date, tenor).
+
+    Generic over the two auction tables; ``upsert_auction_results`` and
+    ``upsert_auction_calendar`` are the thin wrappers callers use.
+
+    Args:
+        rows: List of row dicts. Each MUST carry ``auction_date`` (date or ISO
+            string) and ``tenor``; other columns must be in ``allowed_columns``.
+        table: Target table name ('auction_results' or 'auction_calendar').
+        allowed_columns: The table's column allow-list (PK + optional fields).
+        url, service_key: Override for SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY.
+        timeout: Per-request timeout seconds.
+        session: Override for tests — a mock with ``.post(...)``.
+
+    Returns:
+        Count of rows upserted (0 if ``rows`` is empty).
+
+    Raises:
+        ValueError: A row is missing a PK field or carries an unknown column.
+        SupabaseWriteError: On missing creds, network failure, or non-2xx.
+    """
+    if not rows:
+        logger.info("upsert_auction_rows: no rows to upsert for table=%s", table)
+        return 0
+
+    validated = _validate_auction_rows(rows, allowed_columns)
+    base_url, key = _resolve_credentials(url, service_key)
+    conflict = ",".join(_AUCTION_PK)
+    endpoint = f"{base_url}/rest/v1/{table}?on_conflict={conflict}"
+    headers = {
+        "apikey": key,
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+        "Prefer": "resolution=merge-duplicates,return=minimal",
+    }
+    sess = session or requests.Session()
+
+    upserted = 0
+    for start in range(0, len(validated), _BATCH_SIZE):
+        batch = validated[start:start + _BATCH_SIZE]
+        try:
+            resp = sess.post(endpoint, json=batch, headers=headers, timeout=timeout)
+        except requests.exceptions.RequestException as e:
+            raise SupabaseWriteError(
+                f"network error during {table} upsert: {e}"
+            ) from e
+        if resp.status_code not in (200, 201, 204):
+            raise SupabaseWriteError(
+                f"{table} upsert returned HTTP {resp.status_code}: {resp.text[:200]}"
+            )
+        upserted += len(batch)
+
+    return upserted
+
+
+def upsert_auction_results(
+    rows: list[Mapping[str, object]], **kwargs,
+) -> int:
+    """Upsert per-print RESULTS rows into ``auction_results`` on (auction_date, tenor).
+
+    Each row: ``{auction_date, tenor, size?, bid?, cover?, wam?, cutoff?}``.
+    """
+    return upsert_auction_rows(
+        rows,
+        table="auction_results",
+        allowed_columns=_AUCTION_RESULTS_COLUMNS,
+        **kwargs,
+    )
+
+
+def upsert_auction_calendar(
+    rows: list[Mapping[str, object]], **kwargs,
+) -> int:
+    """Upsert forward-calendar rows into ``auction_calendar`` on (auction_date, tenor).
+
+    Each row: ``{auction_date, tenor, notional?}`` — NO bid/cover/wam/cutoff
+    (those don't exist for an un-held auction).
+    """
+    return upsert_auction_rows(
+        rows,
+        table="auction_calendar",
+        allowed_columns=_AUCTION_CALENDAR_COLUMNS,
+        **kwargs,
+    )
+
+
 def upsert_briefing(row, *, url=None, service_key=None, timeout=_DEFAULT_TIMEOUT, session=None):
     """Upsert one weekly briefing row (PK week_of). Raises SupabaseWriteError on failure.
 

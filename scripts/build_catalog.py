@@ -61,6 +61,67 @@ DERIVED_KEYS: list[tuple[str, str, str, str]] = [
         "retired 2026-05-25. Strings only land in latest.json — NOT in "
         "metric_history (writer filters strings).",
     ),
+    (
+        "crr_utilisation_pct",
+        "percent",
+        "monthly",
+        "Derived (S2): deposits_held_with_bb_crr / deposits_of_the_system × 100 "
+        "— CRR balance held with BB as a % of total system deposits (NOT the "
+        "regulated statutory maintenance ratio; no hardcoded policy rate). "
+        "Computed in aggregate_latest._compute_reserve_utilisation, null/zero-"
+        "denominator safe. Lands in metric_history under its own id.",
+    ),
+    (
+        "slr_utilisation_pct",
+        "percent",
+        "monthly",
+        "Derived (S2): excess_liquid_asset_total_minimum / deposits_of_the_system "
+        "× 100 — excess liquid assets over the statutory SLR minimum as a % of "
+        "total system deposits (NOT the regulated maintenance ratio). Computed in "
+        "aggregate_latest._compute_reserve_utilisation, null/zero-denominator safe.",
+    ),
+    (
+        "imf_eff_outstanding_sdr_mn",
+        "amount_sdr_mn",
+        "monthly",
+        "Scraper-only (S5): Bangladesh's Extended Arrangements (EFF) outstanding "
+        "under the combined ECF/EFF/RSF programme, in SDR Million, pulled directly "
+        "from the IMF 'Financial Position in the Fund' page by scrapers/imf_eff.py "
+        "(NO BD egress; no config indicator). Reported natively in SDR — NOT "
+        "converted to USD (SDR/USD drifts). Lands in metric_history under its own "
+        "id; as_of = the IMF month-end position date.",
+    ),
+    (
+        "lng_price_usd_mmbtu",
+        "amount_usd_mmbtu",
+        "monthly",
+        "Scraper-only (S11): Liquefied natural gas (Japan) benchmark from the World "
+        "Bank 'Pink Sheet' Monthly Prices sheet, in USD per mmbtu — the sheet's "
+        "native unit (carried in the id). Pulled directly from the CMO monthly .xlsx "
+        "by scrapers/world_bank_pink_sheet.py via stdlib zip/XML (NO BD egress, no "
+        "new dependency, no config indicator). Lands in metric_history under its own "
+        "id; as_of = the latest reporting month's end.",
+    ),
+    (
+        "palm_oil_price_usd_mt",
+        "amount_usd_mt",
+        "monthly",
+        "Scraper-only (S11): Palm oil benchmark from the World Bank 'Pink Sheet' "
+        "Monthly Prices sheet, in USD per metric ton — the sheet's native unit "
+        "(carried in the id). Pulled by scrapers/world_bank_pink_sheet.py via stdlib "
+        "zip/XML (NO BD egress, no new dependency, no config indicator). as_of = the "
+        "latest reporting month's end.",
+    ),
+    (
+        "wheat_price_usd_mt",
+        "amount_usd_mt",
+        "monthly",
+        "Scraper-only (S11): Wheat (US SRW) benchmark from the World Bank 'Pink "
+        "Sheet' Monthly Prices sheet, in USD per metric ton — the sheet's native "
+        "unit (carried in the id). Pulled by scrapers/world_bank_pink_sheet.py via "
+        "stdlib zip/XML (NO BD egress, no new dependency, no config indicator). "
+        "as_of = the latest reporting month's end.",
+    ),
 ]
 
 

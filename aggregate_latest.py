@@ -51,6 +51,19 @@ MAX_QUARANTINE_FIELDS = 5
 
 logger = logging.getLogger("aggregate_latest")
 
+# Derived reserve-utilisation ratios (S2). Computed at runtime from the
+# already-scraped BB MEI scalars below — EconDelta has NO scraped maintenance-%
+# cell, so these are minted in `_build_v3_blocks` and land in metric_history
+# under their own ids. The exact statutory CRR/SLR bases are policy constants
+# that shift, so each ratio is labelled by what it ACTUALLY divides (no
+# hardcoded statutory rate): the held/excess balance expressed as a % of total
+# system deposits, NOT the regulated maintenance ratio.
+RESERVE_UTIL_DERIVED: dict[str, tuple[str, str]] = {
+    # derived_id -> (numerator_id, denominator_id)
+    "crr_utilisation_pct": ("deposits_held_with_bb_crr", "deposits_of_the_system"),
+    "slr_utilisation_pct": ("excess_liquid_asset_total_minimum", "deposits_of_the_system"),
+}
+
 
 SCRAPER_SPEC = {
     # key -> (subdir, schema_class, sources.json key for URL lookup)
@@ -341,6 +354,39 @@ def _quarantine_flagged(
     return cleaned, quarantined, False
 
 
+def _compute_reserve_utilisation(data_additions: dict[str, Any]) -> None:
+    """Mint derived CRR/SLR utilisation ratios into ``data_additions`` in place.
+
+    S2: the Liquidity panel wants CRR/SLR utilisation %, but EconDelta scrapes
+    only the LEVELS (``deposits_held_with_bb_crr``, ``excess_liquid_asset_total_minimum``,
+    ``deposits_of_the_system``) — there is no scraped maintenance-% cell. So we
+    compute the ratio here, after the snapshot loop has populated the level
+    scalars and BEFORE the Supabase writer's scalar-only filter, so each ratio
+    lands in ``metric_history`` under its own id.
+
+    Each ratio = numerator / denominator × 100, expressed as a % of total system
+    deposits — labelled by what it actually divides (no hardcoded statutory CRR/SLR
+    rate, which would be a shifting policy constant). Null-safe and idempotent:
+
+      * a missing/non-numeric numerator or denominator → skip (no key written),
+        so a missing month renders as a missing metric rather than a bogus 9999%;
+      * a zero (or non-positive) denominator → skip (no divide-by-zero);
+      * a derived id already present in ``data_additions`` is left untouched.
+    """
+    for derived_id, (numerator_id, denominator_id) in RESERVE_UTIL_DERIVED.items():
+        if derived_id in data_additions:
+            continue
+        numerator = data_additions.get(numerator_id)
+        denominator = data_additions.get(denominator_id)
+        if not isinstance(numerator, (int, float)) or isinstance(numerator, bool):
+            continue
+        if not isinstance(denominator, (int, float)) or isinstance(denominator, bool):
+            continue
+        if denominator <= 0:
+            continue
+        data_additions[derived_id] = round(numerator / denominator * 100, 4)
+
+
 def _build_v3_blocks(
     now: datetime,
 ) -> tuple[dict[str, Any], dict[str, dict[str, Any]], FreshnessSummary, list[Alert]]:
@@ -452,6 +498,11 @@ def _build_v3_blocks(
                     change_pct=change_pct,
                 )
             )
+
+    # Derived reserve-utilisation ratios (S2): minted from the level scalars
+    # loaded above, BEFORE the writer's scalar-only filter, so they persist to
+    # metric_history under their own ids. Null/zero-denominator safe.
+    _compute_reserve_utilisation(data_additions)
 
     freshness = FreshnessSummary(
         indicators_total=indicators_total,
@@ -630,6 +681,55 @@ def _flatten_dict_indicators(data: dict) -> None:
             # persists the headline overnight rate as ``call_money_rate``.
             data["call_money_rate"] = float(overnight)
 
+    _flatten_ownership_cluster(
+        data,
+        source_key="npl_by_ownership",
+        key_prefix="npl_",
+        key_suffix="_pct",
+    )
+    _flatten_ownership_cluster(
+        data,
+        source_key="deposits_by_ownership",
+        key_prefix="deposits_",
+        key_suffix="_cr",
+    )
+
+
+def _flatten_ownership_cluster(
+    data: dict, *, source_key: str, key_prefix: str, key_suffix: str
+) -> None:
+    """Explode a 4-way bank-ownership cluster dict into per-segment scalars (S10).
+
+    The ``pdf_fsr_ownership_cluster`` parser returns a dict keyed by the four
+    canonical ownership segments — ``{"socb": .., "pcb": .., "fcb": ..,
+    "specialised": ..}`` — for two FSR clusters:
+
+      - ``npl_by_ownership``      → ``npl_socb_pct`` / ``npl_pcb_pct`` /
+                                    ``npl_fcb_pct`` / ``npl_specialised_pct``
+                                    (per-segment NPL ratio, percent).
+      - ``deposits_by_ownership`` → ``deposits_socb_cr`` / ``deposits_pcb_cr`` /
+                                    ``deposits_fcb_cr`` / ``deposits_specialised_cr``
+                                    (per-segment deposit LEVEL, BDT crore — NOT
+                                    a share; the donut computes shares downstream
+                                    so they stay consistent with
+                                    ``deposits_of_the_system``).
+
+    Mirrors the ``call_money_rate`` / ``dse_sector_heat`` fan-out: we mint one
+    numeric key per segment BEFORE the Supabase writer's scalar-only filter
+    drops the dict (landmine C). Idempotent: a per-segment key already in
+    ``data`` is left alone. No-op when the cluster indicator is absent or the
+    value isn't a dict.
+    """
+    cluster = data.get(source_key)
+    if not isinstance(cluster, dict):
+        return
+    for segment, value in cluster.items():
+        if not isinstance(value, (int, float)):
+            continue
+        key = f"{key_prefix}{str(segment).lower()}{key_suffix}"
+        if key not in data:
+            data[key] = float(value)
+
 
 def _apply_brief_aliases(data: dict) -> None:
     """Mutate `data` in place: surface EconDelta keys under brief-key names
@@ -657,13 +757,59 @@ def _titleize(metric_id: str) -> str:
     return " ".join(word.capitalize() for word in metric_id.split("_"))
 
 
+# metric_definitions rows for runtime-derived metrics (no sources-v3.json
+# config entry — they have no fetch). `_build_definition_seeds` appends these
+# so the catalog/Supabase definitions stay in sync with the values minted in
+# `_build_v3_blocks`. Keyed by metric_id for idempotent merging.
+DERIVED_DEFINITION_SEEDS: list[dict] = [
+    {
+        "metric_id": "crr_utilisation_pct",
+        "label": "CRR balance as % of system deposits",
+        "short_label": None,
+        "unit": "%",
+        "domain": "monetary_aggregates",
+        "cadence": "monthly",
+        "description": (
+            "Derived (S2): deposits_held_with_bb_crr / deposits_of_the_system × 100. "
+            "CRR balance held with Bangladesh Bank expressed as a % of total system "
+            "deposits — NOT the regulated statutory maintenance ratio (no hardcoded "
+            "policy rate). Computed in aggregate_latest._compute_reserve_utilisation."
+        ),
+        "source": "BB MEI (derived)",
+        "source_url": None,
+    },
+    {
+        "metric_id": "slr_utilisation_pct",
+        "label": "Excess liquid assets as % of system deposits",
+        "short_label": None,
+        "unit": "%",
+        "domain": "monetary_aggregates",
+        "cadence": "monthly",
+        "description": (
+            "Derived (S2): excess_liquid_asset_total_minimum / deposits_of_the_system "
+            "× 100. Excess liquid assets held over the statutory SLR minimum, expressed "
+            "as a % of total system deposits — NOT the regulated maintenance ratio. "
+            "Computed in aggregate_latest._compute_reserve_utilisation."
+        ),
+        "source": "BB MEI (derived)",
+        "source_url": None,
+    },
+]
+
+
 def _build_definition_seeds(sources_v3_cfg: dict) -> list[dict]:
     """Build metric_definitions rows from sources-v3.json indicators.
 
     Conservative defaults: label falls back to titleized id, sort_order=100,
     is_hero=False. Tunable in Supabase Studio post-insert.
+
+    Runtime-derived metrics (CRR/SLR utilisation — minted in `_build_v3_blocks`,
+    no config entry) are appended from ``DERIVED_DEFINITION_SEEDS`` so their
+    Supabase definitions stay in sync with the values that land in metric_history.
+    Idempotent on metric_id: a derived id already produced from config wins.
     """
     seeds = []
+    seen_ids: set[str] = set()
     for ind in sources_v3_cfg.get("indicators", []):
         seeds.append({
             "metric_id": ind["id"],
@@ -676,6 +822,12 @@ def _build_definition_seeds(sources_v3_cfg: dict) -> list[dict]:
             "source": ind.get("source"),
             "source_url": (ind.get("fetch") or {}).get("url"),
         })
+        seen_ids.add(ind["id"])
+
+    for derived in DERIVED_DEFINITION_SEEDS:
+        if derived["metric_id"] not in seen_ids:
+            seeds.append(dict(derived))
+
     return seeds
 
 

@@ -1,0 +1,40 @@
+You are extracting an economic indicator from a Bangladesh Bank Balance of Payments (BoP) page.
+
+Indicator: {indicator_name}
+Instruction: {instruction}
+Value type: {value_type}
+Valid range: {valid_range}
+
+Find the row labelled "Current Account Balance" (it may also appear as
+"Current account balance" or "A. Current Account Balance") and return the
+most recent period's value for that row, expressed in USD BILLION.
+
+CRITICAL — pick the RIGHT row:
+- You want the CURRENT ACCOUNT BALANCE row.
+- Do NOT return the "Overall Balance" row, the "Trade Balance" row, the
+  "Capital Account" row, or the "Financial Account" row. Those are different
+  lines of the same BoP table and will give the wrong number.
+- Bangladesh's current account balance is typically a DEFICIT, so a NEGATIVE
+  value (e.g. -6.5) is expected and valid. Return the sign exactly as shown
+  (a deficit is negative, a surplus is positive).
+
+UNITS:
+- Return the value in USD BILLION. The valid range {valid_range} is in billions.
+- BB sometimes publishes BoP figures in USD MILLION. If the number you find is
+  in millions (e.g. -6,500), divide by 1000 to convert to billions (-6.5).
+- Numbers may use commas (1,234 = 1234). Strip commas before converting.
+
+<<<HTML_TEXT>>>
+{html_text}
+<<<END>>>
+
+RULES:
+- If you locate the Current Account Balance number, RETURN IT as `value` (in
+  USD billion). Never put a number inside `reason` while leaving value=null —
+  commit to the best-fit number.
+- Only return value=null when the Current Account Balance row is genuinely
+  absent from the provided text (empty page, row not present, or the content
+  is a CAPTCHA/bot-challenge page).
+- Reply ONLY with strict JSON of the form:
+
+{{"value": <number-or-null>, "reason": "<1 sentence on where you found it OR why it is missing>"}}

@@ -1,0 +1,45 @@
+You are extracting a 4-way bank-ownership cluster from a Bangladesh Bank
+Financial Stability Report (FSR) PDF.
+
+Indicator: {indicator_name}
+Instruction: {instruction}
+Value type: {value_type}
+Valid range: {valid_range}
+
+Find total bank DEPOSITS broken down by bank ownership group. Bangladesh Bank
+groups banks into four ownership classes:
+
+  - socb        : State-Owned Commercial Banks (also "SCB", "State Owned Banks")
+  - pcb         : Private Commercial Banks (also "PCB")
+  - fcb         : Foreign Commercial Banks (also "FCB")
+  - specialised : Specialised Banks (also "SB", "Development Banks", "DFI")
+
+Return each group's ABSOLUTE DEPOSIT LEVEL in BDT CRORE — NOT a percentage
+share, and NOT the system total. Read the value for the MOST RECENT period (the
+latest quarter / year-end column — usually the right-most data column).
+
+UNIT: report in BDT crore. If the table is published in BDT billion, multiply by
+100 (1 billion = 100 crore); if in BDT million, multiply by 0.1 (1 crore = 10
+million). State the unit you converted from in the reason.
+
+This may be a multi-column table (a row per ownership group, columns per period)
+or a chart. Match the ownership-group LABELS, not an absolute row/column index —
+FSR layout shifts edition to edition. Treat whitespace and case loosely.
+
+Numbers may use commas (1,23,456 = 123456). Strip commas; return plain numbers.
+
+<<<PDF_TEXT>>>
+{pdf_text}
+<<<END>>>
+
+RULES:
+- Return ONE crore LEVEL for EACH of the four segments, keyed exactly
+  socb / pcb / fcb / specialised. PCB is normally the largest by deposits.
+- If a segment is genuinely absent from the provided text, set the whole value
+  to null (do not invent a number for a missing segment, and do not return a
+  partial object).
+- Only return value=null when the cluster is genuinely absent (empty extract,
+  table truncated before the data, CAPTCHA / bot-challenge page).
+- Reply ONLY with strict JSON (no prose, no markdown fences) of the form:
+
+{{"value": {{"socb": <num>, "pcb": <num>, "fcb": <num>, "specialised": <num>}}, "reason": "<1 sentence on where you found it OR why it is missing>"}}

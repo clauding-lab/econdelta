@@ -1,0 +1,29 @@
+You are extracting the FORWARD AUCTION CALENDAR from the Bangladesh Bank
+government-securities auction calendar page. The calendar lists UPCOMING (not yet
+held) weekly auctions, each with an auction date, the tenor/instrument, and a
+notified/notional amount in BDT crore.
+
+Emit ONE object per (auction_date, tenor) scheduled auction. Use these EXACT
+canonical tenor labels:
+  T-bills: "91d", "182d", "364d"
+  T-bonds: "2y", "5y", "10y", "15y", "20y"
+
+RULES:
+- Include ONLY FUTURE auctions (on or after today). Drop any past-dated row.
+- "auction_date" as YYYY-MM-DD. If a row has no parseable date, skip it.
+- "notional" is the notified / planned issuance amount in BDT crore. Include it
+  when the calendar states it; omit it (do not guess) when it is blank.
+- The published horizon varies (sometimes only 4-8 weeks are firm). Return
+  however many future weeks the calendar actually lists — a short list is normal,
+  not an error.
+- Numbers may use commas and a decimal (1,234.5 = 1234.5). Strip commas; return
+  plain numbers. If the page is a CAPTCHA / bot-challenge / empty page, return an
+  empty list.
+
+<<<HTML_TEXT>>>
+{html_text}
+<<<END>>>
+
+Reply ONLY with strict JSON of the form (no prose, no markdown fences):
+
+{{"rows": [{{"auction_date": "YYYY-MM-DD", "tenor": "364d", "notional": 5000.0}}, ...]}}
