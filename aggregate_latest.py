@@ -316,6 +316,44 @@ def _is_cumulative_regression(
     return today_value < prior_value * (1 - CUMULATIVE_DROP_TOLERANCE)
 
 
+def _quarantine_flagged(
+    data: dict[str, Any],
+    flagged_ids: list[str],
+    history: list[dict[str, Any]],
+) -> tuple[dict[str, Any], list[str], bool]:
+    """Quarantine Opus-flagged fields instead of rejecting the whole snapshot.
+
+    Returns (cleaned_data, quarantined_ids, hard_reject).
+    hard_reject is True when the verdict is untrustworthy or too broad:
+      * any flagged id is not present in `data`, or
+      * more than MAX_QUARANTINE_FIELDS ids are flagged.
+    Otherwise each flagged id is replaced with its most-recent good value from
+    `history` (newest-last list of archived `.data` dicts); if no historical
+    value exists, the field is dropped.
+    """
+    present = [fid for fid in flagged_ids if fid in data]
+    if len(present) != len(flagged_ids):
+        return data, [], True   # unmappable flagged id ⇒ don't trust the verdict
+    if len(present) > MAX_QUARANTINE_FIELDS:
+        return data, [], True   # too broadly broken to publish
+
+    cleaned = dict(data)
+    quarantined: list[str] = []
+    for fid in present:
+        last_good = None
+        for snap in reversed(history):  # newest-last ⇒ reversed = newest-first
+            v = (snap.get("data") or {}).get(fid)
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
+                last_good = v
+                break
+        if last_good is not None:
+            cleaned[fid] = last_good
+        else:
+            cleaned.pop(fid, None)
+        quarantined.append(fid)
+    return cleaned, quarantined, False
+
+
 def _compute_reserve_utilisation(data_additions: dict[str, Any]) -> None:
     """Mint derived CRR/SLR utilisation ratios into ``data_additions`` in place.
 
