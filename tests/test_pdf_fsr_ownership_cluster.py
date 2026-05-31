@@ -1,5 +1,12 @@
 """Unit tests for parsers.pdf_fsr_ownership_cluster (S10).
 
+⚠️ The parser under test is DESCOPED/PARKED (2026-05-31, R3): its two indicators
+were removed from config/sources-v3.json because it selects the table by label only
+(ignoring cluster=) and read the wrong FSR table. These tests are retained to guard
+the parser's mechanics for a possible future deposits-only re-anchor — they do NOT
+prove the cluster= token disambiguates competing tables (it doesn't yet). See the
+parser docstring before reviving.
+
 The pure helpers (cluster-token parsing, ownership-label matching, row number
 extraction, quarter-end recovery, table-walking) are exercised on synthetic
 fixtures so they run without a real PDF.

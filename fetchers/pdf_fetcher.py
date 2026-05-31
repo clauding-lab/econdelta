@@ -11,6 +11,7 @@ from urllib.request import Request, urlopen
 import pdfplumber
 
 from fetchers.base import FetchError, FetchResult
+from fetchers.tls import ssl_context_for
 
 
 def _derive_filename(url: str) -> str:
@@ -44,7 +45,9 @@ def fetch_pdf(*, url: str, indicator_id: str, snapshot_dir: Path, as_of_month: s
     request_url = _encode_url_path(url)
     try:
         req = Request(request_url, headers={"User-Agent": "EconDelta/3.0"})
-        with urlopen(req, timeout=60) as resp:
+        # ssl_context_for returns a chain-completing context for hosts that serve an
+        # incomplete cert chain (e.g. mof.gov.bd); None elsewhere = urllib default.
+        with urlopen(req, timeout=60, context=ssl_context_for(request_url)) as resp:
             body = resp.read()
     except Exception as e:
         raise FetchError(f"PDF download failed for {url}: {e}") from e

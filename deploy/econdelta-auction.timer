@@ -1,0 +1,11 @@
+[Unit]
+Description=Run EconDelta BB primary-auction scraper daily at 23:14 UTC (05:14 BDT next day). BB auctions are per-business-day; on a no-auction day the scraper writes no new results row (idempotent). Refreshes the 12-week forward calendar each run.
+Requires=econdelta-auction.service
+
+[Timer]
+OnCalendar=*-*-* 23:14:00 UTC
+Persistent=true
+RandomizedDelaySec=60
+
+[Install]
+WantedBy=timers.target

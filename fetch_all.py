@@ -18,9 +18,10 @@ from fetchers.base import FetchError, FetchResult
 from fetchers.html_fetcher import fetch_html
 from fetchers.news_article_discovery import discover_latest_article_link
 from fetchers.pdf_discovery import discover_latest_pdf_link
-from fetchers.rrpt_discovery import discover_latest_rrpt_link
 from fetchers.pdf_fetcher import fetch_pdf
 from fetchers.pdf_fetcher_stealth import fetch_pdf_stealth
+from fetchers.rrpt_discovery import discover_latest_rrpt_link
+from fetchers.tls import ssl_context_for
 
 REPO_ROOT = Path(__file__).resolve().parent
 DEFAULT_CONFIG = REPO_ROOT / "config" / "sources-v3.json"
@@ -31,8 +32,29 @@ logger = logging.getLogger("fetch_all")
 
 def _download_index_html(url: str) -> str:
     req = Request(url, headers={"User-Agent": "EconDelta/3.0"})
-    with urlopen(req, timeout=60) as r:
+    # Chain-completing TLS context for hosts that serve an incomplete cert chain
+    # (e.g. mof.gov.bd, which the 3 debt_* metrics hit here FIRST via latest_pdf_link
+    # discovery); None for every other host = urllib default.
+    with urlopen(req, timeout=60, context=ssl_context_for(url)) as r:
         return r.read().decode("utf-8", errors="replace")
+
+
+def _download_rendered_html(url: str) -> str:
+    """Fetch a BB listing page behind the image-CAPTCHA wall via the Playwright +
+    claude-haiku solver in ``scrapers.bb_forex`` (the only path that clears BB's image
+    CAPTCHA). Lazy-imported so the non-BB fetch branches keep no Playwright dependency.
+
+    R2: the rrpt LISTING (for slf_draw_cr / bb_repo_usage_cr) returns the CAPTCHA wall
+    to the VPS IP, so the plain-urllib ``_download_index_html`` saw 0 ``/rrpt/`` anchors
+    and discovery died with a misleading 'no anchors' error. The per-release DETAIL page
+    is still fetched downstream by ``fetch_html`` (Playwright JS-challenge reload); only
+    the listing fetch is rerouted here. VPS-confirm the challenge type on each page."""
+    from scrapers.bb_forex import fetch_rendered_html
+
+    try:
+        return fetch_rendered_html(url)
+    except Exception as e:
+        raise FetchError(f"rendered listing fetch failed for {url}: {e}") from e
 
 
 def _fetch_one(indicator: dict, data_root: Path) -> FetchResult | None:
@@ -65,7 +87,10 @@ def _fetch_one(indicator: dict, data_root: Path) -> FetchResult | None:
         # SLF/Repo accepted amounts live in that per-day press release.
         elif fetch_block.get("discover") == "latest_rrpt_link":
             try:
-                listing_html = _download_index_html(target_url)
+                # BB press-release listing is behind the image-CAPTCHA wall (R2) —
+                # fetch it through the solver, not plain urllib, or discovery sees
+                # zero /rrpt/ anchors.
+                listing_html = _download_rendered_html(target_url)
             except Exception as e:
                 raise FetchError(
                     f"listing fetch failed for {target_url}: {e}"

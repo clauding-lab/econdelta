@@ -1,6 +1,20 @@
 """Extract a 4-way bank-ownership cluster (SOCB / PCB / FCB / Specialised) from
 the Bangladesh Bank Financial Stability Report (FSR) PDF.
 
+⚠️ DESCOPED / PARKED (2026-05-31, R3) — DO NOT re-wire to config as-is. This parser
+selects its source table by ownership-row LABEL only and IGNORES the ``cluster=``
+token, so both ``npl_by_ownership`` and ``deposits_by_ownership`` grabbed the SAME
+first ownership-labelled table in the FSR (QFSAR Appendix XXIV CRR/SLR) and returned
+identical, WRONG values. There is no clean NPL-by-ownership table in the QFSAR to
+anchor to, so the two indicators were removed from config/sources-v3.json and their
+8 fan-out scalars are kept on Demo. The parser + its tests + the two prompt files are
+LEFT IN PLACE only to preserve a future deposits-only re-anchor. To revive: the
+table must be selected by a TABLE-IDENTITY anchor (caption/heading regex threaded
+from config) PLUS a forbidden-context guard rejecting any table near CRR/SLR/Appendix
+XXIV text — never label-only — and a two-competing-tables test must prove the
+``cluster=`` token disambiguates before trusting it.
+
+
 ONE parser feeds TWO EconDelta indicators — both are 4-row ownership clusters in
 the same FSR body, selected by the instruction's ``cluster=`` token:
 

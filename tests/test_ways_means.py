@@ -1,93 +1,97 @@
 """S6 — ways_means_usage_cr (Ways & Means Advances usage; BB overdraft to govt).
 
-Reuses the already-registered ``pdf_table_row`` parser against the BB Major
-Economic Indicators (MEI) government-finance table (alternate: MoF Debt
-Bulletin) — only the row-select task differs (the 'Ways and Means Advances'
-row, Tk-crore column). No new parser surface; the only thing to prove locally is
-that the parser extracts the WMA usage cell from a MEI-shaped synthetic table
-using the config's instruction grammar, and that the figure sits inside the
-config's usage band.
+After the R4 fix this metric uses the ``pdf_table_latest`` parser (scan-by-row-label
+across all pages, take the latest absolute Tk-crore value), mirroring the working
+``broad_money`` / ``reserve_money`` siblings — NOT the brittle ``pdf_table_row``,
+which hard-locked an absolute page/table/col index AND mangled the multi-word row
+label on its ``=`` split (``row=Ways and Means`` collapsed to ``row='Ways'`` because
+the bare tokens ``and``/``Means`` were dropped).
 
 USAGE-ONLY by design: there is NO published monthly limit/ceiling cell, so this
-metric carries no 'vs limit' denominator. The fixture deliberately contains only
-a usage row — there is no limit row to extract or fabricate.
+metric carries no 'vs limit' denominator.
 
-The LIVE page/table/row/col indices against the real MEI edition (page numbers
-shift edition-to-edition) are VPS-deferred — BD egress firewalls this Mac. This
-proves the deterministic path works given the right indices.
+The exact LIVE row label ('Ways and Means Advances' vs 'WMA') and the on-page layout
+are VPS-deferred (BD egress firewalls this Mac). These tests prove the config wires
+the robust parser and that the parser resolves the WMA usage level from MEI-shaped
+text using the config's own quoted instruction.
 """
+from __future__ import annotations
 
-from datetime import datetime, timezone
+import importlib
+import json
 from pathlib import Path
 
 import pytest
-from reportlab.lib.pagesizes import letter
-from reportlab.platypus import SimpleDocTemplate, Table
 
-import parsers.pdf_table_row  # noqa: F401
-from fetchers.base import FetchResult
-from parsers.registry import get_parser
+CONFIG = Path(__file__).parent.parent / "config" / "sources-v3.json"
 
 # CEIC-sourced reference prints (Tk crore): Nov-2025 = 120,000; Oct-2025 = 90,924.
-WMA_USAGE_CR = 120000
+WMA_USAGE_CR = 120000.0
+
+# MEI government-finance block as pdfplumber would extract it: the WMA usage level
+# sits in the absolute Tk-crore columns, followed by a smaller pct-change column.
+MEI_GOVT_FINANCE = """
+Government Finance (Tk crore)               Jun'25      Sep'25      Oct'25   chg%
+Bank Borrowing (net)                       198000.00   205400.00   210000.00  6.06
+Ways and Means Advances                     85000.00    90924.00   120000.00 41.31
+Non-bank Borrowing (net)                    91000.00    93500.00    95000.00  4.40
+""".strip()
 
 
-@pytest.fixture
-def mei_govt_finance_artifact(tmp_path: Path) -> FetchResult:
-    """A synthetic BB MEI government-finance table.
+@pytest.fixture(scope="module")
+def mod():
+    """pdfplumber is lazy-imported inside the parser, so module import is
+    dependency-free — the pure ``_find_latest_in_text`` is what we exercise."""
+    return importlib.import_module("parsers.pdf_table_latest")
 
-    Columns: Item | Tk (crore) — mirroring the MEI govt-finance block where the
-    Ways and Means Advances usage outstanding sits alongside other govt
-    financing lines. There is intentionally NO limit/ceiling column or row.
-    """
-    pdf_path = tmp_path / "mei_govt_finance.pdf"
-    doc = SimpleDocTemplate(str(pdf_path), pagesize=letter)
-    table = Table(
-        [
-            ["Item", "Tk (crore)"],
-            ["Bank Borrowing", "210000"],
-            ["Ways and Means Advances", str(WMA_USAGE_CR)],
-            ["Non-bank Borrowing", "95000"],
-        ]
+
+@pytest.fixture(scope="module")
+def ways_means_cfg() -> dict:
+    data = json.loads(CONFIG.read_text())
+    inds = data["indicators"] if isinstance(data, dict) and "indicators" in data else data
+    return next(i for i in inds if i["id"] == "ways_means_usage_cr")
+
+
+def test_config_uses_scan_by_label_parser(ways_means_cfg):
+    """R4 intent: the metric must be wired to the scan-by-label parser, not the
+    brittle absolute-index pdf_table_row. A regression back to pdf_table_row fails."""
+    assert ways_means_cfg["parse"]["deterministic"] == "pdf_table_latest"
+    assert ways_means_cfg["parse"]["llm_prompt"] == "pdf_component.txt"
+
+
+def test_config_task_parses_to_full_label(mod, ways_means_cfg):
+    """The quotes are load-bearing: pdf_table_latest needs row="<label>". The config
+    task must parse to the FULL label, not the 'Ways' fragment the old '=' split gave."""
+    label, min_value = mod._parse_instruction(ways_means_cfg["fetch"]["task"])
+    assert label == "Ways and Means"
+    assert label != "Ways"  # the exact regression the old pdf_table_row produced
+    assert min_value == 1000.0
+
+
+def test_alternate_task_uses_same_grammar(mod, ways_means_cfg):
+    """The alternate (MoF Debt Bulletin) task must use the same robust grammar so a
+    fallback fetch does not re-trip the old '=' split bug."""
+    label, min_value = mod._parse_instruction(ways_means_cfg["alternate"]["task"])
+    assert label == "Ways and Means"
+    assert min_value == 1000.0
+
+
+def test_extracts_wma_usage_level(mod):
+    """Scan-by-label resolves the WMA usage level (Tk crore), skipping the pct column."""
+    v = mod._find_latest_in_text(MEI_GOVT_FINANCE, "Ways and Means", min_value=1000.0)
+    assert v == WMA_USAGE_CR
+
+
+def test_usage_sits_inside_config_band(mod, ways_means_cfg):
+    v = mod._find_latest_in_text(MEI_GOVT_FINANCE, "Ways and Means", min_value=1000.0)
+    lo, hi = ways_means_cfg["parse"]["valid_range"]
+    assert lo <= v <= hi
+
+
+def test_min_filter_excludes_pct_change_column(mod):
+    """Without min the trailing pct-change (41.31) would win; min=1000 keeps the level."""
+    assert mod._find_latest_in_text(MEI_GOVT_FINANCE, "Ways and Means", 0.0) == 41.31
+    assert (
+        mod._find_latest_in_text(MEI_GOVT_FINANCE, "Ways and Means", 1000.0)
+        == WMA_USAGE_CR
     )
-    doc.build([table])
-    return FetchResult(
-        indicator_id="ways_means_usage_cr",
-        artifact_path=pdf_path,
-        artifact_type="pdf",
-        fetched_at=datetime.now(timezone.utc),
-        source_url="https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
-        sha256="w" * 64,
-        cache_hit=False,
-    )
-
-
-def test_extracts_ways_means_usage_crore(mei_govt_finance_artifact):
-    """Header-label match on the Ways and Means row, Tk-crore column (col=2)."""
-    parser = get_parser("pdf_table_row")
-    result = parser.parse(
-        mei_govt_finance_artifact,
-        instruction="page=1 table=1 row=Ways and Means col=2",
-    )
-    assert result.value == WMA_USAGE_CR
-
-
-def test_usage_sits_inside_config_valid_range(mei_govt_finance_artifact):
-    """WMA usage in [0, 500000] Tk crore (config band)."""
-    parser = get_parser("pdf_table_row")
-    usage = parser.parse(
-        mei_govt_finance_artifact, instruction="page=1 table=1 row=Ways and Means col=2"
-    ).value
-    assert 0.0 <= usage <= 500000.0
-
-
-def test_partial_row_label_matches_ways_means(mei_govt_finance_artifact):
-    """The parser does substring row-label matching (landmine E), so a shorter
-    'Ways and Means' anchor still resolves the full 'Ways and Means Advances'
-    row — guarding against edition-to-edition wording drift on the live PDF."""
-    parser = get_parser("pdf_table_row")
-    result = parser.parse(
-        mei_govt_finance_artifact,
-        instruction="page=1 table=1 row=ways and means col=2",
-    )
-    assert result.value == WMA_USAGE_CR

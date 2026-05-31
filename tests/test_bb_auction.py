@@ -18,6 +18,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+import scrapers.bb_auction as bb_auction
 from scrapers.bb_auction import (
     _coerce_calendar_rows,
     _coerce_result_rows,
@@ -242,3 +243,61 @@ def test_scrape_calendar_uses_deterministic(calendar_html):
         rows = scrape_calendar(today=date(2026, 6, 1), run_max_fn=spy)
     assert len(rows) >= 4
     spy.assert_not_called()
+
+
+# --------------------------------------------------------------------------- #
+# R2 — BB image-CAPTCHA reroute: listing + calendar fetch through the solver
+# --------------------------------------------------------------------------- #
+
+_LISTING_HTML = (
+    "<html><body>"
+    '<a href="/en/index.php/mediaroom/press_release_details/rrpt/9001">'
+    "Result of the Auction of Repo, ALS, SLF, SDF and IBLF held on 01 January 2026"
+    "</a></body></html>"
+)
+# All four markers _is_captcha_page requires (id="ans", id="jar", class="thumbnails", "support ID").
+_CAPTCHA_HTML = (
+    '<form><input id="ans"><button id="jar"></button>'
+    '<div class="thumbnails"></div>support ID: 12345</form>'
+)
+
+
+def test_results_listing_fetched_via_solver_not_plain_get():
+    """The press-release LISTING must go through the CAPTCHA-solving rendered path
+    (bb_forex.fetch_rendered_html), NOT plain requests — otherwise discovery sees zero
+    /rrpt/ anchors behind the wall. The per-release DETAIL page stays on plain _get."""
+    with (
+        patch(
+            "scrapers.bb_forex.fetch_rendered_html", return_value=_LISTING_HTML
+        ) as m_render,
+        patch("scrapers.bb_auction._get", return_value="DETAIL_HTML") as m_get,
+    ):
+        out = bb_auction.fetch_latest_results_html()
+    m_render.assert_called_once_with(bb_auction.PRESS_RELEASE_LISTING_URL)
+    assert out == "DETAIL_HTML"
+    m_get.assert_called_once()  # detail fetch only
+
+
+def test_calendar_fetched_via_solver():
+    with patch(
+        "scrapers.bb_forex.fetch_rendered_html", return_value="CAL_HTML"
+    ) as m_render:
+        out = bb_auction.fetch_calendar_html()
+    m_render.assert_called_once_with(bb_auction.AUCTION_CALENDAR_URL)
+    assert out == "CAL_HTML"
+
+
+def test_get_rendered_raises_clear_error_on_unsolved_captcha():
+    """If the solver returns but the page is STILL the CAPTCHA wall, surface a clear
+    FetchError (→ needs_review), not a misleading downstream parse failure."""
+    with patch("scrapers.bb_forex.fetch_rendered_html", return_value=_CAPTCHA_HTML):
+        with pytest.raises(bb_auction.FetchError, match="CAPTCHA unsolved"):
+            bb_auction._get_rendered("https://www.bb.org.bd/x")
+
+
+def test_get_rendered_wraps_solver_error():
+    with patch(
+        "scrapers.bb_forex.fetch_rendered_html", side_effect=RuntimeError("boom")
+    ):
+        with pytest.raises(bb_auction.FetchError, match="rendered fetch failed"):
+            bb_auction._get_rendered("https://www.bb.org.bd/x")

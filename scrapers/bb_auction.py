@@ -497,9 +497,34 @@ def _get(url: str, *, session: requests.Session | None = None) -> str:
     return resp.text
 
 
+def _get_rendered(url: str) -> str:
+    """Fetch a BB page that sits behind the image-CAPTCHA wall, via the Playwright +
+    claude-haiku solver in ``scrapers.bb_forex`` — the ONLY fetch path that actually
+    clears BB's image-CAPTCHA (plain ``requests`` and html_fetcher's single JS-challenge
+    reload do not). Lazy-imported so importing this module stays Playwright-free.
+
+    R2: BB returns the image-CAPTCHA wall to the VPS datacenter IP for the press-release
+    LISTING and the auction CALENDAR, so plain ``requests`` saw 0 ``/rrpt/`` anchors and
+    raised a misleading "no anchors" error. Routing the listing/calendar through the
+    solver fixes discovery; an unsolved wall now surfaces as a clear FetchError →
+    needs_review. VPS-OPEN: confirm whether the per-release DETAIL page also walls (it is
+    still fetched with plain ``requests`` below) and whether the calendar serves the same
+    hard image-CAPTCHA vs only the lighter JS challenge."""
+    from scrapers.bb_forex import fetch_rendered_html
+    from scrapers.bb_forex_captcha import _is_captcha_page
+
+    try:
+        html = fetch_rendered_html(url)
+    except Exception as e:  # solver exhausted (ParseError) / render failure
+        raise FetchError(f"rendered fetch failed for {url}: {e}") from e
+    if _is_captcha_page(html):
+        raise FetchError(f"BB CAPTCHA unsolved for {url}")
+    return html
+
+
 def fetch_latest_results_html(*, session: requests.Session | None = None) -> str:
     """Discover (S7's rrpt logic) + GET the latest auction-result press release."""
-    listing = _get(PRESS_RELEASE_LISTING_URL, session=session)
+    listing = _get_rendered(PRESS_RELEASE_LISTING_URL)
     try:
         target = discover_latest_rrpt_link(
             html=listing,
@@ -513,8 +538,12 @@ def fetch_latest_results_html(*, session: requests.Session | None = None) -> str
 
 
 def fetch_calendar_html(*, session: requests.Session | None = None) -> str:
-    """GET the BB forward auction-calendar page."""
-    return _get(AUCTION_CALENDAR_URL, session=session)
+    """GET the BB forward auction-calendar page (behind the image-CAPTCHA wall).
+
+    ``session`` is accepted for signature symmetry with fetch_latest_results_html but
+    is IGNORED here: the calendar is fetched via the Playwright solver path, which
+    cannot use a requests.Session."""
+    return _get_rendered(AUCTION_CALENDAR_URL)
 
 
 # --------------------------------------------------------------------------- #

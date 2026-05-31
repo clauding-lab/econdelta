@@ -113,6 +113,26 @@ def test_fetch_raises_on_non_200():
         fetch_pink_sheet_bytes(session=sess)
 
 
+def test_fetch_forces_ipv4_before_the_get(monkeypatch):
+    """R5: the ExonVPS IPv6 egress is blackholed and CloudFront resolves AAAA first,
+    so the fetch must pin urllib3 to IPv4 (HAS_IPV6=False) BEFORE the GET — otherwise
+    the connect stalls on the dead IPv6 address. Asserting the flag at sess.get call
+    time (not just afterwards) proves the ordering, not merely that the pin happened.
+    monkeypatch restores the global after the test."""
+    import urllib3.util.connection as conn
+
+    monkeypatch.setattr(conn, "HAS_IPV6", True)  # pretend a dual-stack start state
+
+    def _assert_ipv4_then_respond(*_args, **_kwargs):
+        assert conn.HAS_IPV6 is False, "IPv4 must be pinned before the GET fires"
+        return MagicMock(status_code=200, content=b"PK\x03\x04stub")
+
+    sess = MagicMock()
+    sess.get.side_effect = _assert_ipv4_then_respond
+    assert fetch_pink_sheet_bytes(session=sess) == b"PK\x03\x04stub"
+    assert conn.HAS_IPV6 is False
+
+
 # --------------------------------------------------------------------------- #
 # upsert_commodities — mocked writer
 # --------------------------------------------------------------------------- #

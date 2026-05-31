@@ -1,0 +1,11 @@
+[Unit]
+Description=Run EconDelta IMF EFF scraper weekly (Sun 23:20 UTC / Mon 05:20 BDT). IMF EFF outstanding updates at most quarterly; weekly is ample and avoids hammering the IMF API daily.
+Requires=econdelta-imf-eff.service
+
+[Timer]
+OnCalendar=Sun *-*-* 23:20:00 UTC
+Persistent=true
+RandomizedDelaySec=120
+
+[Install]
+WantedBy=timers.target
