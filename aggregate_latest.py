@@ -43,6 +43,12 @@ STALE_THRESHOLDS_HOURS_BY_CADENCE: dict[str, float] = {
     "fy": 400 * 24.0,         # 9600h
 }
 
+# Cumulative-figure guard: a fiscal-year-to-date total can only rise within a FY.
+CUMULATIVE_DROP_TOLERANCE = 0.05   # >5% same-FY drop ⇒ implausible
+FISCAL_YEAR_START_MONTH = 7        # Bangladesh FY = July–June
+# Granular Opus reject: quarantine up to this many flagged fields; more ⇒ hard reject.
+MAX_QUARANTINE_FIELDS = 5
+
 logger = logging.getLogger("aggregate_latest")
 
 # Derived reserve-utilisation ratios (S2). Computed at runtime from the
@@ -253,6 +259,34 @@ def _is_fresh(snapshot: dict, now: datetime) -> bool:
         return age_hours <= threshold
     except (KeyError, ValueError):
         return False
+
+
+def _fiscal_year(d: date) -> int:
+    """Bangladesh fiscal year (July–June). Returns the FY-start calendar year."""
+    return d.year if d.month >= FISCAL_YEAR_START_MONTH else d.year - 1
+
+
+def _is_cumulative_regression(
+    today_value: object,
+    prior_value: object,
+    today_date: date,
+    prior_date: date,
+) -> bool:
+    """True if a cumulative (FYTD) figure dropped implausibly within the same FY.
+
+    A cumulative fiscal-year-to-date total can only rise within a fiscal year.
+    A drop beyond CUMULATIVE_DROP_TOLERANCE in the SAME fiscal year is a parse
+    error. A drop across the July FY boundary is the legitimate annual reset.
+    """
+    if not isinstance(today_value, (int, float)) or isinstance(today_value, bool):
+        return False
+    if not isinstance(prior_value, (int, float)) or isinstance(prior_value, bool):
+        return False
+    if prior_value <= 0:
+        return False
+    if _fiscal_year(today_date) != _fiscal_year(prior_date):
+        return False  # FY reset — drop is legitimate
+    return today_value < prior_value * (1 - CUMULATIVE_DROP_TOLERANCE)
 
 
 def _compute_reserve_utilisation(data_additions: dict[str, Any]) -> None:
