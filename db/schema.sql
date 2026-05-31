@@ -149,3 +149,95 @@ end $$;
 
 comment on policy "anon read briefings" on public.briefings is
   'Public read for the YieldScope Briefings page. No PII; macro commentary only.';
+
+-- ============================================================================
+-- 0009 — auction_results + auction_calendar
+-- ----------------------------------------------------------------------------
+-- Structured (row-shaped) BB primary-auction storage. metric_history is
+-- scalar-numeric-only and the writer drops dict/list payloads, so an auction
+-- print (multi-row, multi-field) needs real row tables. Two distinct shapes:
+-- results = auctions that happened (size/bid/cover/wam/cutoff); calendar =
+-- forward scheduled issuance (notional only — the four result fields do not
+-- exist for an un-held auction). Upsert key (auction_date, tenor) on both.
+-- Written by EconDelta under service_role; read by the PWA under anon.
+-- ============================================================================
+
+create table if not exists public.auction_results (
+  auction_date  date         not null,            -- the day the auction was held
+  tenor         text         not null,            -- e.g. '91d', '182d', '364d', '5y', '10y'
+  size          numeric,                           -- accepted/issued amount (BDT crore)
+  bid           numeric,                           -- total bid amount (BDT crore)
+  cover         numeric,                           -- bid-to-cover ratio (bid / accepted)
+  wam           numeric,                           -- weighted-average maturity (years)
+  cutoff        numeric,                           -- cut-off / weighted-average yield (percent)
+  ingested_at   timestamptz  not null default now(),
+  primary key (auction_date, tenor)
+);
+
+create index if not exists auction_results_date_desc_idx
+  on public.auction_results (auction_date desc);
+
+alter table public.auction_results enable row level security;
+
+do $$
+begin
+  if not exists (select 1 from pg_policies
+    where schemaname='public' and tablename='auction_results' and policyname='service_role_all') then
+    create policy service_role_all on public.auction_results
+      for all to service_role using (true) with check (true);
+  end if;
+end $$;
+
+do $$
+begin
+  if not exists (select 1 from pg_policies
+    where schemaname='public' and tablename='auction_results' and policyname='anon read auction_results') then
+    create policy "anon read auction_results" on public.auction_results
+      for select to anon using (true);
+  end if;
+end $$;
+
+comment on table public.auction_results is
+  'Per-print BB primary-auction RESULTS (held auctions). One row per '
+  '(auction_date, tenor). Written by EconDelta @ ExonVPS; read by the '
+  'YieldScope PWA under anon.';
+comment on policy "anon read auction_results" on public.auction_results is
+  'Public read for the YieldScope auction panels. No PII; macro auction data only.';
+
+create table if not exists public.auction_calendar (
+  auction_date  date         not null,            -- the day the auction is SCHEDULED for
+  tenor         text         not null,            -- e.g. '91d', '182d', '364d', '5y', '10y'
+  notional      numeric,                           -- planned issuance amount (BDT crore)
+  ingested_at   timestamptz  not null default now(),
+  primary key (auction_date, tenor)
+);
+
+create index if not exists auction_calendar_date_idx
+  on public.auction_calendar (auction_date);
+
+alter table public.auction_calendar enable row level security;
+
+do $$
+begin
+  if not exists (select 1 from pg_policies
+    where schemaname='public' and tablename='auction_calendar' and policyname='service_role_all') then
+    create policy service_role_all on public.auction_calendar
+      for all to service_role using (true) with check (true);
+  end if;
+end $$;
+
+do $$
+begin
+  if not exists (select 1 from pg_policies
+    where schemaname='public' and tablename='auction_calendar' and policyname='anon read auction_calendar') then
+    create policy "anon read auction_calendar" on public.auction_calendar
+      for select to anon using (true);
+  end if;
+end $$;
+
+comment on table public.auction_calendar is
+  'Forward (scheduled, not-yet-held) BB auction issuance strip. One row per '
+  '(auction_date, tenor) with planned notional only — NO bid/cover/wam/cutoff. '
+  'Written by EconDelta; read by the YieldScope PWA under anon.';
+comment on policy "anon read auction_calendar" on public.auction_calendar is
+  'Public read for the YieldScope Fiscal 12-week issuance strip. No PII.';
