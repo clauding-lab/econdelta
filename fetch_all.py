@@ -112,7 +112,14 @@ def _fetch_one(indicator: dict, data_root: Path) -> FetchResult | None:
     if fetch_block["type"] == "pdf":
         url = fetch_block["url"]
         if fetch_block.get("discover") == "latest_pdf_link":
-            html = _download_index_html(url)
+            # Contain a per-indicator index-fetch failure (e.g. a moved page → 404,
+            # or a TLS error) as a FetchError so run() skips just this indicator
+            # instead of an uncaught HTTPError/URLError aborting the whole fetch
+            # stage. Mirrors the html/rrpt discovery branches above.
+            try:
+                html = _download_index_html(url)
+            except Exception as e:
+                raise FetchError(f"index fetch failed for {url}: {e}") from e
             url = discover_latest_pdf_link(html=html, base_url=url)
         as_of_month = datetime.now(timezone.utc).strftime("%Y-%m")
         if fetch_block.get("stealth"):
