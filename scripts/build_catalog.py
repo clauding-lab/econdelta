@@ -61,6 +61,25 @@ DERIVED_KEYS: list[tuple[str, str, str, str]] = [
         "retired 2026-05-25. Strings only land in latest.json — NOT in "
         "metric_history (writer filters strings).",
     ),
+    (
+        "crr_utilisation_pct",
+        "percent",
+        "monthly",
+        "Derived (S2): deposits_held_with_bb_crr / deposits_of_the_system × 100 "
+        "— CRR balance held with BB as a % of total system deposits (NOT the "
+        "regulated statutory maintenance ratio; no hardcoded policy rate). "
+        "Computed in aggregate_latest._compute_reserve_utilisation, null/zero-"
+        "denominator safe. Lands in metric_history under its own id.",
+    ),
+    (
+        "slr_utilisation_pct",
+        "percent",
+        "monthly",
+        "Derived (S2): excess_liquid_asset_total_minimum / deposits_of_the_system "
+        "× 100 — excess liquid assets over the statutory SLR minimum as a % of "
+        "total system deposits (NOT the regulated maintenance ratio). Computed in "
+        "aggregate_latest._compute_reserve_utilisation, null/zero-denominator safe.",
+    ),
 ]
 
 

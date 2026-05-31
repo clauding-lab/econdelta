@@ -6,7 +6,7 @@
 python3 scripts/build_catalog.py > docs/indicator-catalog.md
 ```
 
-**69** scraped indicators × **36** brief aliases × **12** unit conversions × **2** derived = **119** total entries.
+**69** scraped indicators × **36** brief aliases × **12** unit conversions × **4** derived = **121** total entries.
 
 Read the data contract for column semantics and query examples: [`data-contract.md`](data-contract.md).
 
@@ -38,8 +38,10 @@ Read the data contract for column semantics and query examples: [`data-contract.
 | commodities (brief alias) | `food_onion_local_bdt` | `rate` | daily | DAM | [20.0, 400.0] | Alias of `food_onion_local` — Retail price — Local onion (BDT/kg) |
 | commodities (brief alias) | `food_rice_coarse_bdt` | `rate` | daily | DAM | [20.0, 200.0] | Alias of `food_rice_coarse` — Retail price — Aman coarse rice (BDT/kg) |
 | commodities (brief alias) | `food_sugar_local_bdt` | `rate` | daily | DAM | [50.0, 250.0] | Alias of `food_sugar_local` — Retail price — Sugar local (BDT/kg) |
+| derived (cross-source) | `crr_utilisation_pct` | `percent` | monthly | — | — | Derived (S2): deposits_held_with_bb_crr / deposits_of_the_system × 100 — CRR balance held with BB as a % of total system deposits (NOT the regulated statutory maintenance ratio; no hardcoded policy rate). Computed in aggregate_latest._compute_reserve_utilisation, null/zero-denominator safe. Lands in metric_history under its own id. |
 | derived (cross-source) | `nbr_fytd_collected_cr` | `amount_bdt_crore` | monthly | — | — | NBR fiscal-year-to-date collection — sourced canonically from tax_revenue (BB PDF, deterministic parse, 5% anomaly threshold). News corroborators (TBS, Daily Star) retired 2026-05-25. |
 | derived (cross-source) | `nbr_fytd_cross_check` | `string` | monthly | — | — | Cross-check status for nbr_fytd_collected_cr — now always 'single_source_tax_revenue' since the news corroborator path was retired 2026-05-25. Strings only land in latest.json — NOT in metric_history (writer filters strings). |
+| derived (cross-source) | `slr_utilisation_pct` | `percent` | monthly | — | — | Derived (S2): excess_liquid_asset_total_minimum / deposits_of_the_system × 100 — excess liquid assets over the statutory SLR minimum as a % of total system deposits (NOT the regulated maintenance ratio). Computed in aggregate_latest._compute_reserve_utilisation, null/zero-denominator safe. |
 | equities | `dse_sector_heat` | `sector_dict` | daily | DSE | [-50.0, 50.0] | DSE Sector Heat (8 sectors, % avg) |
 | external_sector | `bop_summary` | `amount_usd_bn` | monthly | BB | [-20.0, 20.0] | BOP Summary |
 | external_sector | `categorywise_export` | `amount_usd_bn` | fiscal_year | BB | [0.0, 60.0] | Categorywise Export |

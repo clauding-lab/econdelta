@@ -1,7 +1,6 @@
 """Tests for definition seeding logic in aggregate_latest.py."""
 from __future__ import annotations
 
-import json
 import pytest
 
 
@@ -27,8 +26,10 @@ class TestBuildDefinitionSeeds:
             ]
         }
         seeds = _build_definition_seeds(sources_v3)
-        assert len(seeds) == 1
-        d = seeds[0]
+        # 1 config indicator + the runtime-derived CRR/SLR utilisation seeds (S2).
+        by_id = {s["metric_id"]: s for s in seeds}
+        assert "banking_npl_pct" in by_id
+        d = by_id["banking_npl_pct"]
         assert d["metric_id"] == "banking_npl_pct"
         assert d["label"] == "Gross NPL Ratio"
         assert d["unit"] == "%"
