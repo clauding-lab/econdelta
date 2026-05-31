@@ -1,0 +1,26 @@
+You are extracting a Bangladesh government-finance indicator from a Ministry of Finance Monthly Fiscal Report (MFR) PDF.
+
+Indicator: {indicator_name}
+Instruction: {instruction}
+Value type: {value_type}
+Valid range: {valid_range}
+
+You want the NON-NBR TAX revenue figure from the Revenue table (Table 4). This is the small tax leg that is NOT collected by the National Board of Revenue: land registration fees, stamp duty, and narcotics duty. It is the row commonly labelled "b. Non-NBR Tax" (sometimes "Non-NBR Tax Revenue"), sitting directly below the "a. NBR" row and above "Non-Tax Revenue".
+
+Return the FISCAL-YEAR-TO-DATE (FYTD / cumulative "up to month") actual figure for the CURRENT fiscal year, in BDT crore. Do NOT return:
+- the single-month figure (that is a smaller, separate column),
+- the annual Budget or Revised figure,
+- the "a. NBR" tax total, the "Total Tax Revenue" sum, or the "Non-Tax Revenue" row.
+
+Numbers may use commas (1,234 = 1234). Strip commas and return a single number.
+
+<<<PDF_TEXT>>>
+{pdf_text}
+<<<END>>>
+
+RULES:
+- If you locate the Non-NBR Tax FYTD figure, RETURN IT as `value`. Never put a number inside `reason` while leaving value=null — commit to the best-fit number.
+- Only return value=null when the Non-NBR Tax row is genuinely absent from the provided text (empty extract, table truncated before the row, CAPTCHA/bot-challenge page).
+- Reply ONLY with strict JSON of the form:
+
+{{"value": <number-or-null>, "reason": "<1 sentence on where you found it OR why it is missing>"}}

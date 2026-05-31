@@ -208,8 +208,9 @@
       "domain": "government_finance",
       "cadence": "monthly",
       "fetch": {
-        "type": "news",
-        "url": ""
+        "type": "pdf",
+        "url": "https://mof.gov.bd/pages/static-pages/6940329635ce18e1c055ef1a",
+        "task": "Page 9 of doc, table 4"
       },
       "parse": {
         "deterministic": "pdf_table_row",
@@ -220,12 +221,28 @@
           100000.0
         ]
       },
-      "anomaly_threshold": 0.05,
-      "alternate": {
-        "url": "https://mof.gov.bd/pages/static-pages/6940329635ce18e1c055ef1a",
+      "anomaly_threshold": 0.05
+    },
+    {
+      "id": "non_nbr_tax_revenue",
+      "name": "Non-NBR Tax Revenue (MoF MFR, FYTD)",
+      "domain": "government_finance",
+      "cadence": "monthly",
+      "fetch": {
         "type": "pdf",
-        "task": "Page 9 of doc, table 4"
-      }
+        "url": "https://mof.gov.bd/pages/static-pages/6940329635ce18e1c055ef1a",
+        "task": "On the Revenue table (Table 4) of the MoF Monthly Fiscal Report, extract the 'b. Non-NBR Tax' row (land registration fees, stamp duty, narcotics duty) fiscal-year-to-date (FYTD) figure, in BDT crore. row=Non-NBR col=fytd anchor=TODO_VPS_FILL_FY26_NON_NBR_BUDGET_CRORE"
+      },
+      "parse": {
+        "deterministic": "pdf_mfr_row",
+        "llm_prompt": "non_nbr_tax_revenue.txt",
+        "value_type": "amount_bdt_crore",
+        "valid_range": [
+          0.0,
+          60000.0
+        ]
+      },
+      "anomaly_threshold": 0.10
     },
     {
       "id": "total_revenue_budget_vs_actual",

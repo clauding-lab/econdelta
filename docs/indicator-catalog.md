@@ -6,7 +6,7 @@
 python3 scripts/build_catalog.py > docs/indicator-catalog.md
 ```
 
-**69** scraped indicators × **36** brief aliases × **12** unit conversions × **4** derived = **121** total entries.
+**70** scraped indicators × **36** brief aliases × **12** unit conversions × **4** derived = **122** total entries.
 
 Read the data contract for column semantics and query examples: [`data-contract.md`](data-contract.md).
 
@@ -69,7 +69,8 @@ Read the data contract for column semantics and query examples: [`data-contract.
 | government_finance | `nbr_it_collected_cr` | `amount_bdt_crore` | monthly | TBS | [10000.0, 800000.0] | NBR FYTD Income Tax Collection (BDT crore) |
 | government_finance | `nbr_vat_collected_cr` | `amount_bdt_crore` | monthly | TBS | [10000.0, 800000.0] | NBR FYTD VAT Collection (BDT crore) |
 | government_finance | `non_bank_borrowing_for_deficit_financing` | `amount_bdt_crore` | monthly | BB | [0.0, 200000.0] | Non-bank borrowing for Deficit Financing |
-| government_finance | `non_tax_revenue` | `amount_bdt_crore` | monthly |  | [0.0, 100000.0] | Non-Tax Revenue |
+| government_finance | `non_nbr_tax_revenue` | `amount_bdt_crore` | monthly | mof.gov.bd | [0.0, 60000.0] | Non-NBR Tax Revenue (MoF MFR, FYTD) |
+| government_finance | `non_tax_revenue` | `amount_bdt_crore` | monthly | mof.gov.bd | [0.0, 100000.0] | Non-Tax Revenue |
 | government_finance | `rev_gdp_ratio` | `percent` | quarterly |  | [0.0, 40.0] | Rev-GDP Ratio |
 | government_finance | `tax_gdp_ratio` | `percent` | quarterly |  | [0.0, 30.0] | Tax-GDP Ratio |
 | government_finance | `tax_revenue` | `amount_bdt_crore` | monthly | BB | [0.0, 500000.0] | Tax Revenue |
