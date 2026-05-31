@@ -43,3 +43,30 @@ class TestCumulativeRegression:
     def test_non_numeric_today_is_not_regression(self):
         from aggregate_latest import _is_cumulative_regression
         assert _is_cumulative_regression(None, 287862.59, date(2026, 5, 31), date(2026, 5, 30)) is False
+
+
+class TestPriorGoodSnapshot:
+    def test_returns_most_recent_good_before_today(self, tmp_path, monkeypatch):
+        import aggregate_latest
+        d = tmp_path / "tax_revenue"
+        d.mkdir()
+        (d / "2026-05-30.json").write_text(
+            '{"value": 287862.59, "scraped_at": "2026-05-30T05:00:00+00:00", "_provenance": "llm_extracted"}'
+        )
+        (d / "2026-05-31.json").write_text(
+            '{"value": 33522.0, "scraped_at": "2026-05-31T05:00:00+00:00", "_provenance": "llm_extracted"}'
+        )
+        monkeypatch.setattr(aggregate_latest, "DATA_DIR", tmp_path)
+        snap = aggregate_latest._prior_good_snapshot("tax_revenue", date(2026, 5, 31))
+        assert snap is not None
+        assert snap["value"] == 287862.59
+
+    def test_returns_none_when_no_prior(self, tmp_path, monkeypatch):
+        import aggregate_latest
+        d = tmp_path / "tax_revenue"
+        d.mkdir()
+        (d / "2026-05-31.json").write_text(
+            '{"value": 33522.0, "scraped_at": "2026-05-31T05:00:00+00:00", "_provenance": "llm_extracted"}'
+        )
+        monkeypatch.setattr(aggregate_latest, "DATA_DIR", tmp_path)
+        assert aggregate_latest._prior_good_snapshot("tax_revenue", date(2026, 5, 31)) is None

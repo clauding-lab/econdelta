@@ -247,6 +247,33 @@ def _load_last_good_snapshot(indicator_id: str, *, max_days_back: int = 60) -> d
     return None
 
 
+def _prior_good_snapshot(indicator_id: str, today: date) -> dict | None:
+    """Most-recent good snapshot strictly BEFORE `today` (by scraped_at date).
+
+    Unlike _load_last_good_snapshot, this excludes today's own snapshot — the
+    cumulative guard must compare today's value against a genuinely prior value.
+    """
+    d = DATA_DIR / indicator_id
+    if not d.exists():
+        return None
+    for path in sorted(d.glob("*.json"), reverse=True):
+        try:
+            blob = json.loads(path.read_text())
+        except (json.JSONDecodeError, OSError):
+            continue
+        if _is_bad_snapshot(blob):
+            continue
+        try:
+            scraped = datetime.fromisoformat(
+                blob["scraped_at"].replace("Z", "+00:00")
+            ).date()
+        except (KeyError, ValueError):
+            continue
+        if scraped < today:
+            return blob
+    return None
+
+
 def _is_fresh(snapshot: dict, now: datetime) -> bool:
     """Return True if the snapshot is within its cadence staleness threshold."""
     cadence = snapshot.get("cadence", "daily")
