@@ -38,6 +38,18 @@ def test_parse_cluster_token_reads_deposits(mod):
     assert mod._parse_cluster_token("read cluster=deposits unit=crore") == "deposits"
 
 
+def test_parse_cluster_token_strips_trailing_punctuation(mod):
+    # Real config tasks embed the token mid-prose (also fed to the LLM), e.g.
+    # "... groups. cluster=npl. Return the four ..." — the trailing period must
+    # be stripped. Regression for the live-VPS failure "unknown cluster 'npl.'".
+    assert mod._parse_cluster_token(
+        "...four groups. cluster=npl. Return the four percent values"
+    ) == "npl"
+    assert mod._parse_cluster_token(
+        "...LEVEL in BDT crore. cluster=deposits. Return the four crore values"
+    ) == "deposits"
+
+
 def test_parse_cluster_token_missing_raises(mod):
     with pytest.raises(ParseError):
         mod._parse_cluster_token("no cluster token here")

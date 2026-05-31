@@ -136,7 +136,11 @@ def _parse_cluster_token(instruction: str) -> str:
     """Read the ``cluster=npl|deposits`` token from the instruction."""
     for token in instruction.split():
         if token.startswith("cluster="):
-            return token.split("=", 1)[1].strip().lower()
+            # The token is embedded in a prose instruction (also fed to the LLM),
+            # e.g. "... cluster=npl. Return the four ..." — strip surrounding
+            # whitespace AND trailing sentence punctuation so "cluster=npl."
+            # yields "npl", not "npl." (which fails the npl|deposits check).
+            return token.split("=", 1)[1].strip().strip(".,;:").lower()
     raise ParseError(
         f"instruction missing cluster=npl|deposits token: {instruction!r}"
     )
