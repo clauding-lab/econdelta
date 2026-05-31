@@ -56,4 +56,38 @@ badge backlog    "history"       "${YEARS} years"    "006d6d"
 badge indicators "indicators"    "$INDICATORS"        "5b6577"
 badge updated    "data updated"  "$TODAY"             "informational"
 
-echo "badges → $OUT_DIR  (total=$TOTAL daily=$DAILY archive=$ARCHIVE indicators=$INDICATORS years=$YEARS since=$SINCE_YEAR)"
+# README hero banner (SVG). GitHub serves README SVGs in a sandbox that blocks
+# web fonts, so this uses system mono/serif stacks + the brand palette. Numbers
+# refresh whenever this script runs (daily via the stats-badges workflow).
+TOTAL_G="$(group "$TOTAL")"
+cat > "$OUT_DIR/hero.svg" <<SVG
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="340" viewBox="0 0 1200 340" role="img" aria-label="EconDelta — ${TOTAL_G} data points across ${INDICATORS} indicators, ${YEARS} years of history since ${SINCE_YEAR}">
+  <defs>
+    <pattern id="g" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M40 0H0V40" fill="none" stroke="#141c2b" stroke-width="1"/>
+    </pattern>
+    <style>
+      .mono{font-family:ui-monospace,'SF Mono','Cascadia Code',Menlo,Consolas,monospace}
+      .serif{font-family:Georgia,'Times New Roman',serif}
+    </style>
+  </defs>
+  <rect width="1200" height="340" fill="#0b1220"/>
+  <rect width="1200" height="340" fill="url(#g)"/>
+  <rect width="560" height="6" fill="#ff5a1f"/>
+  <rect x="560" width="150" height="6" fill="#098e8e"/>
+  <text x="64" y="74" class="mono" font-size="15" letter-spacing="4" fill="#ff5a1f">AUTONOMOUS DATA PIPELINE &#183; BANGLADESH MACRO</text>
+  <text x="61" y="150" class="serif" font-size="62" font-weight="700" fill="#f1f4fa">Econ<tspan fill="#ff5a1f">&#916;</tspan>elta</text>
+  <text x="64" y="192" class="serif" font-size="22" fill="#b6bfd0">Bangladesh&#8217;s macroeconomy, captured autonomously &#8212; every day.</text>
+  <line x1="64" y1="228" x2="1136" y2="228" stroke="#232a3a" stroke-width="1"/>
+  <text x="64"  y="272" class="mono" font-size="13" letter-spacing="2.5" fill="#7a8497">DATA POINTS</text>
+  <text x="64"  y="316" class="mono" font-size="46" font-weight="700" fill="#ff5a1f">${TOTAL_G}</text>
+  <text x="430" y="272" class="mono" font-size="13" letter-spacing="2.5" fill="#7a8497">YEARS OF HISTORY</text>
+  <text x="430" y="316" class="mono" font-size="46" font-weight="700" fill="#f1f4fa">${YEARS}<tspan font-size="22" fill="#7a8497"> yrs</tspan></text>
+  <text x="720" y="272" class="mono" font-size="13" letter-spacing="2.5" fill="#7a8497">INDICATORS</text>
+  <text x="720" y="316" class="mono" font-size="46" font-weight="700" fill="#f1f4fa">${INDICATORS}</text>
+  <text x="1136" y="74" text-anchor="end" class="mono" font-size="12" letter-spacing="1.5" fill="#5b6577">BB &#183; BBS &#183; NBR &#183; DSE &#183; DAM &#183; COMMODITIES</text>
+  <text x="1136" y="316" text-anchor="end" class="mono" font-size="15" fill="#4ed1d1">econdelta.clauding-lab.com</text>
+</svg>
+SVG
+
+echo "badges + hero.svg → $OUT_DIR  (total=$TOTAL daily=$DAILY archive=$ARCHIVE indicators=$INDICATORS years=$YEARS since=$SINCE_YEAR)"

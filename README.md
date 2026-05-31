@@ -1,3 +1,5 @@
+[![EconDelta — Bangladesh's autonomous macro data pipeline](https://raw.githubusercontent.com/clauding-lab/econdelta/badges/hero.svg)](https://econdelta.clauding-lab.com)
+
 # EconDelta
 
 > **Bangladesh's macroeconomy, captured autonomously — every day.**
