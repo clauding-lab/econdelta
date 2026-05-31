@@ -1,10 +1,25 @@
 # EconDelta
 
+> **Bangladesh's macroeconomy, captured autonomously — every day.**
+> A self-running pipeline that scrapes, parses, reconciles and archives
+> Bangladesh's economic indicators into one queryable repository.
+
+[![data points](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fclauding-lab%2Fecondelta%2Fbadges%2Fdatapoints.json)](https://econdelta.clauding-lab.com)
+[![history](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fclauding-lab%2Fecondelta%2Fbadges%2Fbacklog.json)](https://econdelta.clauding-lab.com)
+[![indicators](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fclauding-lab%2Fecondelta%2Fbadges%2Findicators.json)](docs/indicator-catalog.md)
+[![data updated](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fclauding-lab%2Fecondelta%2Fbadges%2Fupdated.json)](https://econdelta.clauding-lab.com)
+[![deploy](https://github.com/clauding-lab/econdelta/actions/workflows/pwa-deploy.yml/badge.svg)](https://github.com/clauding-lab/econdelta/actions/workflows/pwa-deploy.yml)
+
+🌐 **Live dashboard → [econdelta.clauding-lab.com](https://econdelta.clauding-lab.com)**
+
 EconDelta is the **data layer** for Bangladesh economic indicators.
-It scrapes ~60 series from Bangladesh Bank, BBS, NBR, DSE, DAM, and
+It scrapes ~70 series from Bangladesh Bank, BBS, NBR, DSE, DAM, and
 news sources on a daily schedule; parses them; and writes both a
 canonical `data/latest.json` snapshot and a row-per-indicator-per-day
-into Supabase `metric_history` for queryable warm history.
+into Supabase `metric_history` for queryable warm history. A deep
+`metric_history_monthly` archive carries the same indicators back to
+**January 2012** — roughly 14 years of backlog (10,000+ data points
+and counting across both tables).
 
 **If you're a downstream app** (the brief, Mission Control, Notifyr,
 something new) and you want to *read* this data, you do **not** need

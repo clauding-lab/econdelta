@@ -2,10 +2,75 @@
 // Reads window.ED_DATA: tickers, tickerGroups, bundle.{data,sources_status,updated_at}.
 const { useState: useStateL } = React;
 
+// Front-page hero. Numbers come live from window.ED_DATA.stats (populated by
+// lib/supabase-client.js). If stats are absent (mock mode, or the count probes
+// failed), it degrades to conservative baked constants so the banner never breaks.
+const HERO_FALLBACK = { dataPoints: 10000, backlogYears: 14, indicators: 70, earliest: '2012-01-01' };
+
+function fmtInt(n){
+  return Number(n || 0).toLocaleString('en-US');
+}
+
+function HeroBanner(){
+  const stats = (window.ED_DATA && window.ED_DATA.stats) || null;
+  const isLive = stats != null && stats.dataPoints != null;
+  const s = isLive ? stats : HERO_FALLBACK;
+  const sinceYear = s.earliest ? new Date(s.earliest + 'T00:00:00Z').getUTCFullYear() : 2012;
+  return (
+    <section className="edhero" aria-labelledby="edhero-h">
+      <div className="edhero-grid">
+        <div className="edhero-lede">
+          <div className="edhero-eyebrow">Autonomous data pipeline · Bangladesh macro</div>
+          <p id="edhero-h" className="edhero-title">
+            Bangladesh&rsquo;s macro data, captured autonomously by{' '}
+            <span className="edhero-brand">Econ<span className="delta">&Delta;</span>elta</span>{' '}
+            &mdash; every day, without fail.
+          </p>
+          <p className="edhero-sub">
+            A self-running pipeline scrapes Bangladesh Bank, BBS, NBR, DSE and the
+            commodity markets on a daily schedule, reconciles every reading, and
+            archives it into one queryable repository &mdash; the source of truth
+            behind The Brief and YieldScope.
+          </p>
+        </div>
+
+        <dl className="edhero-ledger" aria-label="Repository at a glance">
+          <div className="edhero-stat edhero-stat--hero">
+            <dt>
+              Data points
+              {isLive && <span className="edhero-pulse" aria-hidden="true">&#9679;</span>}
+            </dt>
+            <dd className="tnum">{fmtInt(s.dataPoints)}{!isLive && '+'}</dd>
+            <span className="edhero-note">daily pipeline + 14-yr archive &middot; growing daily</span>
+          </div>
+          <div className="edhero-stat">
+            <dt>Years of history</dt>
+            <dd className="tnum">{s.backlogYears ?? 14}<span className="edhero-unit">yrs</span></dd>
+            <span className="edhero-note">backlog to January {sinceYear}</span>
+          </div>
+          <div className="edhero-stat">
+            <dt>Indicators</dt>
+            <dd className="tnum">{fmtInt(s.indicators ?? 70)}</dd>
+            <span className="edhero-note">macro series tracked</span>
+          </div>
+        </dl>
+      </div>
+      <div className="edhero-sources">
+        Bangladesh Bank &middot; BBS &middot; NBR &middot; DSE &middot; DAM &middot; commodity markets
+      </div>
+    </section>
+  );
+}
+
 function PageLatest(){
   const data = window.ED_DATA;
   if(!data || !data.bundle){
-    return <div className="loading">no data yet…</div>;
+    return (
+      <React.Fragment>
+        <HeroBanner/>
+        <div className="loading">no data yet…</div>
+      </React.Fragment>
+    );
   }
 
   const groups = data.tickerGroups || [];
@@ -30,6 +95,7 @@ function PageLatest(){
 
   return (
     <React.Fragment>
+      <HeroBanner/>
       <PageHead
         kicker="Pipeline · canonical snapshot"
         title="Latest"
