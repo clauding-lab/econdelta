@@ -175,10 +175,11 @@
       "name": "Tax Revenue",
       "domain": "government_finance",
       "cadence": "monthly",
+      "cumulative": true,
       "fetch": {
         "type": "pdf",
         "url": "https://www.bb.org.bd/en/index.php/publication/publictn/5/27",
-        "task": "Go to latest available PDF, Component 9",
+        "task": "Go to the latest available PDF, Component 9 (NBR tax revenue). Return the CUMULATIVE fiscal-year-to-date (July to the latest reported month) NBR tax revenue total in BDT crore — the running cumulative total, which mid-year is typically 200,000+ crore. NEVER return a single month's collection or a target/shortfall figure.",
         "discover": "latest_pdf_link"
       },
       "parse": {
@@ -208,8 +209,9 @@
       "domain": "government_finance",
       "cadence": "monthly",
       "fetch": {
-        "type": "news",
-        "url": ""
+        "type": "pdf",
+        "url": "https://mof.gov.bd/pages/static-pages/6940329635ce18e1c055ef1a",
+        "task": "Page 9 of doc, table 4"
       },
       "parse": {
         "deterministic": "pdf_table_row",
@@ -220,12 +222,29 @@
           100000.0
         ]
       },
-      "anomaly_threshold": 0.05,
-      "alternate": {
-        "url": "https://mof.gov.bd/pages/static-pages/6940329635ce18e1c055ef1a",
+      "anomaly_threshold": 0.05
+    },
+    {
+      "id": "non_nbr_tax_revenue",
+      "name": "Non-NBR Tax Revenue (MoF MFR, FYTD)",
+      "domain": "government_finance",
+      "cadence": "monthly",
+      "cumulative": true,
+      "fetch": {
         "type": "pdf",
-        "task": "Page 9 of doc, table 4"
-      }
+        "url": "https://mof.gov.bd/pages/static-pages/6940329635ce18e1c055ef1a",
+        "task": "On the Revenue table (Table 4) of the MoF Monthly Fiscal Report, extract the 'b. Non-NBR Tax' row (land registration fees, stamp duty, narcotics duty) fiscal-year-to-date (FYTD) figure, in BDT crore. row=Non-NBR col=fytd anchor=TODO_VPS_FILL_FY26_NON_NBR_BUDGET_CRORE"
+      },
+      "parse": {
+        "deterministic": "pdf_mfr_row",
+        "llm_prompt": "non_nbr_tax_revenue.txt",
+        "value_type": "amount_bdt_crore",
+        "valid_range": [
+          0.0,
+          60000.0
+        ]
+      },
+      "anomaly_threshold": 0.10
     },
     {
       "id": "total_revenue_budget_vs_actual",
@@ -1009,6 +1028,7 @@
       "name": "NBR FYTD VAT Collection (BDT crore)",
       "domain": "government_finance",
       "cadence": "monthly",
+      "cumulative": true,
       "fetch": {
         "type": "html",
         "url": "https://www.tbsnews.net/nbr",
@@ -1032,6 +1052,7 @@
       "name": "NBR FYTD Income Tax Collection (BDT crore)",
       "domain": "government_finance",
       "cadence": "monthly",
+      "cumulative": true,
       "fetch": {
         "type": "html",
         "url": "https://www.tbsnews.net/nbr",
@@ -1055,6 +1076,7 @@
       "name": "NBR FYTD Customs Collection (BDT crore)",
       "domain": "government_finance",
       "cadence": "monthly",
+      "cumulative": true,
       "fetch": {
         "type": "html",
         "url": "https://www.tbsnews.net/nbr",
@@ -1639,6 +1661,31 @@
       }
     },
     {
+      "id": "current_account_balance",
+      "name": "Current Account Balance",
+      "domain": "macro",
+      "cadence": "monthly",
+      "fetch": {
+        "type": "html",
+        "url": "https://www.bb.org.bd/en/index.php/econdata/bop",
+        "task": "row=Current Account col=2 -- the Current Account Balance line of the BoP table, in USD billion; negative = deficit. NOT the Overall Balance row."
+      },
+      "parse": {
+        "deterministic": "html_table_row",
+        "llm_prompt": "current_account_balance.txt",
+        "value_type": "amount_usd_bn",
+        "valid_range": [
+          -20.0,
+          20.0
+        ]
+      },
+      "alternate": {
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
+        "type": "pdf",
+        "task": "On page 31, the Current Account Balance row of the BoP table, USD billion, negative = deficit. NOT the Overall Balance row."
+      }
+    },
+    {
       "id": "interbank_repo_data",
       "name": "Interbank Repo Data",
       "domain": "money_market",
@@ -1680,6 +1727,189 @@
         ]
       },
       "anomaly_threshold": 0.05
+    },
+    {
+      "id": "debt_gdp_ratio",
+      "name": "Debt-to-GDP Ratio (MoF Debt Bulletin latest print; IMF DataMapper supplies back-history via scrapers/imf_debt_gdp.py)",
+      "domain": "government_finance",
+      "cadence": "quarterly",
+      "fetch": {
+        "type": "pdf",
+        "url": "https://mof.gov.bd/site/page/debt-bulletin",
+        "task": "Latest MoF Debt Bulletin: the summary debt table, the 'Total Public Debt as % of GDP' row. page=1 table=1 row=as % of GDP col=2 (VPS-confirm the page/table/row/col indices against the latest bulletin layout).",
+        "discover": "latest_pdf_link"
+      },
+      "parse": {
+        "deterministic": "pdf_table_row",
+        "llm_prompt": "pdf_table_row.txt",
+        "value_type": "percent",
+        "valid_range": [
+          10.0,
+          100.0
+        ]
+      },
+      "anomaly_threshold": 0.5
+    },
+    {
+      "id": "debt_domestic_stock_cr",
+      "name": "Domestic Debt Outstanding Stock (MoF Debt Bulletin; FY25 ~Tk11.95tn). Stock level, NOT the deficit-financing flow domestic_borrowing_for_budget_deficit.",
+      "domain": "government_finance",
+      "cadence": "quarterly",
+      "fetch": {
+        "type": "pdf",
+        "url": "https://mof.gov.bd/site/page/debt-bulletin",
+        "task": "Latest MoF Debt Bulletin: the summary debt-stock table, the 'Domestic Debt' (outstanding stock) row, Tk-crore column. page=1 table=1 row=Domestic Debt col=2 (VPS-confirm the page/table/row/col indices against the latest bulletin layout; shares the same PDF as debt_gdp_ratio and debt_external_stock_cr — one fetch).",
+        "discover": "latest_pdf_link"
+      },
+      "parse": {
+        "deterministic": "pdf_table_row",
+        "llm_prompt": "pdf_table_row.txt",
+        "value_type": "amount_bdt_crore",
+        "valid_range": [
+          500000.0,
+          3000000.0
+        ]
+      },
+      "anomaly_threshold": 0.25
+    },
+    {
+      "id": "debt_external_stock_cr",
+      "name": "External Debt Outstanding Stock (MoF Debt Bulletin; FY25 ~Tk9.49tn). Stock level, NOT the deficit-financing flow foreign_borrowing_for_budget_deficit.",
+      "domain": "government_finance",
+      "cadence": "quarterly",
+      "fetch": {
+        "type": "pdf",
+        "url": "https://mof.gov.bd/site/page/debt-bulletin",
+        "task": "Latest MoF Debt Bulletin: the summary debt-stock table, the 'External Debt' (outstanding stock) row, Tk-crore column. page=1 table=1 row=External Debt col=2 (VPS-confirm the page/table/row/col indices against the latest bulletin layout; shares the same PDF as debt_gdp_ratio and debt_domestic_stock_cr — one fetch).",
+        "discover": "latest_pdf_link"
+      },
+      "parse": {
+        "deterministic": "pdf_table_row",
+        "llm_prompt": "pdf_table_row.txt",
+        "value_type": "amount_bdt_crore",
+        "valid_range": [
+          300000.0,
+          3000000.0
+        ]
+      },
+      "anomaly_threshold": 0.25
+    },
+    {
+      "id": "ways_means_usage_cr",
+      "name": "Ways & Means Advances Usage (BB overdraft to government; usage LEVEL only — there is NO published monthly limit/ceiling cell, so this is intentionally usage-only with NO 'vs limit' denominator. CEIC sources Tk120,000cr Nov-2025 vs Tk90,924cr Oct-2025.)",
+      "domain": "government_finance",
+      "cadence": "monthly",
+      "fetch": {
+        "type": "pdf",
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
+        "task": "BB Major Economic Indicators (MEI), government-finance section: the 'Ways and Means Advances' (WMA, BB overdraft to government) outstanding/usage row, Tk-crore column. This is the USAGE level — do NOT extract or fabricate a limit/ceiling (none is published in this table). page=14 table=1 row=Ways and Means col=2 (VPS-confirm the page/table/row/col indices against the latest MEI edition layout — MEI page numbers shift edition-to-edition; prefer the 'Ways and Means' row-label match over the absolute page index).",
+        "discover": "latest_pdf_link"
+      },
+      "parse": {
+        "deterministic": "pdf_table_row",
+        "llm_prompt": "pdf_table_row.txt",
+        "value_type": "amount_bdt_crore",
+        "valid_range": [
+          0.0,
+          500000.0
+        ]
+      },
+      "anomaly_threshold": 0.25,
+      "alternate": {
+        "url": "https://mof.gov.bd/site/page/debt-bulletin",
+        "type": "pdf",
+        "task": "Latest MoF Debt Bulletin: the short-term/overdraft financing table, the 'Ways and Means Advances' (WMA) outstanding row, Tk-crore column. Usage level only — no limit. page=1 table=1 row=Ways and Means col=2 (VPS-confirm indices against the latest bulletin layout)."
+      }
+    },
+    {
+      "id": "slf_draw_cr",
+      "name": "SLF Drawdown (Standing Lending Facility accepted amount, BDT crore; usage/DRAW LEVEL only — SLF is uncapped-on-demand, BB publishes NO 'limit', so this is intentionally draw-only with NO 'vs limit' denominator. DAILY: one BB auction-result press release per business day; no new row is written on a day with no SLF print.)",
+      "domain": "money_market",
+      "cadence": "daily",
+      "fetch": {
+        "type": "html",
+        "url": "https://www.bb.org.bd/en/index.php/mediaroom/press_release",
+        "task": "Open the latest BB auction-result press release ('Result of the Auction of Repo, ALS, SLF, SDF and IBLF held on <date>', under mediaroom/press_release_details/rrpt/<id>) and read the SLF (Standing Lending Facility) ACCEPTED amount in Tk crore. This is the draw/usage LEVEL — do NOT extract or fabricate a limit/ceiling (SLF is uncapped-on-demand; none is published). instrument=SLF (match the 'SLF' / 'Standing Lending Facility' row-label, not an absolute table index). VPS-confirm against a recent rrpt page that the release lists SLF as a labelled row/line and the accepted amount is the Tk-crore figure (not the bid amount or rate).",
+        "discover": "latest_rrpt_link",
+        "title_pattern": "Result of the Auction"
+      },
+      "parse": {
+        "deterministic": "html_auction_press_row",
+        "llm_prompt": "html_auction_press_row.txt",
+        "value_type": "amount_bdt_crore",
+        "valid_range": [
+          0.0,
+          200000.0
+        ]
+      },
+      "anomaly_threshold": 0.5
+    },
+    {
+      "id": "bb_repo_usage_cr",
+      "name": "BB Central-Bank Repo Usage (Repo accepted amount from BB auction press release, BDT crore; usage LEVEL only). DISTINCT from interbank_repo_data (bank-to-bank) — this is central-bank repo (BB lending to banks). BB has largely STOPPED routine daily repo lending (shifting to SLF/ALS), so on many days the Repo line is ABSENT: a null is returned and NO new row is written that day — never a stale carry-forward and never a fabricated measured 0. YieldScope MUST apply an as_of-freshness guard (it returns the most-recent EXISTING row, which on a no-repo day is weeks old).",
+      "domain": "money_market",
+      "cadence": "daily",
+      "fetch": {
+        "type": "html",
+        "url": "https://www.bb.org.bd/en/index.php/mediaroom/press_release",
+        "task": "Open the latest BB auction-result press release ('Result of the Auction of Repo, ALS, SLF, SDF and IBLF held on <date>', under mediaroom/press_release_details/rrpt/<id>) and read the central-bank Repo ACCEPTED amount in Tk crore. instrument=Repo (match the 'Repo' / 'Repurchase Agreement' row-label). Return NULL when there is no Repo line at all (BB held no repo auction that day) — do NOT fabricate a 0 and do NOT carry forward a prior value; a genuine measured 0 (repo offered, nothing accepted) IS returned as 0. This is the USAGE level — there is no separate limit. VPS-confirm against a recent rrpt page whether the Repo line is present and where the accepted Tk-crore figure sits.",
+        "discover": "latest_rrpt_link",
+        "title_pattern": "Result of the Auction"
+      },
+      "parse": {
+        "deterministic": "html_auction_press_row",
+        "llm_prompt": "html_auction_press_row.txt",
+        "value_type": "amount_bdt_crore",
+        "valid_range": [
+          0.0,
+          200000.0
+        ]
+      },
+      "anomaly_threshold": 0.5
+    },
+    {
+      "id": "npl_by_ownership",
+      "name": "Gross NPL ratio by bank ownership (SOCB / PCB / FCB / Specialised), percent. 4-row ownership cluster from the BB Financial Stability Report (FSR) body. Parser returns a dict {socb,pcb,fcb,specialised}; aggregate_latest._flatten_ownership_cluster fans it out into the 4 scalar metrics npl_socb_pct / npl_pcb_pct / npl_fcb_pct / npl_specialised_pct (the call-money fan-out precedent — no schema change). NPL is inherently a ratio (bad loans / that segment's loans) published as a %, so the segment value IS a percent; there is no level to store. SOCB is normally the highest.",
+      "domain": "banking",
+      "cadence": "quarterly",
+      "fetch": {
+        "type": "pdf",
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/2/60",
+        "task": "Open the latest Financial Stability Report (FSR). Find the table giving the Gross NPL ratio (gross non-performing loans as a percent of total loans) broken down by bank ownership group: State-Owned Commercial Banks (SOCB / SCB), Private Commercial Banks (PCB), Foreign Commercial Banks (FCB), and Specialised Banks (SB / development banks). Read the MOST RECENT period column for each of the four groups. cluster=npl. Return the four percent values keyed by segment {socb,pcb,fcb,specialised}. VPS-confirm the page number, the exact ownership-group row labels, and which column is the latest quarter.",
+        "discover": "latest_pdf_link"
+      },
+      "parse": {
+        "deterministic": "pdf_fsr_ownership_cluster",
+        "llm_prompt": "pdf_fsr_npl_by_ownership.txt",
+        "value_type": "percent",
+        "valid_range": [
+          0.0,
+          100.0
+        ]
+      },
+      "anomaly_threshold": 0.25
+    },
+    {
+      "id": "deposits_by_ownership",
+      "name": "Bank deposits by ownership (SOCB / PCB / FCB / Specialised), BDT crore LEVELS (NOT shares). 4-row ownership cluster from the BB Financial Stability Report (FSR) body. Parser returns a dict {socb,pcb,fcb,specialised}; aggregate_latest._flatten_ownership_cluster fans it out into the 4 scalar metrics deposits_socb_cr / deposits_pcb_cr / deposits_fcb_cr / deposits_specialised_cr (the call-money fan-out precedent — no schema change). Stores LEVELS in BDT crore, not pre-computed shares: the YieldScope donut computes shares from the levels (null-safe) so they sum to 100% and stay consistent with deposits_of_the_system.",
+      "domain": "banking",
+      "cadence": "quarterly",
+      "fetch": {
+        "type": "pdf",
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/2/60",
+        "task": "Open the latest Financial Stability Report (FSR). Find the table giving total bank DEPOSITS (in BDT crore) broken down by bank ownership group: State-Owned Commercial Banks (SOCB / SCB), Private Commercial Banks (PCB), Foreign Commercial Banks (FCB), and Specialised Banks (SB / development banks). Read the MOST RECENT period column for each of the four groups and return the absolute deposit LEVEL in BDT crore (NOT a percentage share). cluster=deposits. Return the four crore values keyed by segment {socb,pcb,fcb,specialised}. VPS-confirm the page number, the exact ownership-group row labels, the latest-quarter column, and the published unit (convert to crore if the table is in BDT billion/million).",
+        "discover": "latest_pdf_link"
+      },
+      "parse": {
+        "deterministic": "pdf_fsr_ownership_cluster",
+        "llm_prompt": "pdf_fsr_deposits_by_ownership.txt",
+        "value_type": "amount_bdt_crore",
+        "valid_range": [
+          0.0,
+          30000000.0
+        ]
+      },
+      "anomaly_threshold": 0.1
     }
   ]
 }
