@@ -150,7 +150,6 @@ def upsert_history(series: dict[int, float]) -> int:
             as_of=as_of,
             source="IMF DataMapper",
             source_as_of_map={METRIC_ID: as_of},
-            url=IMF_URL,
         )
     return total
 

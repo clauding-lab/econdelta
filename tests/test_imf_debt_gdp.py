@@ -180,3 +180,13 @@ def test_fetch_forces_ipv4_during_call_and_restores(imf_payload):
         assert u3conn.HAS_IPV6 is True  # restored after — no bleed into the upsert
     finally:
         u3conn.HAS_IPV6 = original
+
+
+def test_upsert_does_not_override_supabase_url():
+    """Regression: upsert_history must NOT pass IMF_URL as upsert_metric_history's ``url=``
+    (the Supabase base-URL override) — that POSTed every yearly write to www.imf.org instead
+    of Supabase (slow → the service's 2-min systemd timeout, nothing persisted)."""
+    with patch("scrapers.imf_debt_gdp.upsert_metric_history", return_value=1) as mock_up:
+        upsert_history({2024: 41.0})
+    _args, kwargs = mock_up.call_args
+    assert kwargs.get("url") is None, "must not override SUPABASE_URL with IMF_URL"
