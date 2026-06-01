@@ -145,3 +145,14 @@ def test_fetch_forces_ipv4_during_call_and_restores():
         assert u3conn.HAS_IPV6 is True  # restored after — no bleed into the upsert
     finally:
         u3conn.HAS_IPV6 = original
+
+
+def test_upsert_does_not_override_supabase_url():
+    """Regression: upsert_eff must NOT pass the IMF source URL as upsert_metric_history's
+    ``url=`` — that kwarg is the Supabase base-URL OVERRIDE. The bug POSTed the write to
+    www.imf.org instead of Supabase (a 301 → 2xx that logged 'upserted 1 row' but never
+    persisted — metric_history stayed empty)."""
+    with patch("scrapers.imf_eff.upsert_metric_history", return_value=1) as mock_up:
+        upsert_eff(1373.26, date(2026, 4, 30))
+    _args, kwargs = mock_up.call_args
+    assert kwargs.get("url") is None, "must not override SUPABASE_URL with the IMF source URL"

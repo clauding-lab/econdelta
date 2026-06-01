@@ -283,7 +283,6 @@ def upsert_commodities(values: dict[str, float], as_of: date) -> int:
         as_of=as_of,
         source="World Bank Pink Sheet",
         source_as_of_map={metric_id: as_of for metric_id in values},
-        url=PINK_SHEET_URL,
     )
 
 

@@ -174,3 +174,15 @@ def test_end_to_end_fixture_to_upsert(workbook_bytes):
         "palm_oil_price_usd_mt",
         "wheat_price_usd_mt",
     }
+
+
+def test_upsert_does_not_override_supabase_url():
+    """Regression: upsert_commodities must NOT pass PINK_SHEET_URL as upsert_metric_history's
+    ``url=`` (the Supabase base-URL override) — that POSTed the write to thedocs.worldbank.org
+    (an Adobe Helix site) instead of Supabase, which returned a 404."""
+    with patch(
+        "scrapers.world_bank_pink_sheet.upsert_metric_history", return_value=3
+    ) as mock_up:
+        upsert_commodities({"lng_price_usd_mmbtu": 11.06}, date(2025, 12, 31))
+    _args, kwargs = mock_up.call_args
+    assert kwargs.get("url") is None, "must not override SUPABASE_URL with PINK_SHEET_URL"

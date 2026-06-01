@@ -170,7 +170,6 @@ def upsert_eff(value: float, as_of: date) -> int:
         as_of=as_of,
         source="IMF Financial Position in the Fund",
         source_as_of_map={METRIC_ID: as_of},
-        url=_build_url(),
     )
 
 
