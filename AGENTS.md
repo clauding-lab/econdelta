@@ -21,7 +21,8 @@ claude_max/           Claude Max OAuth client + validators + prompt files
 utils/                anomaly, calendar, http_client, notifier (Discord), opus_review, schema, supabase_writer
 config/               sources-v3.json (indicator registry), holidays_2026.json, thresholds.json
 data/                 per-indicator <date>.json + _html/ + _pdfs/ + latest.json + archive/
-db/                   schema.sql + migrations/ (Supabase)
+db/                   schema.sql (canonical reference snapshot) + README
+supabase/             config.toml + migrations/ (applied via `supabase db query -f`; see db/README)
 deploy/               systemd .service + .timer units + install.sh + logrotate.conf
 laptop/               Mac launchd .plist files + run-and-sync.sh
 pwa/                  Next.js dashboard (deploys to GitHub Pages)
@@ -126,7 +127,7 @@ Do not, without explicit user sign-off:
 - Add dependencies in `requirements.txt`, `pyproject.toml`, or `pwa/package.json`.
 - Edit `deploy/*.service` or `deploy/*.timer` (changes need VPS sudo + daemon-reload + careful reschedule timing — see landmine 5).
 - Edit `.github/workflows/pwa-deploy.yml`.
-- Edit `db/schema.sql` or anything under `db/migrations/` (changes hit the live Supabase project).
+- Edit `db/schema.sql` or anything under `supabase/migrations/` (changes hit the live, shared Supabase project). Migrations are applied with `supabase db query --linked -f supabase/migrations/<file>.sql` from a linked Mac checkout — **NOT `supabase db push`**, which fails because the DB is shared with The Brief (whose migrations aren't in this repo). Keep every migration idempotent. Never re-introduce `db/migrations/`.
 - Bulk-remove indicators from `config/sources-v3.json` (single retirements with rationale are fine).
 - Disable `ECONDELTA_SKIP_OPUS_REVIEW` gating in `aggregate_latest.py`.
 - Run `git push --force` against any branch.

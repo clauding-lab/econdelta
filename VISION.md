@@ -26,7 +26,7 @@ The rules below scope what AI agents and contributors can ship without explicit 
 - **Architectural changes** — new top-level dirs, new orchestrator scripts beside `fetch_all.py` / `parse_all.py` / `aggregate_latest.py`, new long-running processes.
 - **Release pipeline edits** — `.github/workflows/pwa-deploy.yml`, anything in `deploy/` (systemd units, install scripts, logrotate).
 - **`/etc/econdelta.env` content** — adding new env vars or rotating existing ones requires sign-off because the file lives on the VPS with root ownership.
-- **`db/schema.sql` or `db/migrations/`** — these hit the live Supabase project.
+- **`db/schema.sql` or `supabase/migrations/`** — these hit the live, shared Supabase project; migrations are applied via `supabase db query --linked -f` (not `db push` — the DB is shared with The Brief).
 - **Privacy / network surface changes** — telemetry, new outbound destinations, log content that could include sensitive data.
 - **Load-bearing semantics** — indicator IDs already in production, Supabase column names, the `nbr_fytd_collected_cr` canonical source, the daily cadence assumption.
 - **Bulk indicator retirements** (>1 indicator) from `config/sources-v3.json` — even with rationale.
