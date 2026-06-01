@@ -6,7 +6,6 @@ import json
 import sys
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -15,8 +14,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-import aggregate_latest as agg
-from utils.schema import (
+import aggregate_latest as agg  # noqa: E402
+from utils.schema import (  # noqa: E402
     CommodityPrice,
     CommoditySnapshot,
     DseIndices,
@@ -28,7 +27,6 @@ from utils.schema import (
     LatestBundle,
     SourceStatus,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers / factories
@@ -380,7 +378,6 @@ def test_main_exit_1_on_validation_failure(
     original_bundle_cls = agg.LatestBundle
 
     def _bad_bundle(**kwargs):
-        from pydantic import ValidationError as VE
 
         # Force a ValidationError by using a private Pydantic trick:
         # pass an invalid schema_version type

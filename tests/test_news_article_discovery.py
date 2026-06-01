@@ -3,7 +3,6 @@ import pytest
 
 from fetchers.news_article_discovery import discover_latest_article_link
 
-
 _TBS_FIXTURE = """
 <html><body>
 <div class="listing">

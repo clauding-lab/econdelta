@@ -305,7 +305,6 @@ def _parse_reserves_date(month_name: str, fiscal_year: str | None) -> date:
     We determine the calendar year from which half of the fiscal year the month falls in.
     If fiscal_year is unknown we use the current year.
     """
-    import calendar as cal
 
     month_map = {
         m.lower(): i for i, m in enumerate(

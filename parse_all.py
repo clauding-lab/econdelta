@@ -11,23 +11,23 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fetchers.base import FetchResult
-from parsers.hybrid import parse_one
+import parsers.dam_ticker  # noqa: F401
+import parsers.dse_sector_heat  # noqa: F401
+import parsers.html_auction_press_row  # noqa: F401
+import parsers.html_call_money  # noqa: F401
 
 # Auto-import all parser modules so they register
 import parsers.html_footer_ticker  # noqa: F401
 import parsers.html_table_row  # noqa: F401
-import parsers.html_call_money  # noqa: F401
-import parsers.dam_ticker  # noqa: F401
-import parsers.dse_sector_heat  # noqa: F401
 import parsers.pdf_component  # noqa: F401
+import parsers.pdf_fsr_ownership_cluster  # noqa: F401
+import parsers.pdf_mfr_row  # noqa: F401
 import parsers.pdf_table_column_latest  # noqa: F401
 import parsers.pdf_table_latest  # noqa: F401
 import parsers.pdf_table_row  # noqa: F401
 import parsers.pdf_table_total  # noqa: F401
-import parsers.pdf_mfr_row  # noqa: F401
-import parsers.html_auction_press_row  # noqa: F401
-import parsers.pdf_fsr_ownership_cluster  # noqa: F401
+from fetchers.base import FetchResult
+from parsers.hybrid import parse_one
 
 REPO_ROOT = Path(__file__).resolve().parent
 DEFAULT_CONFIG = REPO_ROOT / "config" / "sources-v3.json"
@@ -229,5 +229,6 @@ def main() -> int:
 
 if __name__ == "__main__":
     import sys
+
     from utils.supabase_writer import wrap_run
     sys.exit(wrap_run("parse", "econdelta-parse.service", main))

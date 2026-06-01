@@ -1,4 +1,5 @@
 import pytest
+
 from claude_max.validators import (
     InvalidValueError,
     validate_value,

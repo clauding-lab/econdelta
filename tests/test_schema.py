@@ -6,8 +6,6 @@ import pytest
 from pydantic import ValidationError
 
 from utils.schema import (
-    ForexRates,
-    ForexReserves,
     ForexSnapshot,
     LatestBundle,
     SourceStatus,

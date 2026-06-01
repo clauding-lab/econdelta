@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from datetime import date, datetime, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -11,15 +10,11 @@ import pandas as pd
 import pytest
 
 from scrapers.commodity_prices import (
-    COMMODITY_SPEC,
     FetchError,
     fetch_commodity,
-    load_previous_snapshot,
     main,
-    write_snapshot,
 )
 from utils.schema import CommodityPrice, CommoditySnapshot
-
 
 # ---------------------------------------------------------------------------
 # Helpers

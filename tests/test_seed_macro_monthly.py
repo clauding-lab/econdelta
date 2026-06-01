@@ -2,21 +2,24 @@
 from __future__ import annotations
 
 from datetime import date
+from unittest.mock import MagicMock
 
 import pytest
+import requests as _requests
 
 from scripts.seed_macro_monthly import (
     DEFAULT_SOURCE,
     DOMAIN_VALUES,
     KEY_MAP,
-    MetricMap,
     SOURCE_ATTRIBUTION,
     SOURCE_URL,
+    MetricMap,
+    SeedScriptError,
+    _upsert,
     build_definitions_rows,
     build_history_rows,
     normalise_as_of,
 )
-
 
 # ---------- KEY_MAP shape ----------
 
@@ -248,12 +251,6 @@ class TestAgainstRealFixture:
 
 
 # ---------- upsert helper ----------
-
-from unittest.mock import MagicMock
-
-import requests as _requests
-
-from scripts.seed_macro_monthly import _upsert, SeedScriptError
 
 
 def _ok_session() -> MagicMock:
