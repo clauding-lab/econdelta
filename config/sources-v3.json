@@ -1735,7 +1735,7 @@
       "cadence": "quarterly",
       "fetch": {
         "type": "pdf",
-        "url": "https://mof.gov.bd/site/page/debt-bulletin",
+        "url": "https://mof.gov.bd/site/page/9466b739-2f5c-4914-ba82-b204af6a594e/Debt-Bulletin",
         "task": "Latest MoF Debt Bulletin: the summary debt table, the 'Total Public Debt as % of GDP' row. page=1 table=1 row=as % of GDP col=2 (VPS-confirm the page/table/row/col indices against the latest bulletin layout).",
         "discover": "latest_pdf_link"
       },
@@ -1757,7 +1757,7 @@
       "cadence": "quarterly",
       "fetch": {
         "type": "pdf",
-        "url": "https://mof.gov.bd/site/page/debt-bulletin",
+        "url": "https://mof.gov.bd/site/page/9466b739-2f5c-4914-ba82-b204af6a594e/Debt-Bulletin",
         "task": "Latest MoF Debt Bulletin: the summary debt-stock table, the 'Domestic Debt' (outstanding stock) row, Tk-crore column. page=1 table=1 row=Domestic Debt col=2 (VPS-confirm the page/table/row/col indices against the latest bulletin layout; shares the same PDF as debt_gdp_ratio and debt_external_stock_cr — one fetch).",
         "discover": "latest_pdf_link"
       },
@@ -1779,7 +1779,7 @@
       "cadence": "quarterly",
       "fetch": {
         "type": "pdf",
-        "url": "https://mof.gov.bd/site/page/debt-bulletin",
+        "url": "https://mof.gov.bd/site/page/9466b739-2f5c-4914-ba82-b204af6a594e/Debt-Bulletin",
         "task": "Latest MoF Debt Bulletin: the summary debt-stock table, the 'External Debt' (outstanding stock) row, Tk-crore column. page=1 table=1 row=External Debt col=2 (VPS-confirm the page/table/row/col indices against the latest bulletin layout; shares the same PDF as debt_gdp_ratio and debt_domestic_stock_cr — one fetch).",
         "discover": "latest_pdf_link"
       },
@@ -1816,7 +1816,7 @@
       },
       "anomaly_threshold": 0.25,
       "alternate": {
-        "url": "https://mof.gov.bd/site/page/debt-bulletin",
+        "url": "https://mof.gov.bd/site/page/9466b739-2f5c-4914-ba82-b204af6a594e/Debt-Bulletin",
         "type": "pdf",
         "task": "Latest MoF Debt Bulletin: the short-term/overdraft financing table, the 'Ways and Means Advances' (WMA) outstanding row, Tk-crore level. Usage level only — no limit. Match by row label (not an absolute page index). row=\"Ways and Means\" min=1000"
       }
