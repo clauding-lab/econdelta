@@ -154,3 +154,29 @@ def test_fetch_raises_on_non_json():
     mock_sess.get.return_value = mock_resp
     with pytest.raises(FetchError, match="not JSON"):
         fetch_imf_payload(session=mock_sess)
+
+
+def test_fetch_forces_ipv4_during_call_and_restores(imf_payload):
+    """IMF DataMapper's IPv6 is blackholed from the ExonVPS box — the fetch must
+    resolve IPv4-only, then restore the process-global so the later upsert (same
+    one-shot process) is unaffected."""
+    import urllib3.util.connection as u3conn
+
+    seen: dict[str, object] = {}
+
+    def capture_get(*_a, **_k):
+        seen["during"] = u3conn.HAS_IPV6
+        resp = MagicMock(status_code=200)
+        resp.json.return_value = imf_payload
+        return resp
+
+    sess = MagicMock()
+    sess.get.side_effect = capture_get
+    original = u3conn.HAS_IPV6
+    u3conn.HAS_IPV6 = True
+    try:
+        fetch_imf_payload(session=sess)
+        assert seen["during"] is False  # IPv4 forced during the IMF fetch
+        assert u3conn.HAS_IPV6 is True  # restored after — no bleed into the upsert
+    finally:
+        u3conn.HAS_IPV6 = original

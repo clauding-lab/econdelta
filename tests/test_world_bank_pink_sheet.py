@@ -114,11 +114,13 @@ def test_fetch_raises_on_non_200():
 
 
 def test_fetch_forces_ipv4_before_the_get(monkeypatch):
-    """R5: the ExonVPS IPv6 egress is blackholed and CloudFront resolves AAAA first,
-    so the fetch must pin urllib3 to IPv4 (HAS_IPV6=False) BEFORE the GET — otherwise
-    the connect stalls on the dead IPv6 address. Asserting the flag at sess.get call
-    time (not just afterwards) proves the ordering, not merely that the pin happened.
-    monkeypatch restores the global after the test."""
+    """R5: thedocs.worldbank.org's IPv6 is blackholed from the ExonVPS box and it
+    resolves AAAA first, so the fetch must pin urllib3 to IPv4 (HAS_IPV6=False)
+    BEFORE the GET — otherwise the connect stalls on the dead IPv6 address.
+    Asserting the flag at sess.get call time (not just afterwards) proves the
+    ordering. After the fetch the global must be RESTORED (bleed fix): the
+    force_ipv4_only guard confines the override so it can't leak into the Supabase
+    upsert later in this one-shot process. monkeypatch restores after the test."""
     import urllib3.util.connection as conn
 
     monkeypatch.setattr(conn, "HAS_IPV6", True)  # pretend a dual-stack start state
@@ -130,7 +132,7 @@ def test_fetch_forces_ipv4_before_the_get(monkeypatch):
     sess = MagicMock()
     sess.get.side_effect = _assert_ipv4_then_respond
     assert fetch_pink_sheet_bytes(session=sess) == b"PK\x03\x04stub"
-    assert conn.HAS_IPV6 is False
+    assert conn.HAS_IPV6 is True  # restored to the prior value — no bleed
 
 
 # --------------------------------------------------------------------------- #
