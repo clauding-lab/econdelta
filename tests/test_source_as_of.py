@@ -21,14 +21,13 @@ import pytest
 import requests
 from reportlab.pdfgen import canvas
 
-import parsers.pdf_component  # noqa: F401 — registers pdf_component parser
 import parsers.dam_ticker  # noqa: F401 — registers dam_ticker parser
 import parsers.html_footer_ticker  # noqa: F401 — registers html_footer_ticker parser
+import parsers.pdf_component  # noqa: F401 — registers pdf_component parser
 from fetchers.base import FetchResult
 from parsers.base import ParseResult
 from parsers.registry import get_parser
 from utils.supabase_writer import _rows_from_data, upsert_metric_history
-
 
 # ---------------------------------------------------------------------------
 # Layer 1: ParseResult.source_as_of field
@@ -257,14 +256,12 @@ def _make_session(status: int = 201) -> MagicMock:
 class TestSupabaseWriterSourceAsOf:
     def test_rows_from_data_uses_global_as_of_when_no_per_metric_override(self):
         """When source_as_of_map is absent/empty, all rows use the global as_of."""
-        from utils.supabase_writer import _rows_from_data
         rows = _rows_from_data({"npl": 35.73, "car": 11.56}, date(2026, 5, 4), "EconDelta")
         for row in rows:
             assert row["as_of"] == "2026-05-04"
 
     def test_rows_from_data_uses_per_metric_source_as_of_when_provided(self):
         """When source_as_of_map has an entry, that date wins for that metric."""
-        from utils.supabase_writer import _rows_from_data
         source_as_of_map = {"npl": date(2025, 9, 30)}
         rows = _rows_from_data(
             {"npl": 35.73, "car": 11.56},
@@ -376,7 +373,6 @@ class TestAggregateSourceAsOfThreading:
 
     def test_build_source_as_of_map_from_domains(self, tmp_path: Path, monkeypatch):
         """_build_source_as_of_map extracts date from snapshot source_as_of strings."""
-        import json
         from datetime import datetime, timezone
 
         import aggregate_latest as agg

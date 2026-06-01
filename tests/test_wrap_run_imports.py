@@ -1,5 +1,4 @@
 """Smoke test: every scraper module imports its wrap_run pattern correctly."""
-import importlib
 
 
 def test_all_scrapers_can_import_wrap_run():

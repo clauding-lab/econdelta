@@ -1,4 +1,5 @@
 import pytest
+
 from fetchers.pdf_discovery import discover_latest_pdf_link
 
 _FIXTURE_HTML = """

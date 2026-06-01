@@ -23,7 +23,6 @@ import json
 from pathlib import Path
 from typing import Any
 
-
 # ---------------------------------------------------------------------------
 # Hand-curated augmentation per indicator id
 # ---------------------------------------------------------------------------

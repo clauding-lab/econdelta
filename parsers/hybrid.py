@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 import os
 import re
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -211,7 +211,6 @@ def _build_snapshot(
     previous_value: float | None = None, change_pct: float | None = None,
     source_as_of: "date | None" = None,
 ) -> dict:
-    from datetime import date as _date
     snapshot: dict = {
         "indicator_id": indicator["id"],
         "name": indicator["name"],

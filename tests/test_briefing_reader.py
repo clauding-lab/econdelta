@@ -1,9 +1,14 @@
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock
-import requests
+
 import pytest
+import requests
+
 from utils.supabase_reader import (
-    SupabaseReadError, get_metric_history, get_recent_run_ok, get_recent_briefings,
+    SupabaseReadError,
+    get_metric_history,
+    get_recent_briefings,
+    get_recent_run_ok,
 )
 
 

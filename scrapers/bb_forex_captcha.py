@@ -28,7 +28,6 @@ import tempfile
 import time
 from pathlib import Path
 
-
 logger = logging.getLogger("bb_forex")
 
 

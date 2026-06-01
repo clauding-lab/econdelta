@@ -1,13 +1,16 @@
-from datetime import date
 from unittest.mock import MagicMock
-import requests
+
 import pytest
+import requests
+
 from utils.supabase_writer import SupabaseWriteError, upsert_briefing
 
 
 def _session(status=201):
     sess = MagicMock(spec=requests.Session)
-    resp = MagicMock(); resp.status_code = status; resp.text = ""
+    resp = MagicMock()
+    resp.status_code = status
+    resp.text = ""
     sess.post.return_value = resp
     return sess
 

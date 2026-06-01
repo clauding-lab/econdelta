@@ -27,7 +27,9 @@ import logging
 import os
 import uuid as _uuid
 from datetime import date, datetime, timezone
-from typing import Callable as _Callable, Mapping, Optional as _Optional
+from typing import Callable as _Callable
+from typing import Mapping
+from typing import Optional as _Optional
 
 import requests
 

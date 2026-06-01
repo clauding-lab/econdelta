@@ -1,5 +1,4 @@
 from datetime import datetime, timezone
-from pathlib import Path
 from unittest.mock import patch
 
 import parsers.html_footer_ticker  # noqa: F401 — registers

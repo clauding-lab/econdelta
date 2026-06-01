@@ -16,7 +16,6 @@ from utils.anomaly import check_threshold, load_thresholds
 from utils.calendar import is_bd_trading_day, load_holidays, previous_trading_day
 from utils.http_client import DEFAULT_CLIENT, HttpClient
 from utils.notifier import notify
-from utils.parser import parse_number
 from utils.schema import DseIndices, DseMarket, DseSnapshot
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -86,7 +85,8 @@ def parse_homepage_indices(html: str) -> DseIndices:
     label2, val2, chg2, pct2 = extract_row(midrows[2])
 
     # Match by canonical slug (case-insensitive, whitespace-collapsed)
-    _slugify = lambda s: re.sub(r"\s+", "", s.lower())
+    def _slugify(s):
+        return re.sub(r"\s+", "", s.lower())
 
     dsex_val = dsex_chg = dsex_pct = None
     dses_val = None

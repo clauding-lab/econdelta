@@ -1,9 +1,7 @@
 """Tests for run_logs helpers in utils/supabase_writer.py."""
 from __future__ import annotations
 
-import os
 from datetime import datetime, timezone
-from unittest.mock import patch, MagicMock
 
 import pytest
 
@@ -79,7 +77,7 @@ class TestWrapRun:
         assert rc == 1
 
     def test_maps_exit_code_2_to_stale_status(self):
-        from utils.supabase_writer import wrap_run, _STATUS_BY_EXIT
+        from utils.supabase_writer import _STATUS_BY_EXIT
         assert _STATUS_BY_EXIT[0] == "ok"
         assert _STATUS_BY_EXIT[1] == "fail"
         assert _STATUS_BY_EXIT[2] == "stale"
