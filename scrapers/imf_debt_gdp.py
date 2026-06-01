@@ -32,6 +32,7 @@ from datetime import date
 
 import requests
 
+from utils.ipv4 import force_ipv4_only
 from utils.notifier import notify
 from utils.supabase_writer import upsert_metric_history
 
@@ -54,7 +55,10 @@ METRIC_ID = "debt_gdp_ratio"
 # Reject obviously-wrong values defensively (mirrors the config valid_range).
 VALID_RANGE = (10.0, 100.0)
 
-_TIMEOUT = 30
+# (connect, read) seconds — fast-fail on a stalled connect rather than one 30s
+# budget per dead address; defense-in-depth alongside the IPv4 force below
+# (www.imf.org's IPv6 is blackholed from the ExonVPS box).
+_TIMEOUT: tuple[int, int] = (10, 30)
 
 # IMPORTANT: the IMF DataMapper API sits behind Akamai EdgeSuite, which BLOCKS
 # spoofed browser User-Agents (a fake "Mozilla/5.0 ... Chrome" UA returns HTTP
@@ -75,7 +79,10 @@ def fetch_imf_payload(
     """GET the IMF DataMapper JSON. Raises FetchError on network/HTTP failure."""
     sess = session or requests.Session()
     try:
-        resp = sess.get(url, timeout=_TIMEOUT)
+        # www.imf.org's IPv6 is blackholed from the ExonVPS box; resolve IPv4-only
+        # for this fetch (the global is restored so the upsert is unaffected).
+        with force_ipv4_only():
+            resp = sess.get(url, timeout=_TIMEOUT)
     except requests.exceptions.RequestException as e:
         raise FetchError(f"network error fetching IMF DataMapper: {e}") from e
     if resp.status_code != 200:

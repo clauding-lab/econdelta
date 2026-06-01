@@ -121,3 +121,27 @@ def test_upsert_writes_one_row_under_metric_id():
     assert kwargs["data"] == {METRIC_ID: 1373.26}
     assert kwargs["as_of"] == date(2026, 4, 30)
     assert kwargs["source_as_of_map"] == {METRIC_ID: date(2026, 4, 30)}
+
+
+def test_fetch_forces_ipv4_during_call_and_restores():
+    """IMF's IPv6 is blackholed from the ExonVPS box, so the fetch must resolve
+    IPv4-only — then restore the process-global so the later Supabase upsert (in
+    the same one-shot process) is unaffected."""
+    import urllib3.util.connection as u3conn
+
+    seen: dict[str, object] = {}
+
+    def capture_get(*_a, **_k):
+        seen["during"] = u3conn.HAS_IPV6
+        return MagicMock(status_code=200, text="<html>ok</html>")
+
+    sess = MagicMock()
+    sess.get.side_effect = capture_get
+    original = u3conn.HAS_IPV6
+    u3conn.HAS_IPV6 = True
+    try:
+        fetch_imf_position_html(session=sess)
+        assert seen["during"] is False  # IPv4 forced during the IMF fetch
+        assert u3conn.HAS_IPV6 is True  # restored after — no bleed into the upsert
+    finally:
+        u3conn.HAS_IPV6 = original

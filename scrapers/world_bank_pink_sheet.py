@@ -44,8 +44,8 @@ from io import BytesIO
 from xml.etree import ElementTree as ET
 
 import requests
-import urllib3.util.connection
 
+from utils.ipv4 import force_ipv4_only
 from utils.notifier import notify
 from utils.supabase_writer import upsert_metric_history
 
@@ -101,18 +101,15 @@ def fetch_pink_sheet_bytes(
     *, url: str = PINK_SHEET_URL, session: requests.Session | None = None
 ) -> bytes:
     """GET the Pink Sheet .xlsx workbook. Raises FetchError on network/HTTP failure."""
-    # Force IPv4. The ExonVPS Dhaka host's IPv6 egress is blackholed, and
-    # thedocs.worldbank.org (CloudFront) resolves AAAA first — so a default
-    # dual-stack connect stalls on the dead IPv6 address until timeout and fetches
-    # nothing. Pinning urllib3's module-global HAS_IPV6 makes requests resolve
-    # AF_INET only. Scope note: this is a PROCESS-GLOBAL toggle, but this scraper
-    # runs as its own one-shot process (wrap_run below), so it cannot bleed into
-    # sibling scrapers. If a second outbound call is ever added here, that is fine —
-    # all of this module's egress should be IPv4 on the blackholed host.
-    urllib3.util.connection.HAS_IPV6 = False
+    # thedocs.worldbank.org's IPv6 is blackholed from the ExonVPS box, and it
+    # resolves AAAA first — a default dual-stack connect stalls on the dead IPv6
+    # address until timeout and fetches nothing. force_ipv4_only scopes the
+    # IPv4-only override to THIS request and restores the global afterwards, so it
+    # cannot bleed into the Supabase upsert later in this one-shot process.
     sess = session or requests.Session()
     try:
-        resp = sess.get(url, timeout=_TIMEOUT)
+        with force_ipv4_only():
+            resp = sess.get(url, timeout=_TIMEOUT)
     except requests.exceptions.RequestException as e:
         raise FetchError(f"network error fetching Pink Sheet: {e}") from e
     if resp.status_code != 200:

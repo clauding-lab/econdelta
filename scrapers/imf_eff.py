@@ -41,6 +41,7 @@ from datetime import date, datetime
 
 import requests
 
+from utils.ipv4 import force_ipv4_only
 from utils.notifier import notify
 from utils.supabase_writer import upsert_metric_history
 
@@ -69,7 +70,10 @@ METRIC_ID = "imf_eff_outstanding_sdr_mn"
 # or a totally different number.
 VALID_RANGE = (100.0, 5000.0)
 
-_TIMEOUT = 30
+# (connect, read) seconds. Kept as a tuple so a stalled connect fails fast rather
+# than burning a single 30s budget per dead address — defense-in-depth alongside
+# the IPv4 force below (www.imf.org's IPv6 is blackholed from the ExonVPS box).
+_TIMEOUT: tuple[int, int] = (10, 30)
 
 # Like imf_debt_gdp: the IMF host sits behind Akamai. Send NO custom browser
 # User-Agent (a spoofed Chrome UA gets a 403) — the default python-requests UA
@@ -92,7 +96,11 @@ def fetch_imf_position_html(
     sess = session or requests.Session()
     target = url or _build_url()
     try:
-        resp = sess.get(target, timeout=_TIMEOUT)
+        # www.imf.org's IPv6 is blackholed from the ExonVPS box (a dual-stack
+        # connect hangs on the dead AAAA until timeout). Resolve IPv4-only for
+        # this fetch; force_ipv4_only restores the global so the upsert is unaffected.
+        with force_ipv4_only():
+            resp = sess.get(target, timeout=_TIMEOUT)
     except requests.exceptions.RequestException as e:
         raise FetchError(f"network error fetching IMF position: {e}") from e
     if resp.status_code != 200:
