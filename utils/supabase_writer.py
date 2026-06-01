@@ -206,7 +206,7 @@ def upsert_metric_history(
 # ----------------------------------------------------------------------------
 # metric_history is scalar-numeric-only and ``_rows_from_data`` keeps only
 # int/float — it CANNOT store a per-print auction row (multi-field) or a
-# forward-calendar row. These tables (db/migrations/0009_auction_results.sql)
+# forward-calendar row. These tables (supabase/migrations/0009_auction_results.sql)
 # hold the row-shaped data; this path POSTs whole rows, not flattened scalars.
 # Generic enough to serve both tables via the two thin wrappers below.
 # ============================================================================

@@ -1,0 +1,8 @@
+# Supabase CLI local state — do not commit
+.branches
+.temp
+
+# Local env / secrets
+.env
+.env.*
+!.env.example
