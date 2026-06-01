@@ -37,6 +37,28 @@ When something ships broken, when a methodology gap is exposed, or when a smoke 
 
 ## Entries (most recent first)
 
+## 2026-06-01 — Tier-2 scrapers logged "upserted N rows" but wrote to the SOURCE host, not Supabase
+
+**Trigger:** Completing the PR #48 "deploy & land" runbook. After deploying, the three standalone Tier-2 scrapers ran with `result=success`/`exit=0` (imf_eff), an Adobe-Helix `404` (pink-sheet), or a 2-min systemd timeout (imf_debt) — yet `metric_history` stayed **empty** for all of their metric_ids. imf_eff even logged "upserted 1 imf_eff_outstanding_sdr_mn row" while the table had **0 rows**.
+
+**What went wrong:** Two layered bugs, fixed in sequence:
+
+1. **IMF fetch hung on a blackholed IPv6 (PR #54).** `www.imf.org` + `thedocs.worldbank.org` have their IPv6 (AAAA) addresses **blackholed from the ExonVPS box** (`curl -6` times out at 25s; `-4` ~1.5s). `imf_eff`/`imf_debt_gdp` fetched over dual-stack, stalled on the dead AAAA, and were killed before any write (`run_logs` showed `status=running`, never finished). `world_bank_pink_sheet` already forced IPv4 but never restored urllib3's process-global `HAS_IPV6` (a bleed). Fixed with a shared `utils/ipv4.force_ipv4_only()` guard (save → set False → restore in `finally`) around each fetch.
+
+2. **The upsert was misrouted to the source website (PR #55) — the real reason nothing landed.** `imf_eff`, `imf_debt_gdp`, and `world_bank_pink_sheet` passed the source-page URL as `upsert_metric_history(url=...)`. But that kwarg is the **Supabase base-URL OVERRIDE** (`_resolve_credentials: url or os.environ["SUPABASE_URL"]`), so every metric write was POSTed to the source host: pink-sheet → `thedocs.worldbank.org/…/rest/v1/metric_history` → **404 (Adobe Helix)**; imf_eff → `www.imf.org/…/rest/v1/metric_history` → **301 → 2xx page → false "upserted" with no persistence**; imf_debt → 23 POSTs/run to imf.org → slow → timeout. `run_logs` writes used the env URL (no override), so they landed — which is exactly why `run_logs` rows persisted but `metric_history` did not, in the same run. `aggregate_latest` never passes `url=`, so the main pipeline was always fine.
+
+**Lesson:**
+- **A 2xx response / a "wrote N rows" log is NOT proof of persistence.** Verify the row actually landed (re-query the table), not that the POST "succeeded" — a redirect to the wrong host returns 2xx and silently drops the data.
+- **A kwarg that overrides a base URL or credential is a footgun when it looks like a provenance field.** `upsert_metric_history(url=...)` reads as "the source URL of this data" but means "the Supabase endpoint to write to." Don't pass source/provenance URLs there.
+
+**Methodology lesson (this nearly went wrong):** the Adobe-Helix 404 + intermittent-looking failures looked exactly like an **ISP-level DNS/SNI hijack of `*.supabase.co`** from the Dhaka box, and I was one step from escalating that to Adnan as the root cause. An 80× direct probe to the *correct* Supabase endpoint came back 100% clean — that mismatch (a "network hijack" should hit the direct probe too) is what forced a re-read of the code and surfaced the deterministic `url=` bug. **When an inference doesn't fit a cheap direct test, re-derive from first principles before blaming infra.**
+
+**Prevention:** Per-scraper regression test that the upsert wrapper passes **no `url` override** (`tests/test_{imf_eff,imf_debt_gdp,world_bank_pink_sheet}.py::test_upsert_does_not_override_supabase_url`) + `tests/test_ipv4.py`. Consider a post-run smoke that re-queries `metric_history` count for a scraper's ids after a live run (a "wrote N" log alone is insufficient). The existing upsert unit tests mocked `upsert_metric_history` entirely, so the misrouting (which lives *inside* it) was never exercised — mock one level deeper or assert the destination.
+
+**Hotfix:** PR #54 (IPv4 fetch guard) + PR #55 (remove the `url=` override). Verified on the box: all 5 metrics now land (`debt_gdp_ratio`=29 rows, `imf_eff_outstanding_sdr_mn`, `lng/wheat/palm`). 3 timers re-enabled (`auction` stays disabled — separate `/rrpt/` restructure).
+
+**Cross-references:** `utils/ipv4.py`; auto-memory `project_econdelta_tier2_writepath_fix`; global `AGENT_LEARNINGS.md` 2026-06-01 (2xx≠persisted). Residuals (R1 mof.gov.bd config metrics, R2 auction) tracked separately.
+
 ## 2026-06-01 — Adopting Supabase CLI migrations exposed a co-mingled shared DB + a `db push` dead-end
 
 **Trigger:** Setting up CLI-managed migrations (move `db/migrations/` → `supabase/migrations/`, apply the long-stuck `0009` auction tables). After linking the CLI to the shared project `ssbliukchgibjcjohibi` and running `supabase migration list --linked`, the remote history was NOT the assumed clean EconDelta history — it held ~28 timestamped migrations, and `db push` flatly refused to run.
