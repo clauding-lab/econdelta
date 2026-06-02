@@ -13,7 +13,6 @@ from pathlib import Path
 
 import parsers.dam_ticker  # noqa: F401
 import parsers.dse_sector_heat  # noqa: F401
-import parsers.html_auction_press_row  # noqa: F401
 import parsers.html_call_money  # noqa: F401
 
 # Auto-import all parser modules so they register
