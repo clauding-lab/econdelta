@@ -24,30 +24,28 @@ Why a ``scrapers/`` one-shot (mirroring ``scrapers/imf_eff.py``) and NOT a
     directly, like ``scrapers/imf_eff.parse_eff_outstanding``. There is no
     ``@register`` decorator to silently no-op.
 
-TWO sources, ONE scraper:
+TWO sources, ONE scraper (both repointed after BB's 2026-06 restructure — the old
+per-business-day ``/rrpt/`` press release became a PDF behind an F5 + image-CAPTCHA
+wall the renderer cannot clear; see AGENT_LEARNINGS / AGENTS landmine 24):
 
-  RESULTS (``auction_results``) — per-print results for auctions that HAVE
-    happened. BB publishes one auction-result press release per business day
-    under ``mediaroom/press_release_details/rrpt/<id>``; the SAME ``rrpt``
-    discovery as S7 (``fetchers.rrpt_discovery``) finds the latest one. The
-    release carries, per tenor, the accepted SIZE, total BID, the BID-COVER
-    ratio, the weighted-average MATURITY (WAM, bonds), and the CUTOFF /
-    weighted-average yield. CUTOFF is already captured as scalars
-    (``bill_bond_rates`` / ``tbill_*_yield`` / ``tbond_*_yield``); the NEW
-    fields are size/bid/cover/wam, stored per-tenor as rows.
+  RESULTS (``auction_results``) — per-tenor results for auctions that HAVE happened,
+    read from the ``monetaryactivity/treasury`` HTML auction-results table (the same
+    solver-served page that lands the scalar cut-off yields ``bill_bond_rates`` /
+    ``tbill_*_yield``). Per tenor: accepted SIZE, total BID, derived BID-COVER, the
+    weighted-average MATURITY (WAM, bonds, from the re-issuance note), and the CUTOFF
+    yield. ``parse_treasury_results``.
 
-  CALENDAR (``auction_calendar``) — the forward weekly ISSUANCE strip. EconDelta
-    already hits ``monetaryactivity/auc_calendar`` as the scalar ``gsec_auction``
-    (the topmost notional only); that scalar indicator stays UNTOUCHED for its
-    existing consumer. This scraper re-fetches the same calendar page and emits
-    ALL future weekly per-tenor rows (a 12-week forward strip), each
-    ``{auction_date, tenor, notional}``.
+  CALENDAR (``auction_calendar``) — the forward ISSUANCE strip, read from the
+    ``monetaryactivity/auc_calendar/1`` ("Yearly calendar") div-grid (bills + bonds).
+    Emits ALL future per-tenor ``{auction_date, tenor, notional}`` rows within the
+    horizon. ``parse_yearly_calendar``. (The scalar ``gsec_auction`` still points at
+    the bare ``auc_calendar`` separately.)
 
 BD EGRESS (CAPTCHA wall confirmed): BB firewalls non-BD IPs, so the live fetch +
 parse of BOTH sources is VPS-deferred (ExonVPS Dhaka, where the cron runs). The
 parse helpers are PURE (operate on captured HTML text) so they unit-test fully
-offline against a synthetic fixture; the live fetch is what the VPS run confirms
-(page shape, row labels, column order, date format).
+offline against REAL box-capture fixtures; the live fetch is what the VPS run
+confirms (page shape, row labels, column order, date format).
 
 INTERMITTENT: not every business day holds every tenor (T-bills weekly, BGTB
 less often; BB has thinned routine issuance). A tenor that is absent from a
