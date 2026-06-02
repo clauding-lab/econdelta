@@ -257,6 +257,15 @@ def _validate_auction_rows(
         if isinstance(ad, date):
             normalised["auction_date"] = ad.isoformat()
         out.append(normalised)
+
+    # PostgREST bulk-upsert (PGRST102 "All object keys must match") requires every
+    # object in the batch to carry the SAME keys. Result rows are heterogeneous —
+    # bond rows have `wam`, bills don't — so reconcile to the union of keys present,
+    # filling a missing column with None (a genuine SQL NULL, not a fabricated value).
+    all_keys: set[str] = set().union(*(r.keys() for r in out)) if out else set()
+    for r in out:
+        for k in all_keys:
+            r.setdefault(k, None)
     return out
 
 
