@@ -24,7 +24,6 @@ from scrapers.bb_auction import (
     _coerce_result_rows,
     _llm_rows,
     _tenor_label,
-    parse_auction_calendar,
     scrape_calendar,
     scrape_results,
 )
@@ -39,8 +38,9 @@ def treasury_html() -> str:
 
 
 @pytest.fixture
-def calendar_html() -> str:
-    return (FIXTURES / "bb_auction_calendar.html").read_text(encoding="utf-8")
+def yearly_calendar_html() -> str:
+    """Real capture of auc_calendar/1 — the post-restructure CALENDAR source."""
+    return (FIXTURES / "bb_auction_yearly_calendar.html").read_text(encoding="utf-8")
 
 
 # --------------------------------------------------------------------------- #
@@ -71,55 +71,8 @@ def test_tenor_label_maps_by_words_not_index(text, expected):
 # exercise the deterministic-first / LLM-fallback wiring around it.
 
 
-# --------------------------------------------------------------------------- #
-# CALENDAR — forward multi-week per-tenor strip; partial-horizon handling
-# --------------------------------------------------------------------------- #
-
-
-def test_calendar_returns_only_future_rows(calendar_html):
-    """Past-dated auctions (14/05, 21/05) are dropped; future weeks kept."""
-    rows = parse_auction_calendar(calendar_html, today=date(2026, 6, 1))
-    dates = {r["auction_date"] for r in rows}
-    assert date(2026, 5, 14) not in dates and date(2026, 5, 21) not in dates
-    assert date(2026, 6, 4) in dates and date(2026, 6, 25) in dates
-
-
-def test_calendar_is_multi_week_per_tenor(calendar_html):
-    """The strip spans multiple weeks with per-tenor rows."""
-    rows = parse_auction_calendar(calendar_html, today=date(2026, 6, 1))
-    weeks = {r["auction_date"] for r in rows}
-    assert len(weeks) >= 4  # 04/06, 11/06, 18/06, 25/06, 02/07
-    jun4 = {r["tenor"] for r in rows if r["auction_date"] == date(2026, 6, 4)}
-    assert jun4 == {"91d", "182d", "364d"}
-
-
-def test_calendar_row_carries_notional(calendar_html):
-    rows = parse_auction_calendar(calendar_html, today=date(2026, 6, 1))
-    bond = next(r for r in rows if r["auction_date"] == date(2026, 6, 25))
-    assert bond["tenor"] == "10y"
-    assert bond["notional"] == 1000.0
-
-
-def test_calendar_blank_notional_omitted_not_zeroed(calendar_html):
-    """A row with a blank notional is still emitted, with `notional` ABSENT."""
-    rows = parse_auction_calendar(calendar_html, today=date(2026, 6, 1))
-    row = next(r for r in rows if r["auction_date"] == date(2026, 7, 2))
-    assert row["tenor"] == "364d"
-    assert "notional" not in row
-
-
-def test_calendar_horizon_caps_the_strip(calendar_html):
-    """A short horizon drops weeks beyond it (partial-horizon graceful handling)."""
-    rows = parse_auction_calendar(
-        calendar_html, today=date(2026, 6, 1), horizon_weeks=1
-    )
-    # Only auctions within 1 week of 2026-06-01 (i.e. <= 2026-06-08) survive.
-    assert all(r["auction_date"] <= date(2026, 6, 8) for r in rows)
-    assert any(r["auction_date"] == date(2026, 6, 4) for r in rows)
-
-
-def test_calendar_empty_when_no_calendar_table():
-    assert parse_auction_calendar("<html><body>nothing</body></html>") == []
+# NOTE: forward-calendar parsing (the post-restructure auc_calendar/1 div-grid) is
+# covered in test_bb_auction_calendar.py.
 
 
 # --------------------------------------------------------------------------- #
@@ -189,11 +142,11 @@ def test_scrape_results_falls_back_to_llm_when_deterministic_empty():
     assert rows == [{"tenor": "182d", "auction_date": date(2026, 5, 28), "size": 2500.0}]
 
 
-def test_scrape_calendar_uses_deterministic(calendar_html):
+def test_scrape_calendar_uses_deterministic(yearly_calendar_html):
     spy = MagicMock()
-    with patch("scrapers.bb_auction.fetch_calendar_html", return_value=calendar_html):
-        rows = scrape_calendar(today=date(2026, 6, 1), run_max_fn=spy)
-    assert len(rows) >= 4
+    with patch("scrapers.bb_auction.fetch_calendar_html", return_value=yearly_calendar_html):
+        rows = scrape_calendar(today=date(2026, 6, 2), run_max_fn=spy)
+    assert len(rows) == 17  # 8 future dates × per-tenor non-zero notionals
     spy.assert_not_called()
 
 

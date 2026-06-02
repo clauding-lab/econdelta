@@ -87,8 +87,10 @@ logger = logging.getLogger("bb_auction")
 # the renderer (see AGENT_LEARNINGS — R2 auction restructure).
 AUCTION_RESULTS_URL = "https://www.bb.org.bd/en/index.php/monetaryactivity/treasury"
 
-# CALENDAR: the forward auction calendar (same page the scalar gsec_auction hits).
-AUCTION_CALENDAR_URL = "https://www.bb.org.bd/en/index.php/monetaryactivity/auc_calendar"
+# CALENDAR: the YEARLY auction calendar (auc_calendar/1) — the forward issuance strip
+# as a div-grid. NOTE: the bare auc_calendar ("Yet to bid") page no longer renders a
+# server-side table; the scalar gsec_auction still points at it separately.
+AUCTION_CALENDAR_URL = "https://www.bb.org.bd/en/index.php/monetaryactivity/auc_calendar/1"
 
 # How many forward weeks of the calendar to keep. The horizon BB firms up varies
 # (sometimes only 4-8 weeks), so this is a CEILING, not a guarantee — fewer rows
@@ -350,74 +352,62 @@ def parse_treasury_results(html_text: str) -> list[dict]:
 
 
 # --------------------------------------------------------------------------- #
-# CALENDAR — forward per-tenor issuance strip from the auction calendar page
+# CALENDAR — forward per-tenor issuance strip from the YEARLY auction calendar.
+# BB also restructured the calendar: the old "Yet to bid" page (auc_calendar) no
+# longer renders a server-side <table>, and the forward strip moved to
+# auc_calendar/1 ("Yearly calendar") — a CSS DIV-GRID: div.row-header + div.row-data
+# with div.column cells, TWO grids in document order (BILLS: 14/91/182/364 days;
+# BONDS: 2/5/10/15/20 yr + 3 yr FRTB), each preceded by its own header. Columns map
+# by the CURRENT grid's header (landmine E); a per-tenor cell is the notified amount
+# (0.00 == no auction of that tenor that date).
 # --------------------------------------------------------------------------- #
 
-_NOTIONAL_HEADER_SYNONYMS = (
-    "notified amount", "notional", "amount", "auction amount", "size",
-)
-_DATE_HEADER_SYNONYMS = ("auction date", "date", "issue date")
-_TENOR_HEADER_SYNONYMS = ("tenor", "instrument", "security", "type", "tenure")
+
+def _calendar_columns(div) -> list[str]:
+    return [c.get_text(" ", strip=True) for c in div.find_all("div", class_="column")]
 
 
-def parse_auction_calendar(
+def parse_yearly_calendar(
     html_text: str, *, today: date | None = None, horizon_weeks: int = CALENDAR_HORIZON_WEEKS,
 ) -> list[dict]:
-    """Extract the forward per-tenor CALENDAR strip from the BB auction-calendar page.
+    """Extract the forward CALENDAR strip from the BB yearly-calendar div-grid.
 
-    Pure (no I/O). Returns up to ``horizon_weeks`` worth of future weekly rows as
-    ``{auction_date, tenor, notional?}`` — one per (date, tenor). Past-dated rows
-    are dropped (the strip is forward-looking); a row missing a parseable date or
-    a known tenor is skipped (partial-horizon handling — fewer rows is normal).
-    Returns ``[]`` when no parseable calendar table is found (caller falls back to
-    the LLM extract).
+    Pure (no I/O). Walks the grid in document order: each ``div.row-header`` sets the
+    column->canonical-tenor map (and the date column) for the ``div.row-data`` rows
+    that follow, so the BILLS and BONDS grids each map by their OWN header. Emits
+    ``{auction_date, tenor, notional}`` for every FUTURE (>= today) row × canonical
+    tenor with a non-zero notified amount; non-canonical tenors (14-day, 3 yr FRTB)
+    and zero cells are skipped. Deduped on (date, tenor), capped at ``horizon_weeks``.
+    Returns [] when no grid is found (caller falls through to the LLM extract).
     """
     today = today or date.today()
     soup = BeautifulSoup(html_text, "html.parser")
     out: list[dict] = []
-
-    for table in soup.find_all("table"):
-        trs = table.find_all("tr")
-        if not trs:
-            continue
-        header = [re.sub(r"\s+", " ", c.get_text(" ", strip=True)).strip().lower()
-                  for c in trs[0].find_all(["td", "th"])]
-
-        def _find_col(synonyms: tuple[str, ...], hdr: list[str] = header) -> int | None:
-            for i, h in enumerate(hdr):
-                if any(s in h for s in synonyms):
-                    return i
-            return None
-
-        date_col = _find_col(_DATE_HEADER_SYNONYMS)
-        notional_col = _find_col(_NOTIONAL_HEADER_SYNONYMS)
-        tenor_col = _find_col(_TENOR_HEADER_SYNONYMS)
-        if date_col is None:
-            continue  # not a calendar table
-
-        for tr in trs[1:]:
-            cells = [c.get_text(" ", strip=True) for c in tr.find_all(["td", "th"])]
-            if date_col >= len(cells):
+    tenor_cols: dict[int, str] = {}
+    date_idx = 1
+    for div in soup.find_all("div"):
+        cls = div.get("class") or []
+        if "row-header" in cls:
+            labels = _calendar_columns(div)
+            tenor_cols = {
+                i: t for i, lbl in enumerate(labels) if (t := _tenor_label(lbl)) is not None
+            }
+            date_idx = next((i for i, lbl in enumerate(labels) if "date" in lbl.lower()), 1)
+        elif "row-data" in cls and tenor_cols:
+            cells = _calendar_columns(div)
+            if date_idx >= len(cells):
                 continue
-            row_date = _parse_date_token(cells[date_col])
+            row_date = _parse_date_token(cells[date_idx])
             if row_date is None or row_date < today:
                 continue  # un-parseable, or a past auction (forward strip only)
-            # Tenor: prefer the dedicated column; else scan the whole row text.
-            tenor = None
-            if tenor_col is not None and tenor_col < len(cells):
-                tenor = _tenor_label(cells[tenor_col])
-            if tenor is None:
-                tenor = _tenor_label(" ".join(cells))
-            if tenor is None:
-                continue
-            row: dict = {"auction_date": row_date, "tenor": tenor}
-            if notional_col is not None and notional_col < len(cells):
-                notional = _in_range(_to_number(cells[notional_col]), _NOTIONAL_RANGE)
-                if notional is not None:
-                    row["notional"] = notional
-            out.append(row)
+            for idx, tenor in tenor_cols.items():
+                if idx >= len(cells):
+                    continue
+                notional = _in_range(_to_number(cells[idx]), _NOTIONAL_RANGE)
+                if notional and notional > 0:  # 0.00 == no auction of this tenor
+                    out.append({"auction_date": row_date, "tenor": tenor, "notional": notional})
 
-    # Forward strip: chronological, capped at the horizon, deduped on (date, tenor).
+    # Forward strip: chronological, deduped on (date, tenor), capped at the horizon.
     seen: set[tuple[str, str]] = set()
     deduped: list[dict] = []
     for row in sorted(out, key=lambda r: (r["auction_date"], r["tenor"])):
@@ -560,7 +550,7 @@ def fetch_results_html() -> str:
 
 
 def fetch_calendar_html() -> str:
-    """GET the BB forward auction-calendar page (behind the image-CAPTCHA wall),
+    """GET the BB yearly auction-calendar div-grid (behind the image-CAPTCHA wall),
     via the Playwright solver path."""
     return _get_rendered(AUCTION_CALENDAR_URL)
 
@@ -592,7 +582,7 @@ def scrape_calendar(
     """Fetch + parse the forward calendar into auction_calendar rows."""
     today = today or date.today()
     html_text = fetch_calendar_html()
-    rows = parse_auction_calendar(html_text, today=today)
+    rows = parse_yearly_calendar(html_text, today=today)
     if rows:
         return rows
     logger.info("calendar: deterministic parse empty — trying LLM fallback")
