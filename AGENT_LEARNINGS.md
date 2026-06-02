@@ -37,6 +37,34 @@ When something ships broken, when a methodology gap is exposed, or when a smoke 
 
 ## Entries (most recent first)
 
+## 2026-06-02 — BB retired the auction RESULTS + CALENDAR sources behind a CAPTCHA wall; PR #48's tables stayed empty
+
+**Trigger:** Asked to "rewrite `discover_latest_rrpt_link` + re-enable `auction.timer`." A read-only box dry-run showed the solver-CLEARED press-release listing had ZERO `/rrpt/` anchors — so discovery was not the bug; the SOURCE had moved.
+
+**What went wrong:** BB restructured both auction sources. (1) RESULTS: the per-business-day `/rrpt/` press release became a PDF (`mediaroom/press_release/press/pr<id>_<date>.pdf`) behind an F5 BIG-IP + image-CAPTCHA wall that does NOT yield to the Chromium+haiku solver — five retrieval methods (top-nav, `ctx.request`, in-page `fetch`, iframe-`src`, in-iframe CAPTCHA solve) all returned the wall HTML, never `%PDF`. (2) CALENDAR: `auc_calendar` stopped rendering a server-side `<table>` (0 tables even with a 20s `table` wait-selector); the forward strip moved to `auc_calendar/1` ("Yearly calendar") as a CSS div-grid (`div.row-header` + `div.row-data` / `div.column`). Both `auction_results` and `auction_calendar` (added in PR #48) had therefore stayed empty since launch.
+
+**Lesson:** When a scraped source returns nothing, check whether the SOURCE moved before "fixing" the parser/discovery — and when the new source sits behind a hard wall, hunt for an already-accessible alternate BEFORE sinking effort into defeating the wall. Here the same data was on `monetaryactivity/treasury` (HTML, already lands the scalar cut-off yields) and `auc_calendar/1`. Route-around beats defeat-the-wall.
+
+**Prevention:** Verify-first on the live box (read-only fetch+parse dry-run) before any source-scraper rewrite — the dry-run revealed the restructure AND later caught the PGRST102 write bug. New fixtures are REAL box captures (`tests/fixtures/bb_treasury_auctions.html`, `bb_auction_yearly_calendar.html`), not synthetic.
+
+**Hotfix:** PR #59 — `parse_treasury_results` (group-aware 2-row-header table) + `parse_yearly_calendar` (document-order bills+bonds div-grid); repointed `AUCTION_RESULTS_URL` → `treasury` and `AUCTION_CALENDAR_URL` → `auc_calendar/1`; removed the dead `/rrpt/` results path + table-based `parse_auction_calendar`. Live: 8 results + 17 calendar rows landed + verified in Supabase; `auction.timer` re-enabled.
+
+**Cross-references:** AGENTS.md landmine 24; auto-memory `project_econdelta_r2_auction_html_sources`; the PGRST102 entry directly below; prior `2026-06-01` Tier-2 write-path entry.
+
+## 2026-06-02 — First real auction_results write rejected: PostgREST PGRST102 "All object keys must match"
+
+**Trigger:** First live `econdelta-auction.service` run after PR #59 deployed: `results: parsed 8 row(s)` then `SupabaseWriteError: HTTP 400 PGRST102 "All object keys must match"` — 0 results written, while the 17-row calendar batch (homogeneous keys) landed fine the same run.
+
+**What went wrong:** PostgREST bulk-upsert (a POSTed JSON array) requires every object to carry the SAME keys. Auction RESULTS rows are heterogeneous — bond rows have `wam`, bills don't — so the whole batch 400'd. `utils/supabase_writer._validate_auction_rows` normalised each row individually but never reconciled the key SET across the batch. The bug was latent until now because `auction_results` had literally never been written (its source was broken — see the entry above).
+
+**Lesson:** A parsed batch ≠ a writable batch. For a PostgREST array upsert, EVERY row must have an identical key set — union the keys across the batch and fill missing ones with NULL before POST. (Companion to the prior "2xx ≠ persisted" lesson: call this "uniform-keys-or-400".)
+
+**Prevention:** `_validate_auction_rows` now unions all keys present across the batch and `setdefault`s each missing column to `None` (a real SQL NULL, never a fabricated value); a no-op for single-row / already-homogeneous batches. Test: `test_heterogeneous_rows_get_a_uniform_key_set`.
+
+**Hotfix:** PR #60. Re-ran the service: 8 results + 17 calendar rows upserted, exit 0; verified in Supabase (bills `wam`=NULL, bonds `wam` set).
+
+**Cross-references:** AGENTS.md landmine 25; auto-memory `project_econdelta_r2_auction_html_sources`; global `~/.claude/AGENT_LEARNINGS.md` (PGRST102 uniform-keys).
+
 ## 2026-06-01 — Tier-2 scrapers logged "upserted N rows" but wrote to the SOURCE host, not Supabase
 
 **Trigger:** Completing the PR #48 "deploy & land" runbook. After deploying, the three standalone Tier-2 scrapers ran with `result=success`/`exit=0` (imf_eff), an Adobe-Helix `404` (pink-sheet), or a 2-min systemd timeout (imf_debt) — yet `metric_history` stayed **empty** for all of their metric_ids. imf_eff even logged "upserted 1 imf_eff_outstanding_sdr_mn row" while the table had **0 rows**.
