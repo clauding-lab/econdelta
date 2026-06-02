@@ -25,8 +25,6 @@ from scrapers.bb_auction import (
     _llm_rows,
     _tenor_label,
     parse_auction_calendar,
-    parse_auction_results,
-    recover_held_on,
     scrape_calendar,
     scrape_results,
 )
@@ -35,8 +33,9 @@ FIXTURES = Path(__file__).parent / "fixtures"
 
 
 @pytest.fixture
-def results_html() -> str:
-    return (FIXTURES / "bb_auction_results.html").read_text(encoding="utf-8")
+def treasury_html() -> str:
+    """Real capture of monetaryactivity/treasury — the post-restructure RESULTS source."""
+    return (FIXTURES / "bb_treasury_auctions.html").read_text(encoding="utf-8")
 
 
 @pytest.fixture
@@ -67,56 +66,9 @@ def test_tenor_label_maps_by_words_not_index(text, expected):
     assert _tenor_label(text) == expected
 
 
-# --------------------------------------------------------------------------- #
-# RESULTS — per-tenor rows with all 7 fields (PK + 5 data fields)
-# --------------------------------------------------------------------------- #
-
-
-def test_results_recovers_auction_date_from_held_on(results_html):
-    """as_of comes from the 'held on <date>' press-release title."""
-    assert recover_held_on(results_html) == date(2026, 5, 28)
-
-
-def test_results_emits_one_row_per_tenor(results_html):
-    rows = parse_auction_results(results_html)
-    tenors = {r["tenor"] for r in rows}
-    assert tenors == {"91d", "182d", "364d", "5y", "10y"}
-
-
-def test_results_row_carries_all_fields_for_a_bond(results_html):
-    """The 5-Year BGTB row must carry size/bid/cover/wam/cutoff + the PK fields."""
-    rows = parse_auction_results(results_html)
-    bond = next(r for r in rows if r["tenor"] == "5y")
-    assert bond["auction_date"] == date(2026, 5, 28)
-    assert bond["size"] == 1500.0
-    assert bond["bid"] == 2610.0
-    assert bond["cover"] == 1.74
-    assert bond["wam"] == 4.98
-    assert bond["cutoff"] == 12.10
-
-
-def test_results_tbill_omits_wam_gracefully(results_html):
-    """T-bills have no weighted-average maturity — the field must be ABSENT, not 0."""
-    rows = parse_auction_results(results_html)
-    bill = next(r for r in rows if r["tenor"] == "182d")
-    assert "wam" not in bill
-    assert bill["size"] == 2500.0
-    assert bill["cutoff"] == 11.20
-
-
-def test_results_columns_mapped_by_header_label_not_position(results_html):
-    """size must be the ACCEPTED column, not the (earlier) Notified column."""
-    rows = parse_auction_results(results_html)
-    bill = next(r for r in rows if r["tenor"] == "91d")
-    # Notified=3000, Accepted=3000 here are equal, but bid=7820.50 proves the
-    # header map picked the Total-Bid column (not e.g. cut-off) for `bid`.
-    assert bill["bid"] == 7820.50
-    assert bill["cover"] == 2.61
-
-
-def test_results_empty_when_no_results_table():
-    """A non-results page yields [] so the caller falls through to the LLM."""
-    assert parse_auction_results("<html><body><p>no table here</p></body></html>") == []
+# NOTE: per-tenor RESULTS parsing (the post-restructure monetaryactivity/treasury
+# table) is covered in test_bb_auction_treasury.py. The orchestration tests below
+# exercise the deterministic-first / LLM-fallback wiring around it.
 
 
 # --------------------------------------------------------------------------- #
@@ -220,11 +172,11 @@ def test_coerce_calendar_rows_forward_filters():
 # --------------------------------------------------------------------------- #
 
 
-def test_scrape_results_uses_deterministic_and_skips_llm(results_html):
+def test_scrape_results_uses_deterministic_and_skips_llm(treasury_html):
     spy = MagicMock()
-    with patch("scrapers.bb_auction.fetch_latest_results_html", return_value=results_html):
+    with patch("scrapers.bb_auction.fetch_results_html", return_value=treasury_html):
         rows = scrape_results(run_max_fn=spy)
-    assert len(rows) == 5
+    assert len(rows) == 8  # 91/182/364d bills + 2/5/10/15/20y bonds
     spy.assert_not_called()  # deterministic parse succeeded; no LLM call
 
 
@@ -232,7 +184,7 @@ def test_scrape_results_falls_back_to_llm_when_deterministic_empty():
     empty_html = "<html><body><p>auction held, results below</p></body></html>"
     fake = MagicMock()
     fake.parsed = {"rows": [{"auction_date": "2026-05-28", "tenor": "182d", "size": 2500.0}]}
-    with patch("scrapers.bb_auction.fetch_latest_results_html", return_value=empty_html):
+    with patch("scrapers.bb_auction.fetch_results_html", return_value=empty_html):
         rows = scrape_results(run_max_fn=lambda **k: fake)
     assert rows == [{"tenor": "182d", "auction_date": date(2026, 5, 28), "size": 2500.0}]
 
@@ -246,15 +198,9 @@ def test_scrape_calendar_uses_deterministic(calendar_html):
 
 
 # --------------------------------------------------------------------------- #
-# R2 — BB image-CAPTCHA reroute: listing + calendar fetch through the solver
+# BB image-CAPTCHA reroute: RESULTS (treasury) + CALENDAR fetch through the solver
 # --------------------------------------------------------------------------- #
 
-_LISTING_HTML = (
-    "<html><body>"
-    '<a href="/en/index.php/mediaroom/press_release_details/rrpt/9001">'
-    "Result of the Auction of Repo, ALS, SLF, SDF and IBLF held on 01 January 2026"
-    "</a></body></html>"
-)
 # All four markers _is_captcha_page requires (id="ans", id="jar", class="thumbnails", "support ID").
 _CAPTCHA_HTML = (
     '<form><input id="ans"><button id="jar"></button>'
@@ -262,20 +208,16 @@ _CAPTCHA_HTML = (
 )
 
 
-def test_results_listing_fetched_via_solver_not_plain_get():
-    """The press-release LISTING must go through the CAPTCHA-solving rendered path
-    (bb_forex.fetch_rendered_html), NOT plain requests — otherwise discovery sees zero
-    /rrpt/ anchors behind the wall. The per-release DETAIL page stays on plain _get."""
-    with (
-        patch(
-            "scrapers.bb_forex.fetch_rendered_html", return_value=_LISTING_HTML
-        ) as m_render,
-        patch("scrapers.bb_auction._get", return_value="DETAIL_HTML") as m_get,
-    ):
-        out = bb_auction.fetch_latest_results_html()
-    m_render.assert_called_once_with(bb_auction.PRESS_RELEASE_LISTING_URL)
-    assert out == "DETAIL_HTML"
-    m_get.assert_called_once()  # detail fetch only
+def test_results_fetched_via_solver_from_treasury_page():
+    """RESULTS must go through the CAPTCHA-solving rendered path against the treasury
+    auction-results page (the /rrpt/ press release is a PDF behind a wall the renderer
+    cannot clear)."""
+    with patch(
+        "scrapers.bb_forex.fetch_rendered_html", return_value="RESULTS_HTML"
+    ) as m_render:
+        out = bb_auction.fetch_results_html()
+    m_render.assert_called_once_with(bb_auction.AUCTION_RESULTS_URL)
+    assert out == "RESULTS_HTML"
 
 
 def test_calendar_fetched_via_solver():
