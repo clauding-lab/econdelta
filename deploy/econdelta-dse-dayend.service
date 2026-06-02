@@ -1,0 +1,46 @@
+[Unit]
+Description=EconDelta — DSE DS30 per-ticker day-end close scraper
+Documentation=https://github.com/clauding-lab/econdelta
+After=network-online.target
+Wants=network-online.target
+
+# Retry on transient failures (dsebd.org brief outages).
+# Up to 3 starts per 30-min window — initial fire plus 2 retries.
+StartLimitIntervalSec=1800
+StartLimitBurst=3
+
+[Service]
+Type=oneshot
+User=adnan-local
+Group=adnan-local
+WorkingDirectory=/home/adnan-local/econdelta
+EnvironmentFile=/etc/econdelta.env
+ExecStart=/home/adnan-local/econdelta/.venv/bin/python -m scrapers.dse_dayend
+
+# Resource limits to protect Notifyr and Mission Control on the same VPS
+MemoryMax=500M
+MemoryHigh=400M
+CPUQuota=50%
+TasksMax=512
+
+# Hardening
+PrivateTmp=true
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/adnan-local/econdelta/data /home/adnan-local/econdelta/logs
+
+# Timeouts + retry on transient failures. Worst case ~30 tickers x (2s polite
+# delay + ~3-5s fetch) ~= 150-210s, so 300s gives safe headroom. Do NOT drop this
+# to the index scraper's 60s — that unit fetches 2 pages, this one fetches ~30.
+TimeoutStartSec=300
+Restart=on-failure
+RestartSec=300
+
+# Logging — systemd journal + append to file
+StandardOutput=append:/home/adnan-local/econdelta/logs/dse_dayend-systemd.log
+StandardError=append:/home/adnan-local/econdelta/logs/dse_dayend-systemd.log
+SyslogIdentifier=econdelta-dse-dayend
+
+[Install]
+WantedBy=multi-user.target
