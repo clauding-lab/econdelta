@@ -117,6 +117,29 @@ def test_calendar_row_with_only_pk_and_notional_is_valid():
     assert n == 1
 
 
+def test_heterogeneous_rows_get_a_uniform_key_set():
+    """PostgREST bulk-upsert rejects (PGRST102) a batch whose objects differ in keys.
+
+    A bills row (no ``wam``) batched with a bonds row (has ``wam``) must be reconciled
+    to a single key set, with the missing field sent as NULL — not omitted, not a
+    fabricated value.
+    """
+    sess = _make_session()
+    rows = [
+        {"auction_date": "2026-05-24", "tenor": "91d",
+         "size": 3500.0, "bid": 6904.22, "cover": 1.97, "cutoff": 10.15},
+        {"auction_date": "2026-05-13", "tenor": "5y",
+         "size": 3000.0, "bid": 8555.59, "cover": 2.85, "cutoff": 10.78, "wam": 4.96},
+    ]
+    upsert_auction_results(
+        rows, url="https://example.supabase.co", service_key="sk", session=sess,
+    )
+    posted = sess.post.call_args[1]["json"]
+    assert len({frozenset(r) for r in posted}) == 1  # every object shares one key set
+    bill = next(r for r in posted if r["tenor"] == "91d")
+    assert "wam" in bill and bill["wam"] is None  # NULL, not missing or fabricated
+
+
 # ---------------------------------------------------------------------------
 # Validation — PK required, unknown columns rejected
 # ---------------------------------------------------------------------------
