@@ -64,11 +64,9 @@ import sys
 from datetime import date, datetime
 from pathlib import Path
 
-import requests
 from bs4 import BeautifulSoup
 
 from claude_max.max_client import MaxCallError, run_max
-from fetchers.rrpt_discovery import discover_latest_rrpt_link
 from utils.notifier import notify
 from utils.supabase_writer import (
     SupabaseWriteError,
@@ -82,16 +80,17 @@ logger = logging.getLogger("bb_auction")
 # Sources
 # --------------------------------------------------------------------------- #
 
-# RESULTS: the BB press-release LISTING page; ``discover_latest_rrpt_link``
-# walks it for the highest-numbered /rrpt/<id> auction-result notice (S7's
-# discovery, reused). ``title_pattern`` keeps only auction-result notices.
-PRESS_RELEASE_LISTING_URL = "https://www.bb.org.bd/en/index.php/mediaroom/press_release"
-RESULTS_TITLE_PATTERN = "Result of the Auction"
+# RESULTS (primary, post-restructure): the monetaryactivity/treasury auction-results
+# table — the SAME solver-served HTML page that already lands the scalar cut-off
+# yields (bill_bond_rates / tbill_*_yield). Replaces the retired /rrpt/ press release,
+# which BB turned into a PDF behind an F5 + image-CAPTCHA wall that does not yield to
+# the renderer (see AGENT_LEARNINGS — R2 auction restructure).
+AUCTION_RESULTS_URL = "https://www.bb.org.bd/en/index.php/monetaryactivity/treasury"
 
-# CALENDAR: the forward auction calendar (same page the scalar gsec_auction hits).
-AUCTION_CALENDAR_URL = "https://www.bb.org.bd/en/index.php/monetaryactivity/auc_calendar"
-
-_TIMEOUT = 30
+# CALENDAR: the YEARLY auction calendar (auc_calendar/1) — the forward issuance strip
+# as a div-grid. NOTE: the bare auc_calendar ("Yet to bid") page no longer renders a
+# server-side table; the scalar gsec_auction still points at it separately.
+AUCTION_CALENDAR_URL = "https://www.bb.org.bd/en/index.php/monetaryactivity/auc_calendar/1"
 
 # How many forward weeks of the calendar to keep. The horizon BB firms up varies
 # (sometimes only 4-8 weeks), so this is a CEILING, not a guarantee — fewer rows
@@ -212,171 +211,203 @@ def _tenor_label(text: str) -> str | None:
     return None
 
 
-# --------------------------------------------------------------------------- #
-# RESULTS — per-tenor row extraction from the auction-result press release
-# --------------------------------------------------------------------------- #
-
-_HELD_ON_RE = re.compile(
-    r"held\s+on\s+([0-9]{1,2}\s+[A-Za-z]+,?\s+[0-9]{4}"
-    r"|[A-Za-z]+\s+[0-9]{1,2},?\s+[0-9]{4})",
-    re.IGNORECASE,
-)
-# Column-header synonyms -> the canonical auction_results field. Header-LABEL
-# matching: we locate each field's column by its header text, not a fixed index,
-# because BB column order drifts and not every release carries every column.
-_RESULT_HEADER_SYNONYMS: dict[str, tuple[str, ...]] = {
-    "size": ("accepted", "allotted", "allotment", "issued", "awarded", "accepted amount"),
-    "bid": ("bid amount", "total bid", "bid received", "tendered", "bids received"),
-    "cover": ("cover", "bid-cover", "bid cover", "bid-to-cover", "times"),
-    "wam": ("wam", "maturity"),
-    "cutoff": ("cut-off", "cutoff", "cut off", "weighted average yield",
-               "weighted-average yield", "yield", "rate"),
-}
+# Per-field validation ranges, shared by the deterministic treasury parse and the
+# LLM-fallback coerce (``_coerce_result_rows``).
 _RESULT_FIELD_RANGE = {
     "size": _SIZE_RANGE, "bid": _BID_RANGE, "cover": _COVER_RANGE,
     "wam": _WAM_RANGE, "cutoff": _CUTOFF_RANGE,
 }
 
 
-def recover_held_on(html_text: str) -> date | None:
-    """Pull the auction date from the 'held on <date>' press-release title."""
-    flat = re.sub(r"\s+", " ", html_text)
-    m = _HELD_ON_RE.search(flat)
-    return _parse_date_token(m.group(1)) if m else None
+# --------------------------------------------------------------------------- #
+# RESULTS (primary source) — per-tenor rows from the monetaryactivity/treasury
+# auction-results HTML table. BB retired the per-business-day /rrpt/ press release
+# (now a PDF behind an F5 + image-CAPTCHA wall that does NOT yield to the renderer),
+# so RESULTS come from this already-solver-served page. The table has a TWO-ROW
+# grouped header — "Bids received" (colspan 3) + "Bids accepted" (colspan 7) — so
+# "Face value"/"Range of yields" appear twice; columns are mapped by header GROUP,
+# not position (landmine E).
+# --------------------------------------------------------------------------- #
+
+# WAM of a re-issued bond is printed in the ISIN cell, e.g.
+# "BD0931401204 (Re-issuance: 4.96 Yr.)"; plain bills carry no such note.
+_REISSUANCE_RE = re.compile(r"re-?issuance:\s*([\d.]+)\s*yr", re.IGNORECASE)
+_TREASURY_REQUIRED = ("auction_date", "tenor", "bid", "size", "cutoff")
 
 
-def _header_field_map(header_cells: list[str]) -> dict[int, str]:
-    """Map column index -> canonical field by matching the header row labels."""
-    mapping: dict[int, str] = {}
-    for idx, raw in enumerate(header_cells):
-        h = re.sub(r"\s+", " ", raw).strip().lower()
-        for field, synonyms in _RESULT_HEADER_SYNONYMS.items():
-            if field in mapping.values():
-                continue
-            if any(syn in h for syn in synonyms):
-                mapping[idx] = field
-                break
-    return mapping
+def _header_rowcount(trs: list) -> int:
+    """1 if the first header row has no colspan groups, else 2 (grouped header)."""
+    if not trs:
+        return 0
+    first = trs[0].find_all(["th", "td"])
+    return 2 if any(int(c.get("colspan") or 1) > 1 for c in first) else 1
 
 
-def parse_auction_results(
-    html_text: str, *, auction_date: date | None = None,
-) -> list[dict]:
-    """Extract per-tenor RESULTS rows from a BB auction-result press release.
+def _expand_header(trs: list) -> list[tuple[str, str]]:
+    """Flatten a 1- or 2-row table header into one (group, sub) label per column.
 
-    Pure (no I/O) so it unit-tests offline against a captured fixture. Returns a
-    list of ``{auction_date, tenor, size?, bid?, cover?, wam?, cutoff?}`` dicts —
-    one per tenor present, with only the fields the release actually carries.
-    An absent tenor yields NO row (never a fabricated 0).
-
-    Deterministic table parse: find the results ``<table>``, read its header row
-    to map columns -> fields by LABEL (landmine E), then read each data row whose
-    first cell names a known tenor. Returns ``[]`` when no parseable results
-    table is found (the caller then falls back to the LLM extract).
+    A standalone column (rowspan=2, or no colspan) carries its label as the group
+    with an empty sub. A group header (colspan=N) spans N columns whose sub-labels
+    come from the second header row. Returns [] when there is no header row.
     """
-    auction_date = auction_date or recover_held_on(html_text)
-    soup = BeautifulSoup(html_text, "html.parser")
-    rows: list[dict] = []
+    if not trs:
+        return []
+    row0 = trs[0].find_all(["th", "td"])
+    if not row0:
+        return []
+    if _header_rowcount(trs) == 1:
+        return [(c.get_text(" ", strip=True), "") for c in row0]
+    subs = trs[1].find_all(["th", "td"]) if len(trs) > 1 else []
+    sub_iter = iter(c.get_text(" ", strip=True) for c in subs)
+    flat: list[tuple[str, str]] = []
+    for c in row0:
+        label = c.get_text(" ", strip=True)
+        colspan = int(c.get("colspan") or 1)
+        rowspan = int(c.get("rowspan") or 1)
+        if rowspan >= 2 or colspan == 1:
+            flat.append((label, ""))
+        else:
+            for _ in range(colspan):
+                flat.append((label, next(sub_iter, "")))
+    return flat
 
+
+def _treasury_field_map(flat: list[tuple[str, str]]) -> dict[str, int]:
+    """Map canonical field -> flat column index by header LABEL (group-aware)."""
+    fmap: dict[str, int] = {}
+    for idx, (group, sub) in enumerate(flat):
+        g, s = group.lower(), sub.lower()
+        if "auction_date" not in fmap and "issue date" in g:
+            fmap["auction_date"] = idx
+        if "tenor" not in fmap and "remaining maturity" in g:
+            fmap["tenor"] = idx
+        if "isin" not in fmap and "isin" in g:
+            fmap["isin"] = idx
+        if "bid" not in fmap and "received" in g and "face value" in s:
+            fmap["bid"] = idx
+        if "size" not in fmap and "accepted" in g and "face value" in s:
+            fmap["size"] = idx
+        if "cutoff" not in fmap and "cut" in s and "off" in s:
+            fmap["cutoff"] = idx
+    return fmap
+
+
+def parse_treasury_results(html_text: str) -> list[dict]:
+    """Extract per-tenor RESULTS rows from the BB monetaryactivity/treasury table.
+
+    Pure (no I/O). Returns ``{auction_date, tenor, size?, bid?, cover?, wam?,
+    cutoff?}`` — one row per canonical tenor present (non-canonical tenors such as
+    the 14-day bill or 3-year FRTB are dropped by ``_tenor_label``). ``cover`` is
+    derived (bid/size, 2dp); ``wam`` is read from a bond's re-issuance note. Returns
+    [] when no results table is found, so the caller falls through to the LLM extract.
+
+    NOTE: ``auction_date`` is the table's *Issue date* (settlement) — ~1 business
+    day after the auction was held. The page exposes no held-on date; (auction_date,
+    tenor) stays a stable, unique PK, and this is the only structured HTML source
+    not behind the binary PDF wall.
+    """
+    soup = BeautifulSoup(html_text, "html.parser")
     for table in soup.find_all("table"):
         trs = table.find_all("tr")
-        if not trs:
+        flat = _expand_header(trs)
+        if not flat:
             continue
-        header_cells = [c.get_text(" ", strip=True) for c in trs[0].find_all(["td", "th"])]
-        field_map = _header_field_map(header_cells)
-        if not field_map:
-            continue  # not a results table (no recognised result columns)
-        for tr in trs[1:]:
+        fmap = _treasury_field_map(flat)
+        if not all(k in fmap for k in _TREASURY_REQUIRED):
+            continue  # not the results table (e.g. the yield-curve summary table)
+        rows: list[dict] = []
+        for tr in trs[_header_rowcount(trs):]:
             cells = [c.get_text(" ", strip=True) for c in tr.find_all(["td", "th"])]
-            if not cells:
+            if len(cells) < len(flat):
                 continue
-            tenor = _tenor_label(cells[0])
-            if tenor is None:
+            tenor = _tenor_label(cells[fmap["tenor"]])
+            auction_date = _parse_date_token(cells[fmap["auction_date"]])
+            if tenor is None or auction_date is None:
                 continue
-            row: dict = {"tenor": tenor}
-            if auction_date is not None:
-                row["auction_date"] = auction_date
-            for idx, field in field_map.items():
-                if idx < len(cells):
-                    val = _in_range(_to_number(cells[idx]), _RESULT_FIELD_RANGE[field])
-                    if val is not None:
-                        row[field] = val
-            # Keep the row only if it carried at least one real field beyond the PK.
-            if any(k in row for k in _RESULT_FIELD_RANGE):
+            size = _in_range(_to_number(cells[fmap["size"]]), _SIZE_RANGE)
+            bid = _in_range(_to_number(cells[fmap["bid"]]), _BID_RANGE)
+            cutoff = _in_range(_to_number(cells[fmap["cutoff"]]), _CUTOFF_RANGE)
+            row: dict = {"auction_date": auction_date, "tenor": tenor}
+            if size is not None:
+                row["size"] = size
+            if bid is not None:
+                row["bid"] = bid
+            if cutoff is not None:
+                row["cutoff"] = cutoff
+            if size and bid is not None:
+                cover = _in_range(round(bid / size, 2), _COVER_RANGE)
+                if cover is not None:
+                    row["cover"] = cover
+            isin_idx = fmap.get("isin")
+            if isin_idx is not None and isin_idx < len(cells):
+                m = _REISSUANCE_RE.search(cells[isin_idx])
+                if m:
+                    wam = _in_range(_to_number(m.group(1)), _WAM_RANGE)
+                    if wam is not None:
+                        row["wam"] = wam
+            if any(k in row for k in ("size", "bid", "cover", "wam", "cutoff")):
                 rows.append(row)
-
-    return rows
+        return rows
+    return []
 
 
 # --------------------------------------------------------------------------- #
-# CALENDAR — forward per-tenor issuance strip from the auction calendar page
+# CALENDAR — forward per-tenor issuance strip from the YEARLY auction calendar.
+# BB also restructured the calendar: the old "Yet to bid" page (auc_calendar) no
+# longer renders a server-side <table>, and the forward strip moved to
+# auc_calendar/1 ("Yearly calendar") — a CSS DIV-GRID: div.row-header + div.row-data
+# with div.column cells, TWO grids in document order (BILLS: 14/91/182/364 days;
+# BONDS: 2/5/10/15/20 yr + 3 yr FRTB), each preceded by its own header. Columns map
+# by the CURRENT grid's header (landmine E); a per-tenor cell is the notified amount
+# (0.00 == no auction of that tenor that date).
 # --------------------------------------------------------------------------- #
 
-_NOTIONAL_HEADER_SYNONYMS = (
-    "notified amount", "notional", "amount", "auction amount", "size",
-)
-_DATE_HEADER_SYNONYMS = ("auction date", "date", "issue date")
-_TENOR_HEADER_SYNONYMS = ("tenor", "instrument", "security", "type", "tenure")
+
+def _calendar_columns(div) -> list[str]:
+    return [c.get_text(" ", strip=True) for c in div.find_all("div", class_="column")]
 
 
-def parse_auction_calendar(
+def parse_yearly_calendar(
     html_text: str, *, today: date | None = None, horizon_weeks: int = CALENDAR_HORIZON_WEEKS,
 ) -> list[dict]:
-    """Extract the forward per-tenor CALENDAR strip from the BB auction-calendar page.
+    """Extract the forward CALENDAR strip from the BB yearly-calendar div-grid.
 
-    Pure (no I/O). Returns up to ``horizon_weeks`` worth of future weekly rows as
-    ``{auction_date, tenor, notional?}`` — one per (date, tenor). Past-dated rows
-    are dropped (the strip is forward-looking); a row missing a parseable date or
-    a known tenor is skipped (partial-horizon handling — fewer rows is normal).
-    Returns ``[]`` when no parseable calendar table is found (caller falls back to
-    the LLM extract).
+    Pure (no I/O). Walks the grid in document order: each ``div.row-header`` sets the
+    column->canonical-tenor map (and the date column) for the ``div.row-data`` rows
+    that follow, so the BILLS and BONDS grids each map by their OWN header. Emits
+    ``{auction_date, tenor, notional}`` for every FUTURE (>= today) row × canonical
+    tenor with a non-zero notified amount; non-canonical tenors (14-day, 3 yr FRTB)
+    and zero cells are skipped. Deduped on (date, tenor), capped at ``horizon_weeks``.
+    Returns [] when no grid is found (caller falls through to the LLM extract).
     """
     today = today or date.today()
     soup = BeautifulSoup(html_text, "html.parser")
     out: list[dict] = []
-
-    for table in soup.find_all("table"):
-        trs = table.find_all("tr")
-        if not trs:
-            continue
-        header = [re.sub(r"\s+", " ", c.get_text(" ", strip=True)).strip().lower()
-                  for c in trs[0].find_all(["td", "th"])]
-
-        def _find_col(synonyms: tuple[str, ...], hdr: list[str] = header) -> int | None:
-            for i, h in enumerate(hdr):
-                if any(s in h for s in synonyms):
-                    return i
-            return None
-
-        date_col = _find_col(_DATE_HEADER_SYNONYMS)
-        notional_col = _find_col(_NOTIONAL_HEADER_SYNONYMS)
-        tenor_col = _find_col(_TENOR_HEADER_SYNONYMS)
-        if date_col is None:
-            continue  # not a calendar table
-
-        for tr in trs[1:]:
-            cells = [c.get_text(" ", strip=True) for c in tr.find_all(["td", "th"])]
-            if date_col >= len(cells):
+    tenor_cols: dict[int, str] = {}
+    date_idx = 1
+    for div in soup.find_all("div"):
+        cls = div.get("class") or []
+        if "row-header" in cls:
+            labels = _calendar_columns(div)
+            tenor_cols = {
+                i: t for i, lbl in enumerate(labels) if (t := _tenor_label(lbl)) is not None
+            }
+            date_idx = next((i for i, lbl in enumerate(labels) if "date" in lbl.lower()), 1)
+        elif "row-data" in cls and tenor_cols:
+            cells = _calendar_columns(div)
+            if date_idx >= len(cells):
                 continue
-            row_date = _parse_date_token(cells[date_col])
+            row_date = _parse_date_token(cells[date_idx])
             if row_date is None or row_date < today:
                 continue  # un-parseable, or a past auction (forward strip only)
-            # Tenor: prefer the dedicated column; else scan the whole row text.
-            tenor = None
-            if tenor_col is not None and tenor_col < len(cells):
-                tenor = _tenor_label(cells[tenor_col])
-            if tenor is None:
-                tenor = _tenor_label(" ".join(cells))
-            if tenor is None:
-                continue
-            row: dict = {"auction_date": row_date, "tenor": tenor}
-            if notional_col is not None and notional_col < len(cells):
-                notional = _in_range(_to_number(cells[notional_col]), _NOTIONAL_RANGE)
-                if notional is not None:
-                    row["notional"] = notional
-            out.append(row)
+            for idx, tenor in tenor_cols.items():
+                if idx >= len(cells):
+                    continue
+                notional = _in_range(_to_number(cells[idx]), _NOTIONAL_RANGE)
+                if notional and notional > 0:  # 0.00 == no auction of this tenor
+                    out.append({"auction_date": row_date, "tenor": tenor, "notional": notional})
 
-    # Forward strip: chronological, capped at the horizon, deduped on (date, tenor).
+    # Forward strip: chronological, deduped on (date, tenor), capped at the horizon.
     seen: set[tuple[str, str]] = set()
     deduped: list[dict] = []
     for row in sorted(out, key=lambda r: (r["auction_date"], r["tenor"])):
@@ -486,30 +517,16 @@ def _coerce_calendar_rows(
 # --------------------------------------------------------------------------- #
 
 
-def _get(url: str, *, session: requests.Session | None = None) -> str:
-    sess = session or requests.Session()
-    try:
-        resp = sess.get(url, timeout=_TIMEOUT)
-    except requests.exceptions.RequestException as e:
-        raise FetchError(f"network error fetching {url}: {e}") from e
-    if resp.status_code != 200:
-        raise FetchError(f"{url} returned HTTP {resp.status_code}")
-    return resp.text
-
-
 def _get_rendered(url: str) -> str:
     """Fetch a BB page that sits behind the image-CAPTCHA wall, via the Playwright +
     claude-haiku solver in ``scrapers.bb_forex`` — the ONLY fetch path that actually
     clears BB's image-CAPTCHA (plain ``requests`` and html_fetcher's single JS-challenge
     reload do not). Lazy-imported so importing this module stays Playwright-free.
 
-    R2: BB returns the image-CAPTCHA wall to the VPS datacenter IP for the press-release
-    LISTING and the auction CALENDAR, so plain ``requests`` saw 0 ``/rrpt/`` anchors and
-    raised a misleading "no anchors" error. Routing the listing/calendar through the
-    solver fixes discovery; an unsolved wall now surfaces as a clear FetchError →
-    needs_review. VPS-OPEN: confirm whether the per-release DETAIL page also walls (it is
-    still fetched with plain ``requests`` below) and whether the calendar serves the same
-    hard image-CAPTCHA vs only the lighter JS challenge."""
+    R2: BB walls both the auction RESULTS page (monetaryactivity/treasury) and the
+    auction CALENDAR (monetaryactivity/auc_calendar) to the VPS datacenter IP, so both
+    are routed through the solver. An unsolved wall surfaces as a clear FetchError →
+    needs_review (not a misleading downstream parse failure)."""
     from scrapers.bb_forex import fetch_rendered_html
     from scrapers.bb_forex_captcha import _is_captcha_page
 
@@ -522,27 +539,19 @@ def _get_rendered(url: str) -> str:
     return html
 
 
-def fetch_latest_results_html(*, session: requests.Session | None = None) -> str:
-    """Discover (S7's rrpt logic) + GET the latest auction-result press release."""
-    listing = _get_rendered(PRESS_RELEASE_LISTING_URL)
-    try:
-        target = discover_latest_rrpt_link(
-            html=listing,
-            base_url=PRESS_RELEASE_LISTING_URL,
-            title_pattern=RESULTS_TITLE_PATTERN,
-        )
-    except ValueError as e:
-        raise FetchError(f"results discovery failed: {e}") from e
-    logger.info("discovered latest auction-result release: %s", target)
-    return _get(target, session=session)
+def fetch_results_html() -> str:
+    """GET the BB monetaryactivity/treasury auction-results page (behind the wall).
+
+    Post-restructure source: BB retired the per-business-day /rrpt/ auction-result
+    press release (now a PDF behind an F5 + image-CAPTCHA wall the renderer cannot
+    clear), so per-tenor RESULTS come from this solver-served HTML table — the SAME
+    page that already lands the scalar cut-off yields (bill_bond_rates / tbill_*)."""
+    return _get_rendered(AUCTION_RESULTS_URL)
 
 
-def fetch_calendar_html(*, session: requests.Session | None = None) -> str:
-    """GET the BB forward auction-calendar page (behind the image-CAPTCHA wall).
-
-    ``session`` is accepted for signature symmetry with fetch_latest_results_html but
-    is IGNORED here: the calendar is fetched via the Playwright solver path, which
-    cannot use a requests.Session."""
+def fetch_calendar_html() -> str:
+    """GET the BB yearly auction-calendar div-grid (behind the image-CAPTCHA wall),
+    via the Playwright solver path."""
     return _get_rendered(AUCTION_CALENDAR_URL)
 
 
@@ -551,31 +560,29 @@ def fetch_calendar_html(*, session: requests.Session | None = None) -> str:
 # --------------------------------------------------------------------------- #
 
 
-def scrape_results(
-    *, session: requests.Session | None = None, run_max_fn=run_max,
-) -> list[dict]:
-    """Fetch + parse the latest results release into auction_results rows.
+def scrape_results(*, run_max_fn=run_max) -> list[dict]:
+    """Fetch + parse the treasury auction-results table into auction_results rows.
 
-    Deterministic table parse first; LLM fallback only when it yields nothing.
+    Deterministic table parse first; LLM fallback only when it yields nothing. The
+    LLM fallback carries no shared auction_date (the treasury table is per-row dated),
+    so coerce relies on each row's own date and drops any row lacking one.
     """
-    html_text = fetch_latest_results_html(session=session)
-    auction_date = recover_held_on(html_text)
-    rows = parse_auction_results(html_text, auction_date=auction_date)
+    html_text = fetch_results_html()
+    rows = parse_treasury_results(html_text)
     if rows:
         return rows
     logger.info("results: deterministic parse empty — trying LLM fallback")
     llm = _llm_rows("auction_results_extract.txt", html_text, run_max_fn=run_max_fn)
-    return _coerce_result_rows(llm, auction_date=auction_date)
+    return _coerce_result_rows(llm, auction_date=None)
 
 
 def scrape_calendar(
-    *, today: date | None = None, session: requests.Session | None = None,
-    run_max_fn=run_max,
+    *, today: date | None = None, run_max_fn=run_max,
 ) -> list[dict]:
     """Fetch + parse the forward calendar into auction_calendar rows."""
     today = today or date.today()
-    html_text = fetch_calendar_html(session=session)
-    rows = parse_auction_calendar(html_text, today=today)
+    html_text = fetch_calendar_html()
+    rows = parse_yearly_calendar(html_text, today=today)
     if rows:
         return rows
     logger.info("calendar: deterministic parse empty — trying LLM fallback")
