@@ -37,6 +37,18 @@ When something ships broken, when a methodology gap is exposed, or when a smoke 
 
 ## Entries (most recent first)
 
+## 2026-06-02 — OMO scalars (slf_draw_cr / bb_repo_usage_cr) retired: walled-PDF only, no HTML route-around
+
+**Trigger:** Follow-up to the auction-tables fix. These two scalars sourced from BB's "Open Market Operations as on <date>" press release (the old combined "Result of the Auction of Repo, ALS, SLF, SDF and IBLF" release), and had never landed (0 rows since launch).
+
+**What went wrong:** Same restructure as the auction tables — the OMO release became a PDF behind the F5 + image-CAPTCHA wall. But UNLIKE the auction results/calendar (which had clean HTML alternatives on `treasury` / `auc_calendar/1`), the SLF/Repo *accepted amounts* have NO HTML source: checked `call_money_market` (interbank call money, not BB ops), `mptools` (prose describing the corridor — the *rates* land via `policy_rate_*`), `money_market_ref_rate` (DOMMR/BOFR products), and every `monetaryactivity/*` + `financialactivity/*` nav page. The wall itself is genuinely intractable: 7 retrieval methods failed, and an instrumented attempt showed the in-iframe CAPTCHA re-serves a **byte-identical** challenge — the `#jar` submit never advances, so even a correct answer (`claude-sonnet-4-6` read the refresh-icon correctly) does nothing. Structural, not model-accuracy.
+
+**Lesson:** "Route around the wall" only works if an accessible alternate actually exists — verify it does before promising a fix. When the data is genuinely PDF-only behind an unsolvable wall, the honest move is to RETIRE the metric (and its now-dead subsystem), not to carry never-working code or chase the wall indefinitely. Time-box wall spikes; a byte-identical re-served challenge across attempts = structural dead end, stop.
+
+**Hotfix:** PR #62 — removed `slf_draw_cr` + `bb_repo_usage_cr` from `sources-v3.json` and deleted the last-consumer `/rrpt/` subsystem (`fetchers/rrpt_discovery.py`, `parsers/html_auction_press_row.py` + prompt, the `fetch_all` `latest_rrpt_link` branch + `_download_rendered_html`, tests). 642 deletions; 679 tests pass.
+
+**Cross-references:** AGENTS.md landmine 24; auto-memory `project_econdelta_r2_auction_html_sources`; the auction-restructure entry below.
+
 ## 2026-06-02 — BB retired the auction RESULTS + CALENDAR sources behind a CAPTCHA wall; PR #48's tables stayed empty
 
 **Trigger:** Asked to "rewrite `discover_latest_rrpt_link` + re-enable `auction.timer`." A read-only box dry-run showed the solver-CLEARED press-release listing had ZERO `/rrpt/` anchors — so discovery was not the bug; the SOURCE had moved.
