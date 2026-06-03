@@ -11,7 +11,6 @@ import argparse
 import logging
 import sys
 from datetime import date as _date
-from pathlib import Path
 from urllib.request import Request, urlopen
 
 from bs4 import BeautifulSoup
@@ -25,11 +24,9 @@ from media_screen.extract import extract_numbers
 from media_screen.filter import classify
 from utils.notifier import notify
 from utils.supabase_reader import SupabaseReadError, get_metric_history, get_open_media_review
-from utils.supabase_writer import insert_media_review_rows
+from utils.supabase_writer import SupabaseWriteError, insert_media_review_rows
 
 logger = logging.getLogger("media_screen")
-
-REPO_ROOT = Path(__file__).resolve().parent.parent
 
 # (outlet_label, listing_url, article_pattern) — one entry per outlet to sweep.
 # Phase 1 seed; extend or move to config as real candidate volume reveals more.
@@ -67,8 +64,11 @@ def _fetch_article_text(url: str) -> str:
     with urlopen(req, timeout=_LISTING_TIMEOUT_S) as r:
         html = r.read().decode("utf-8", errors="replace")
     soup = BeautifulSoup(html, "html.parser")
-    # Prefer the article body; fall back to all text.
-    for tag in ("article", "main", "div"):
+    # Prefer a semantic body element. A bare soup.find("div") returns the first
+    # <div> in the document (usually the page header/nav wrapper) rather than the
+    # article body, so we only trust the semantic tags and otherwise fall back to
+    # the whole document text — never to an arbitrary leading <div>.
+    for tag in ("article", "main"):
         el = soup.find(tag)
         if el:
             return el.get_text(" ", strip=True)
@@ -135,7 +135,15 @@ def run_screen(*, dry_run: bool) -> int:
             if c is not None:
                 candidates.append(c)
 
-    candidates = drop_already_open(candidates, get_open_media_review())
+    # Dedup against open review rows. A read failure here must not silently
+    # discard the day's detected candidates — log, notify, and bail with rc=1.
+    try:
+        open_rows = get_open_media_review()
+    except SupabaseReadError as e:
+        logger.exception("media screen: could not read open review rows")
+        notify("error", "media screen failed", f"open-review read failed: {e}")
+        return 1
+    candidates = drop_already_open(candidates, open_rows)
     digest = format_digest(candidates)
 
     if dry_run:
@@ -144,8 +152,16 @@ def run_screen(*, dry_run: bool) -> int:
         logger.info("dry-run: %d candidate(s), no insert/notify", len(candidates))
         return 0
 
+    # Insert survivors. A write failure must be logged and surfaced — the digest
+    # has already been computed, so a silent throw would leave rows unwritten with
+    # no recorded failure.
     if candidates:
-        insert_media_review_rows(candidates)
+        try:
+            insert_media_review_rows(candidates)
+        except SupabaseWriteError as e:
+            logger.exception("media screen: insert into media_review failed")
+            notify("error", "media screen failed", f"media_review insert failed: {e}")
+            return 1
     if digest is not None:
         notify("warning", digest[0], digest[1], fields=digest[2])
     logger.info("media screen: %d candidate(s) inserted", len(candidates))
