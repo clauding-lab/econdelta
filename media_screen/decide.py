@@ -14,15 +14,19 @@ import sys
 
 from utils.supabase_writer import decide_media_review
 
+# Past-tense status for human-facing messages: "reject" → "rejected", not "rejectd".
+_DECISION_PAST = {"approve": "approved", "reject": "rejected"}
+
 
 def apply_decision(review_id, decision, *, actor, decider=decide_media_review) -> dict:
     """Flip the row and return a friendly result. ok=False if it wasn't pending."""
     updated = decider(review_id, decision, actor=actor)
     if updated:
+        past = _DECISION_PAST.get(decision, f"{decision}d")
         return {
             "ok": True,
             "review_id": int(review_id),
-            "message": f"media_review {review_id} → {decision}d by {actor}",
+            "message": f"media_review {review_id} → {past} by {actor}",
         }
     return {
         "ok": False,

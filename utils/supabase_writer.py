@@ -581,7 +581,6 @@ def set_media_review_status(review_id, status, *, applied: bool = False,
     base_url, key = _resolve_credentials(url, service_key)
     payload: dict = {"status": status}
     if applied:
-        from datetime import datetime, timezone
         payload["applied_at"] = datetime.now(timezone.utc).isoformat()
     endpoint = f"{base_url}/rest/v1/media_review?id=eq.{int(review_id)}"
     headers = {"apikey": key, "Authorization": f"Bearer {key}",
@@ -610,7 +609,6 @@ def decide_media_review(review_id, decision, *, actor, url=None, service_key=Non
     if status is None:
         raise ValueError(f"decision must be 'approve' or 'reject', got {decision!r}")
     base_url, key = _resolve_credentials(url, service_key)
-    from datetime import datetime, timezone
     payload = {
         "status": status,
         "decided_by": actor,
