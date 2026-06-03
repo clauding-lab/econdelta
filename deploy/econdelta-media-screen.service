@@ -30,9 +30,13 @@ ProtectSystem=strict
 ProtectHome=read-only
 ReadWritePaths=/home/adnan-local/econdelta/data /home/adnan-local/econdelta/logs
 
-# LLM extraction per article adds latency — 600s gives ample headroom for
-# ~5 articles × (fetch + LLM call) without hitting the systemd timeout.
-TimeoutStartSec=600
+# LLM extraction per article adds latency. extract.py calls run_max at
+# effort='high', which on the pinned box CLI maps to a high-effort Opus call —
+# worst-case Opus latency under Max load can reach ~180s/call. ~5 articles ×
+# (HTTP fetch + LLM call) can exceed 600s, so 600s risks a systemd kill mid-run
+# after a partial insert. 1800s matches StartLimitIntervalSec (one restart fits
+# the window) and mirrors the briefing service's generous LLM headroom.
+TimeoutStartSec=1800
 Restart=on-failure
 RestartSec=300
 

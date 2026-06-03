@@ -84,9 +84,21 @@ systemctl daemon-reload
 
 # Enable timers (not services — services are triggered by timers). Includes the
 # retry timers (forex/aggregate/parse) that backstop the primary daily fires.
-for t in econdelta-forex econdelta-commodity econdelta-aggregate econdelta-dse econdelta-dse-dayend econdelta-fetch econdelta-parse \
-         econdelta-forex-retry econdelta-aggregate-retry econdelta-parse-retry econdelta-briefing \
-         econdelta-auction econdelta-pink-sheet econdelta-imf-eff econdelta-imf-debt; do
+# NOTE (landmine 19): this is a hardcoded list, not a glob — a new timer file is
+# copied by the glob above but NEVER enabled unless its name appears here.
+#
+# econdelta-media-screen is intentionally OMITTED below: it is SIGN-OFF GATED
+# (plan Task 9). Its .service/.timer are copied by the glob above, but the timer
+# must NOT auto-enable until Adnan signs off on a live `--dry-run` on the box.
+# To enable after sign-off, add `econdelta-media-screen` to the list below and
+# document the enable in the VPS deploy notes.
+TIMERS=(
+  econdelta-forex econdelta-commodity econdelta-aggregate econdelta-dse econdelta-dse-dayend econdelta-fetch econdelta-parse
+  econdelta-forex-retry econdelta-aggregate-retry econdelta-parse-retry econdelta-briefing
+  econdelta-auction econdelta-pink-sheet econdelta-imf-eff econdelta-imf-debt
+  # econdelta-media-screen   # enable only after dry-run sign-off (plan Task 9)
+)
+for t in "${TIMERS[@]}"; do
   systemctl enable --now "${t}.timer"
 done
 
