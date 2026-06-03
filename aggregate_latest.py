@@ -576,6 +576,70 @@ def _build_source_as_of_map(domains: dict[str, dict[str, Any]]) -> dict[str, dat
     return result
 
 
+def _apply_media_overrides(
+    data: dict[str, Any],
+    source_as_of_map: dict[str, date],
+    *,
+    writer=None,
+    reader=None,
+    set_status=None,
+) -> None:
+    """Re-assert approved media overrides into metric_history AFTER the normal
+    upsert, so a human-approved press value wins until BB's pipeline supersedes
+    it (spec D6). EconDelta stays the sole writer; the override write reuses
+    _apply_brief_aliases so it reaches the brief keys. Best-effort."""
+    from datetime import date as _date
+
+    from media_screen.supersede import is_superseded
+    from utils.supabase_reader import get_active_media_review
+    from utils.supabase_writer import (
+        SupabaseWriteError,
+        set_media_review_status,
+        upsert_metric_history,
+    )
+
+    writer = writer or upsert_metric_history
+    reader = reader or get_active_media_review
+    set_status = set_status or set_media_review_status
+
+    try:
+        rows = reader()
+    except Exception as e:  # noqa: BLE001 — overrides must never break aggregate
+        logger.warning("media overrides: could not read active rows: %s", e)
+        return
+
+    for r in rows:
+        mid = r["metric_id"]
+        press_as_of = _date.fromisoformat(str(r["press_as_of"])[:10])
+        automated_value = data.get(mid)
+        automated_value = float(automated_value) if isinstance(automated_value, (int, float)) else None
+        parsed_baseline = float(r["parsed_value"]) if r.get("parsed_value") is not None else None
+        if is_superseded(
+            kind=r["kind"],
+            press_as_of=press_as_of,
+            parsed_baseline=parsed_baseline,
+            automated_value=automated_value,
+            automated_as_of=source_as_of_map.get(mid),
+        ):
+            set_status(r["id"], "superseded")
+            logger.info("media override %s (%s @ %s) superseded by BB", r["id"], mid, press_as_of)
+            continue
+        override_data = {mid: float(r["press_value"])}
+        _apply_brief_aliases(override_data)
+        try:
+            writer(
+                data=override_data,
+                as_of=press_as_of,
+                source=f"media-approved:{r.get('source_outlet') or 'press'}",
+            )
+        except SupabaseWriteError as e:
+            logger.warning("media override write failed for %s: %s", mid, e)
+            continue
+        if r["status"] == "approved":
+            set_status(r["id"], "applied", applied=True)
+        logger.info("media override applied: %s = %s @ %s", mid, r["press_value"], press_as_of)
+
+
 # EconDelta indicator-id ↔ brief metric_id alias map. The brief expects a
 # specific naming convention per section (`macro_*`, `remit_*`, `fiscal_*`,
 # `banking_*`, `food_*`); EconDelta keeps its own indicator IDs authoritative.
@@ -1020,6 +1084,7 @@ def main() -> int:
                 "upserted %d rows to Supabase metric_history (as_of=%s, overrides=%d)",
                 n_rows, now.date(), len(source_as_of_map),
             )
+            _apply_media_overrides(data, source_as_of_map)
         except SupabaseWriteError as e:
             logger.warning(
                 "Supabase write failed: %s — continuing with local archive only", e,
