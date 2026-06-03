@@ -104,3 +104,14 @@ def get_open_media_review(*, url: str | None = None, key: str | None = None,
         "media_review?select=metric_id,press_as_of,status&status=in.(pending,rejected)",
         url=url, key=key, session=session,
     )
+
+
+def get_active_media_review(*, url: str | None = None, key: str | None = None,
+                            session: "requests.Session | None" = None) -> list[dict[str, Any]]:
+    """Approved or already-applied media overrides — the apply pass re-asserts
+    these each aggregate run and checks whether BB's pipeline has superseded them."""
+    return _get(
+        "media_review?select=id,metric_id,parsed_value,parsed_as_of,press_value,"
+        "press_as_of,kind,source_outlet,status&status=in.(approved,applied)",
+        url=url, key=key, session=session,
+    )

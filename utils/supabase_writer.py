@@ -574,6 +574,27 @@ def insert_media_review_rows(candidates, *, url=None, service_key=None,
     return len(rows)
 
 
+def set_media_review_status(review_id, status, *, applied: bool = False,
+                            url=None, service_key=None, timeout=_DEFAULT_TIMEOUT, session=None) -> None:
+    """PATCH one media_review row's status (+ applied_at when applied=True).
+    Raises SupabaseWriteError on non-2xx."""
+    base_url, key = _resolve_credentials(url, service_key)
+    payload: dict = {"status": status}
+    if applied:
+        from datetime import datetime, timezone
+        payload["applied_at"] = datetime.now(timezone.utc).isoformat()
+    endpoint = f"{base_url}/rest/v1/media_review?id=eq.{int(review_id)}"
+    headers = {"apikey": key, "Authorization": f"Bearer {key}",
+               "Content-Type": "application/json", "Prefer": "return=minimal"}
+    sess = session or requests.Session()
+    try:
+        resp = sess.patch(endpoint, json=payload, headers=headers, timeout=timeout)
+    except requests.exceptions.RequestException as e:
+        raise SupabaseWriteError(f"media_review status patch network error: {e}") from e
+    if resp.status_code not in (200, 204):
+        raise SupabaseWriteError(f"media_review status patch HTTP {resp.status_code}: {resp.text[:200]}")
+
+
 def upsert_metric_definitions_seed(definitions: list[dict]) -> int:
     """Insert metric_definitions rows with ON CONFLICT (metric_id) DO NOTHING.
 
