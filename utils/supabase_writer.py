@@ -595,6 +595,43 @@ def set_media_review_status(review_id, status, *, applied: bool = False,
         raise SupabaseWriteError(f"media_review status patch HTTP {resp.status_code}: {resp.text[:200]}")
 
 
+_DECISION_STATUS = {"approve": "approved", "reject": "rejected"}
+
+
+def decide_media_review(review_id, decision, *, actor, url=None, service_key=None,
+                        timeout=_DEFAULT_TIMEOUT, session=None) -> int:
+    """Flip a PENDING media_review row to approved/rejected (the Phase 3 decision).
+
+    Conditional on status='pending', so a repeat or an already-decided row is a
+    no-op (returns 0). Records decided_by + decided_at. Returns rows updated (0/1).
+    Raises ValueError on an unknown decision; SupabaseWriteError on non-2xx.
+    """
+    status = _DECISION_STATUS.get(decision)
+    if status is None:
+        raise ValueError(f"decision must be 'approve' or 'reject', got {decision!r}")
+    base_url, key = _resolve_credentials(url, service_key)
+    from datetime import datetime, timezone
+    payload = {
+        "status": status,
+        "decided_by": actor,
+        "decided_at": datetime.now(timezone.utc).isoformat(),
+    }
+    endpoint = f"{base_url}/rest/v1/media_review?id=eq.{int(review_id)}&status=eq.pending"
+    headers = {"apikey": key, "Authorization": f"Bearer {key}",
+               "Content-Type": "application/json", "Prefer": "return=representation"}
+    sess = session or requests.Session()
+    try:
+        resp = sess.patch(endpoint, json=payload, headers=headers, timeout=timeout)
+    except requests.exceptions.RequestException as e:
+        raise SupabaseWriteError(f"media_review decide network error: {e}") from e
+    if resp.status_code not in (200, 204):
+        raise SupabaseWriteError(f"media_review decide HTTP {resp.status_code}: {resp.text[:200]}")
+    try:
+        return len(resp.json())
+    except Exception:  # noqa: BLE001 — return=minimal or empty body → treat as 0
+        return 0
+
+
 def upsert_metric_definitions_seed(definitions: list[dict]) -> int:
     """Insert metric_definitions rows with ON CONFLICT (metric_id) DO NOTHING.
 
