@@ -95,3 +95,12 @@ def get_recent_briefings(*, limit: int, url: str | None = None, key: str | None 
     """The last `limit` briefings, newest first (for prompt context + open_threads)."""
     path = f"briefings?order=week_of.desc&limit={limit}"
     return _get(path, url=url, key=key, session=session)
+
+
+def get_open_media_review(*, url: str | None = None, key: str | None = None,
+                          session: "requests.Session | None" = None) -> list[dict[str, Any]]:
+    """Rows still pending or recently rejected — used to dedup new candidates."""
+    return _get(
+        "media_review?select=metric_id,press_as_of,status&status=in.(pending,rejected)",
+        url=url, key=key, session=session,
+    )
