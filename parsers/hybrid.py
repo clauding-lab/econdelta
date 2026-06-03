@@ -232,6 +232,25 @@ def _build_snapshot(
     return snapshot
 
 
+def _recover_source_as_of(parser: Any, artifact: FetchResult) -> "date | None":
+    """Best-effort publication-date recovery for the LLM-extract fallback path.
+
+    The deterministic parser raised before it could supply ``source_as_of`` (its
+    value-extraction failed), so ask the parser to recover the date straight from
+    the artifact if it knows how. Parsers that don't implement
+    ``recover_source_as_of`` simply yield None. Never raises — date recovery must
+    not break value parsing.
+    """
+    recover = getattr(parser, "recover_source_as_of", None)
+    if recover is None:
+        return None
+    try:
+        return recover(artifact)
+    except Exception as e:  # noqa: BLE001 — recovery is best-effort
+        logger.warning("source_as_of recovery failed for %s: %s", artifact.indicator_id, e)
+        return None
+
+
 def parse_one(artifact: FetchResult, indicator: dict, history: list[float]) -> dict:
     parse_block = indicator["parse"]
     instruction = indicator["fetch"].get("task", "")
@@ -296,7 +315,10 @@ def parse_one(artifact: FetchResult, indicator: dict, history: list[float]) -> d
                                    sanity_note=f"sanity flagged, extract errored: {e}",
                                    source_as_of=det_source_as_of)
 
-    # LLM extract path (deterministic failed) — source_as_of not recoverable here
+    # LLM extract path (deterministic failed). Recover the publication date
+    # directly from the artifact so a slow-cadence metric (e.g. the quarterly
+    # FSAR) is dated by its real reporting period, not stamped with today's run
+    # date — the latter made a stale Q3-2025 NPL read as fresh on The Brief.
     try:
         extract = _llm_extract(indicator=indicator, artifact=artifact)
         v_llm = (extract.parsed or {}).get("value")
@@ -305,7 +327,8 @@ def parse_one(artifact: FetchResult, indicator: dict, history: list[float]) -> d
         if isinstance(v_llm, (int, float)):
             validate_value(value=float(v_llm), value_type=value_type, valid_range=valid_range)
         return _build_snapshot(indicator=indicator, artifact=artifact, value=v_llm,
-                               provenance="llm_extracted", parse_strategy=parse_block["deterministic"])
+                               provenance="llm_extracted", parse_strategy=parse_block["deterministic"],
+                               source_as_of=_recover_source_as_of(parser, artifact))
     except (MaxCallError, InvalidValueError) as e:
         logger.error("extract_failed for %s: %s", indicator["id"], e)
         return _build_snapshot(indicator=indicator, artifact=artifact, value=0.0,
