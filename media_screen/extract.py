@@ -51,7 +51,7 @@ def extract_numbers(
     except MaxCallError as e:
         logger.warning("media extract LLM failed for %s: %s", source_url, e)
         return []
-    findings = (result.parsed or {}).get("findings") or []
+    findings = (result.parsed if isinstance(result.parsed, dict) else {}).get("findings") or []
     out: list[Extracted] = []
     for f in findings:
         try:

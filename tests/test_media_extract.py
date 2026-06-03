@@ -34,3 +34,13 @@ def test_llm_error_returns_empty(caplog):
     with patch("media_screen.extract.run_max", side_effect=MaxCallError("boom")):
         out = extract_numbers("t", specs=SPECS, source_url="http://x", source_outlet="tbs")
     assert out == []  # screen fails safe — no candidates
+    assert "media extract LLM failed" in caplog.text  # error path was actually taken
+
+
+def test_malformed_finding_returns_empty():
+    # Finding has no "value" key — the KeyError catch in the loop must skip it,
+    # not crash, so a malformed payload returns no candidates.
+    fake = type("R", (), {"parsed": {"findings": [{"no_value_key": 1}]}, "raw_text": ""})()
+    with patch("media_screen.extract.run_max", return_value=fake):
+        out = extract_numbers("t", specs=SPECS, source_url="http://x", source_outlet="tbs")
+    assert out == []
