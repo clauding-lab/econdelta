@@ -1,0 +1,11 @@
+[Unit]
+Description=EconDelta media screen — daily 15:30 UTC (21:30 BDT), after evening press publishes
+Requires=econdelta-media-screen.service
+
+[Timer]
+OnCalendar=*-*-* 15:30:00 UTC
+Persistent=true
+RandomizedDelaySec=60
+
+[Install]
+WantedBy=timers.target
