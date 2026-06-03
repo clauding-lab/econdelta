@@ -561,6 +561,18 @@ def _build_source_as_of_map(domains: dict[str, dict[str, Any]]) -> dict[str, dat
                 logger.debug(
                     "skipping malformed source_as_of=%r for %s", raw, indicator_id
                 )
+
+    # The brief reads brief-side keys (e.g. banking_npl_pct), not the EconDelta
+    # indicator ids — _apply_brief_aliases copies the VALUE to those keys but not
+    # the date. Propagate each override to its alias / conversion target so the
+    # write lands at the right as_of for the key the SPA actually reads. A unit
+    # conversion changes the value, not the reporting period — so same date.
+    for brief_key, econdelta_key in BRIEF_ALIASES.items():
+        if econdelta_key in result and brief_key not in result:
+            result[brief_key] = result[econdelta_key]
+    for brief_key, (source_key, _mult) in BRIEF_CONVERSIONS.items():
+        if source_key in result and brief_key not in result:
+            result[brief_key] = result[source_key]
     return result
 
 

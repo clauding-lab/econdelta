@@ -189,6 +189,54 @@ class TestHybridLlmPathRecoversDate:
 # Part 4: false-freshness guardrail — warn on undated slow-cadence metrics
 # ---------------------------------------------------------------------------
 
+class TestSourceAsOfPropagatesToBriefAliases:
+    """The Brief's banking builder calls get_latest("banking_npl_pct") — the
+    brief-side ALIAS, not the EconDelta indicator id ("gross_npl_ratio"). The
+    publication-date override must follow that rename, or the SPA never sees it."""
+
+    def test_alias_inherits_source_indicator_date(self):
+        import aggregate_latest as agg
+
+        domains = {
+            "money_market": {
+                "gross_npl_ratio": {
+                    "value": 35.73, "cadence": "quarterly",
+                    "source_as_of": "2025-09-30",
+                    "scraped_at": datetime.now(timezone.utc).isoformat(),
+                },
+                "banking_sector_crar": {
+                    "value": 1.56, "cadence": "quarterly",
+                    "source_as_of": "2025-09-30",
+                    "scraped_at": datetime.now(timezone.utc).isoformat(),
+                },
+            }
+        }
+        m = agg._build_source_as_of_map(domains)
+        assert m["gross_npl_ratio"] == date(2025, 9, 30)
+        # The keys the brief actually reads — must inherit the same date:
+        assert m["banking_npl_pct"] == date(2025, 9, 30)
+        assert m["banking_car_pct"] == date(2025, 9, 30)
+
+    def test_unit_conversion_alias_inherits_date(self, monkeypatch):
+        """A converted brief key (value scaled) still reports the SOURCE's date —
+        a unit conversion changes the number, not the reporting period."""
+        import aggregate_latest as agg
+
+        monkeypatch.setitem(agg.BRIEF_CONVERSIONS, "fake_brief_tn", ("some_quarterly_cr", 1e-5))
+        domains = {
+            "fiscal": {
+                "some_quarterly_cr": {
+                    "value": 1000.0, "cadence": "quarterly",
+                    "source_as_of": "2025-09-30",
+                    "scraped_at": datetime.now(timezone.utc).isoformat(),
+                },
+            }
+        }
+        m = agg._build_source_as_of_map(domains)
+        assert m["some_quarterly_cr"] == date(2025, 9, 30)
+        assert m["fake_brief_tn"] == date(2025, 9, 30)
+
+
 class TestUndatedQuarterlyWarns:
     def test_warns_when_quarterly_metric_lacks_source_as_of(self, caplog):
         import aggregate_latest as agg
