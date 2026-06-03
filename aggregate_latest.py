@@ -540,6 +540,20 @@ def _build_source_as_of_map(domains: dict[str, dict[str, Any]]) -> dict[str, dat
         for indicator_id, snapshot in indicators.items():
             raw = snapshot.get("source_as_of")
             if not raw:
+                # Daily metrics legitimately lack source_as_of (today's date is
+                # correct). But a slow-cadence metric with no recovered date will
+                # be stamped with today's run date, which makes a stale value look
+                # fresh on The Brief — surface it loudly instead of silently.
+                # Slow cadences in config/sources-v3.json are "quarterly" and
+                # "fiscal_year" (there is no "annual").
+                if snapshot.get("cadence") in ("quarterly", "fiscal_year"):
+                    logger.warning(
+                        "%s is %s cadence but carries no source_as_of — its "
+                        "metric_history row will be stamped with today's run date "
+                        "(a stale value can read as fresh). Check the parser's "
+                        "date recovery for this source.",
+                        indicator_id, snapshot.get("cadence"),
+                    )
                 continue
             try:
                 result[indicator_id] = date.fromisoformat(str(raw)[:10])
