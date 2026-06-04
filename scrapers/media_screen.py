@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import re
 import sys
 from datetime import date as _date
@@ -20,9 +21,10 @@ from bs4 import BeautifulSoup
 
 from media_screen.catalog import load_catalog
 from media_screen.dedup import drop_already_open
-from media_screen.digest import format_digest
+from media_screen.digest import format_report
 from media_screen.extract import extract_numbers
 from media_screen.filter import classify
+from media_screen.types import Candidate, Skip
 from utils.notifier import notify
 from utils.supabase_reader import SupabaseReadError, get_metric_history, get_open_media_review
 from utils.supabase_writer import SupabaseWriteError, insert_media_review_rows
@@ -146,51 +148,88 @@ def _parsed_for(metric_id: str) -> tuple[float | None, _date | None]:
     return float(rows[0]["value"]), _date.fromisoformat(str(rows[0]["as_of"])[:10])
 
 
+def _dedup_candidates(candidates: list[Candidate]) -> list[Candidate]:
+    """Collapse the same (metric_id, press_as_of) seen in multiple articles;
+    prefer the one carrying a source_quote."""
+    best: dict[tuple, Candidate] = {}
+    for c in candidates:
+        key = (c.metric_id, c.press_as_of)
+        cur = best.get(key)
+        if cur is None or (c.source_quote and not cur.source_quote):
+            best[key] = c
+    return list(best.values())
+
+
+def _dedup_skips(skips: list[Skip]) -> list[Skip]:
+    """Collapse duplicate (metric_id, period, reason) skips."""
+    best: dict[tuple, Skip] = {}
+    for s in skips:
+        best.setdefault((s.metric_id, s.period, s.reason), s)
+    return list(best.values())
+
+
 def run_screen(*, dry_run: bool, urls=None) -> int:
     specs = load_catalog()
     by_name = {n.lower(): s for s in specs for n in s.press_names}
     articles = _articles_from_urls(urls) if urls else _collect_articles(specs)
-    candidates = []
+    n_tbs = sum(1 for _, _, outlet in articles if outlet == "tbsnews")
+    n_ds = sum(1 for _, _, outlet in articles if outlet == "thedailystar")
+
+    candidates: list[Candidate] = []
+    skips: list[Skip] = []
     for text, url, outlet in articles:
         for ex in extract_numbers(text, specs=specs, source_url=url, source_outlet=outlet):
             spec = by_name.get(ex.indicator_hint.lower())
             if spec is None:
                 continue
             parsed_value, parsed_as_of = _parsed_for(spec.metric_id)
-            c = classify(spec.metric_id, parsed_value, parsed_as_of, ex,
-                         tolerance=spec.tolerance, valid_range=spec.valid_range)
-            if c is not None:
-                candidates.append(c)
+            result = classify(spec.metric_id, parsed_value, parsed_as_of, ex,
+                              tolerance=spec.tolerance, valid_range=spec.valid_range)
+            if isinstance(result, Candidate):
+                candidates.append(result)
+            else:
+                skips.append(result)
 
-    # Dedup against open review rows. A read failure here must not silently
-    # discard the day's detected candidates — log, notify, and bail with rc=1.
+    candidates = _dedup_candidates(candidates)
+    skips = _dedup_skips(skips)
+
+    # Dedup candidates against open review rows; the dropped ones become skips.
     try:
         open_rows = get_open_media_review()
     except SupabaseReadError as e:
         logger.exception("media screen: could not read open review rows")
         notify("error", "media screen failed", f"open-review read failed: {e}")
         return 1
-    candidates = drop_already_open(candidates, open_rows)
-    digest = format_digest(candidates)
+    kept = drop_already_open(candidates, open_rows)
+    for c in candidates:
+        if c not in kept:
+            skips.append(Skip(c.metric_id, c.press_value, c.press_as_of, "already-in-review"))
+    candidates = kept
 
     if dry_run:
-        for c in candidates:
-            print(f"[DRY-RUN] {c.metric_id} {c.kind} press={c.press_value}@{c.press_as_of} "
-                  f"(parsed {c.parsed_value}@{c.parsed_as_of}) <{c.source_url}>")
-        logger.info("dry-run: %d candidate(s), no insert/notify", len(candidates))
+        title, message, _ = format_report([(None, c) for c in candidates], skips, n_tbs, n_ds)
+        print(f"[DRY-RUN] {title}\n{message}")
+        logger.info("dry-run: %d candidate(s), %d skip(s), no insert/notify",
+                    len(candidates), len(skips))
         return 0
 
-    # Insert survivors. A write failure must be logged and surfaced.
+    ids: list[int] = []
     if candidates:
         try:
-            insert_media_review_rows(candidates)
+            ids = insert_media_review_rows(candidates)
         except SupabaseWriteError as e:
             logger.exception("media screen: insert into media_review failed")
             notify("error", "media screen failed", f"media_review insert failed: {e}")
             return 1
-    if digest is not None:
-        notify("warning", digest[0], digest[1], fields=digest[2])
-    logger.info("media screen: %d candidate(s) inserted", len(candidates))
+
+    title, message, fields = format_report(list(zip(ids, candidates)), skips, n_tbs, n_ds)
+    level = "warning" if candidates else "info"
+    webhook = os.environ.get("MEDIA_SCREEN_WEBHOOK_URL", "").strip()
+    if webhook:
+        notify(level, title, message, fields=fields, webhook_url=webhook)
+    else:
+        logger.warning("MEDIA_SCREEN_WEBHOOK_URL not set — skipping #thebrief report")
+    logger.info("media screen: %d candidate(s) inserted, %d skip(s)", len(candidates), len(skips))
     return 0
 
 
