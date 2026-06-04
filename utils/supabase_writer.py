@@ -540,13 +540,14 @@ def _normalize_definition(d: dict) -> dict:
 
 
 def insert_media_review_rows(candidates, *, url=None, service_key=None,
-                             timeout=_DEFAULT_TIMEOUT, session=None) -> int:
+                             timeout=_DEFAULT_TIMEOUT, session=None) -> list[int]:
     """Insert review Candidates as status='pending' rows into media_review.
 
-    Returns count inserted (0 if empty). Raises SupabaseWriteError on non-2xx.
+    Returns the inserted rows' ids (PostgREST preserves array order; [] if empty).
+    Raises SupabaseWriteError on non-2xx.
     """
     if not candidates:
-        return 0
+        return []
     base_url, key = _resolve_credentials(url, service_key)
     rows = [{
         "metric_id": c.metric_id,
@@ -561,9 +562,9 @@ def insert_media_review_rows(candidates, *, url=None, service_key=None,
         "confidence": c.confidence,
         "status": "pending",
     } for c in candidates]
-    endpoint = f"{base_url}/rest/v1/media_review"
+    endpoint = f"{base_url}/rest/v1/media_review?select=id"
     headers = {"apikey": key, "Authorization": f"Bearer {key}",
-               "Content-Type": "application/json", "Prefer": "return=minimal"}
+               "Content-Type": "application/json", "Prefer": "return=representation"}
     sess = session or requests.Session()
     try:
         resp = sess.post(endpoint, json=rows, headers=headers, timeout=timeout)
@@ -571,7 +572,7 @@ def insert_media_review_rows(candidates, *, url=None, service_key=None,
         raise SupabaseWriteError(f"media_review insert network error: {e}") from e
     if resp.status_code not in (200, 201, 204):
         raise SupabaseWriteError(f"media_review insert HTTP {resp.status_code}: {resp.text[:200]}")
-    return len(rows)
+    return [row["id"] for row in resp.json()]
 
 
 def set_media_review_status(review_id, status, *, applied: bool = False,

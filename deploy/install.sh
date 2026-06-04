@@ -44,6 +44,7 @@ if [[ ! -f "$ENV_FILE" ]]; then
   cat > "$ENV_FILE" <<EOF
 # EconDelta environment — edit before enabling timers
 DISCORD_WEBHOOK_URL=
+MEDIA_SCREEN_WEBHOOK_URL=${MEDIA_SCREEN_WEBHOOK_URL:-}
 SUPABASE_URL=
 SUPABASE_SERVICE_ROLE_KEY=
 CLAUDE_CODE_OAUTH_TOKEN=

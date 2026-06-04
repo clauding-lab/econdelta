@@ -31,6 +31,8 @@ def notify(
     title: str,
     message: str,
     fields: dict | None = None,
+    *,
+    webhook_url: str | None = None,
 ) -> bool:
     """Send a Discord embed alert.
 
@@ -63,8 +65,8 @@ def notify(
         _recent_alerts[dedup_key] = now
         return True
 
-    webhook_url = os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
-    if not webhook_url:
+    url = (webhook_url or "").strip() or os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
+    if not url:
         logger.warning(
             "DISCORD_WEBHOOK_URL is not set — skipping alert (%s: %s)", level, title
         )
@@ -85,7 +87,7 @@ def notify(
     payload = {"embeds": [embed]}
 
     try:
-        response = requests.post(webhook_url, json=payload, timeout=5)
+        response = requests.post(url, json=payload, timeout=5)
         response.raise_for_status()
         _recent_alerts[dedup_key] = now
         return True
