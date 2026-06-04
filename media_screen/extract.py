@@ -14,17 +14,26 @@ from media_screen.types import Extracted, MetricSpec
 
 logger = logging.getLogger("media_extract")
 
-_PROMPT = """You extract Bangladesh-economy figures from a news article for a banking desk.
+_PROMPT = """You extract Bangladesh banking/economy figures from one news article for a banking desk.
 
-For EACH of these indicators, if the article states a number for it, return one finding:
+Indicators to look for (the press may use different words):
 {names}
 
-Rules:
-- "period" MUST be the explicit reporting date the article gives (ISO YYYY-MM-DD,
-  using the last day of the stated month/quarter). If the article does not state a
-  clear period for the number, set "period" to null. NEVER guess a period.
-- "value" is the bare number (percent as a number, e.g. 32.26).
-- "quote" is the exact sentence containing the number.
+Return AT MOST ONE finding per indicator — the single banking-SECTOR-WIDE / overall
+headline figure. STRICT rules:
+- OVERALL ONLY. Return the whole-banking-sector / nationwide figure. Do NOT return
+  per-bank, per-category, or per-segment numbers (e.g. "private banks' NPL",
+  "specialised banks' CAR", a single bank's figure, a sub-total).
+- CORRECT UNIT. A ratio indicator (NPL ratio, CAR, inflation, credit growth) is a
+  PERCENTAGE (e.g. 32.26) — NEVER a Taka/crore AMOUNT. If the article gives only an
+  amount (e.g. "Tk 5.89 lakh crore") for a ratio indicator and not the overall
+  percentage, return NOTHING for that indicator.
+- PERIOD. "period" MUST be the explicit reporting date the article states (ISO
+  YYYY-MM-DD, the last day of the stated month/quarter). If no clear period is
+  stated, set "period" to null. NEVER guess a period.
+- "quote" is the exact sentence containing the figure.
+- If the article does not state an overall figure for an indicator, omit it.
+
 Return JSON ONLY: {{"findings": [{{"press_name": "...", "value": 0.0, "period": "YYYY-MM-DD"|null, "quote": "..."}}]}}
 
 ARTICLE:

@@ -10,6 +10,9 @@ class MetricSpec:
     metric_id: str            # EconDelta indicator id (alias propagation carries it to brief keys)
     press_names: tuple[str, ...]   # how the press refers to it ("NPL", "default loans", ...)
     tolerance: float          # absolute diff in the metric's unit below which press==parsed
+    # Plausible value bounds in the metric's unit — the unit guard. A press number
+    # outside this range is rejected (e.g. a Tk-crore amount mislabelled as a % ratio).
+    valid_range: tuple[float, float] = (float("-inf"), float("inf"))
 
 
 @dataclass(frozen=True)

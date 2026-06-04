@@ -18,7 +18,14 @@ def classify(
     ex: Extracted,
     *,
     tolerance: float,
+    valid_range: tuple[float, float] = (float("-inf"), float("inf")),
 ) -> Candidate | None:
+    # Rule 0: value must be plausible for this metric's unit. Rejects e.g. a
+    # Tk-crore amount mislabelled as a percent ratio (588704 vs the 0-50 NPL %).
+    lo, hi = valid_range
+    if not (lo <= ex.value <= hi):
+        return None
+
     # Rule 1: period MUST be explicit.
     if ex.period is None:
         return None

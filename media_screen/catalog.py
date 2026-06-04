@@ -10,20 +10,26 @@ from __future__ import annotations
 
 from media_screen.types import MetricSpec
 
-# (metric_id, press_names, tolerance-in-unit)
+# (metric_id, press_names, tolerance-in-unit, valid_range). valid_range is the
+# unit guard: a ratio is a percentage, so a Tk-crore amount mislabelled as the
+# ratio (e.g. NPL "Tk 5.89 lakh crore" = 588704) falls outside [0, 50] and is
+# rejected. Ratio metrics get tight percent bounds; the reserves amount-metric is
+# left permissive (relies on the headline-only extraction prompt instead).
 _CATALOG: tuple[MetricSpec, ...] = (
-    MetricSpec("gross_npl_ratio", ("NPL ratio", "non-performing loan", "default loan"), 0.05),
-    MetricSpec("banking_sector_crar", ("CAR", "CRAR", "capital adequacy"), 0.05),
+    MetricSpec("gross_npl_ratio", ("NPL ratio", "non-performing loan", "default loan"), 0.05, (0.0, 50.0)),
+    MetricSpec("banking_sector_crar", ("CAR", "CRAR", "capital adequacy"), 0.05, (0.0, 40.0)),
     MetricSpec(
         "fx_reserve_gross_and_bpm6",
         ("gross reserves", "forex reserves", "foreign exchange reserves"),
         0.05,
+        (0.0, 1e9),
     ),
-    MetricSpec("point_to_point_inflation", ("inflation", "point-to-point inflation", "CPI"), 0.05),
+    MetricSpec("point_to_point_inflation", ("inflation", "point-to-point inflation", "CPI"), 0.05, (0.0, 30.0)),
     MetricSpec(
         "private_sector_credit_yoy_pct",
         ("private sector credit growth", "credit growth"),
         0.05,
+        (0.0, 30.0),
     ),
 )
 

@@ -157,7 +157,8 @@ def run_screen(*, dry_run: bool, urls=None) -> int:
             if spec is None:
                 continue
             parsed_value, parsed_as_of = _parsed_for(spec.metric_id)
-            c = classify(spec.metric_id, parsed_value, parsed_as_of, ex, tolerance=spec.tolerance)
+            c = classify(spec.metric_id, parsed_value, parsed_as_of, ex,
+                         tolerance=spec.tolerance, valid_range=spec.valid_range)
             if c is not None:
                 candidates.append(c)
 
