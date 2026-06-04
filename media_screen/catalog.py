@@ -31,6 +31,26 @@ _CATALOG: tuple[MetricSpec, ...] = (
         0.05,
         (0.0, 30.0),
     ),
+    # --- 2026-06-04 expansion: press-reportable BB headline figures (adversarially
+    # vetted). The matcher is last-writer-wins ({n.lower(): spec}), so every alias must
+    # be UNIQUE across all specs and specific enough not to false-match — see
+    # tests/test_media_catalog.py::test_no_alias_collisions. ---
+    # Rates (ratio %): qualified so the rate/yield family can't collide.
+    MetricSpec("policy_rate_repo", ("policy repo rate", "policy interest rate", "central bank policy rate"), 0.05, (0.0, 30.0)),
+    MetricSpec("call_money_rate", ("call money rate", "interbank call money rate", "overnight call money rate"), 0.05, (0.0, 30.0)),
+    MetricSpec("tbill_91d_yield_pct", ("91-day treasury bill yield", "91-day t-bill yield", "91-day t-bill rate"), 0.05, (0.0, 30.0)),
+    # Inflation: "food inflation" is the distinct headlined component. (Bare "inflation"/
+    # "CPI" belong to point_to_point_inflation above; general_inflation is the SAME BB source.)
+    MetricSpec("food_inflation", ("food inflation", "food inflation rate"), 0.05, (0.0, 30.0)),
+    # External sector (amount, $bn): the FY-to-date marquee figures the press headlines.
+    MetricSpec("fy_remittance", ("remittance inflow", "fiscal-year remittance"), 0.15, (0.0, 1000.0)),
+    MetricSpec("fy_export", ("export earnings", "merchandise exports", "fiscal-year export earnings"), 0.2, (0.0, 1000.0)),
+    # Fiscal (amount, Tk crore FYTD).
+    MetricSpec("tax_revenue", ("nbr revenue collection", "tax revenue collection", "nbr tax collection"), 1500.0, (0.0, 1e7)),
+    # FX rate (amount, BDT/USD). CAVEAT: the tracked value is the BB crawling-peg MID rate;
+    # the press often quotes diverging SEGMENT rates (interbank/selling/kerb) that the
+    # extraction's overall-only rule may reject — expect more skips than candidates here.
+    MetricSpec("usd_bdt_exchange_rate", ("taka-dollar exchange rate", "taka per dollar", "interbank dollar rate"), 0.25, (80.0, 200.0)),
 )
 
 
