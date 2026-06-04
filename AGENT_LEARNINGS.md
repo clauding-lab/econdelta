@@ -37,6 +37,23 @@ When something ships broken, when a methodology gap is exposed, or when a smoke 
 
 ## Entries (most recent first)
 
+## 2026-06-04 — Two latent date-recovery bugs caught in review BEFORE merge: host-gating + first-match
+
+**Trigger:** Building PR 1 (add `source_as_of` recovery to the shared `pdf_table_row` parser). A premise-check during investigation and a 3-lens adversarial review workflow each caught a wrong assumption before it shipped.
+
+**What went wrong:**
+1. *Host gating (caught by checking the premise, not assuming it).* I almost gated report-detection on the URL host (`mof.gov.bd`). But `fetch_all.py:82` reassigns `url` to the discovered PDF link before `fetch_pdf`, so `FetchResult.source_url` is the RESOLVED link — for MoF a third-party object store (`objectstorage.…oraclecloud15.com`), not `mof.gov.bd`. Host gating would have returned `None` for every debt metric — a silent no-op that looks like success.
+2. *First-match stale-date (caught by the adversarial review's idiom-robustness lens).* The first draft used `re.search()` (first match) over the full PDF text. These gov reports print comparison/prior dates (`as of 30 June 2024`, `up to Jun FY25`); first-match can lock onto the STALE one — the exact NPL-class failure the PR exists to prevent. The reviewer reproduced it: `"as of 30 June 2024 … as of 31 December 2025"` → returned `2024-06-30`.
+3. Smaller, same review: malformed-day fall-through (`31 February` borrowing an unrelated FY label's month) and an over-broad `"debt bulletin"` content marker (the parser actually serves 4–5 families incl. a separate MoF fiscal page).
+
+**Lesson:** When a parser is shared across sources, the discriminator must be the PDF's own CONTENT (its title), not a URL/host the fetch layer may have rewritten; and date recovery from multi-period documents must take the LATEST match, never the first.
+
+**Prevention:** (a) Before gating on any field, verify what that field actually holds at the point the parser sees it (here: trace `source_url` back through `fetch_all`). (b) For any "recover a date from a document" task, assume comparison/historical dates exist and pick the latest valid match. (c) Adversarial review (multiple independent lenses + per-finding verification) earns its cost on exactly this class of plausible-but-wrong code. (d) Validate against the REAL artifacts across multiple issues (checked MoF issues 15/16/17), not one synthetic fixture.
+
+**Hotfix:** Shipped correct from the start (caught pre-merge). PR 1 / merge `6a42a15`: content-marker gating, `finditer` + latest-match, malformed-day → `None`, tightened marker to `"quarterly debt bulletin"`. 794 tests pass; live-validated.
+
+**Cross-references:** AGENTS.md landmine 29; auto-memory `project_econdelta_pdf_table_row_source_as_of`; relates to the NPL stale-`source_as_of` fix (#64/#65, landmines 26/28).
+
 ## 2026-06-04 — Approve/reject loop was broken for every future run: digest numbered by list index, not `media_review.id`
 
 **Trigger:** A 5-lens adversarial spec review (run as a Workflow BEFORE implementing the media-screen daily-report feature) — the integration lens flagged a CRITICAL by tracing the `approve N` identifier end-to-end across systems.
