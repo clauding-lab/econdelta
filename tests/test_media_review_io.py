@@ -23,15 +23,16 @@ def test_dedup_keeps_new_candidate():
     assert len(drop_already_open([_cand()], open_rows)) == 1
 
 
-def test_insert_posts_pending_rows():
+def test_insert_returns_inserted_ids():
     sess = MagicMock(spec=requests.Session)
     resp = MagicMock()
     resp.status_code = 201
     resp.text = ""
+    resp.json.return_value = [{"id": 42}]
     sess.post.return_value = resp
-    n = insert_media_review_rows([_cand()], url="https://x.supabase.co",
-                                 service_key="sk", session=sess)
-    assert n == 1
+    ids = insert_media_review_rows([_cand()], url="https://x.supabase.co",
+                                   service_key="sk", session=sess)
+    assert ids == [42]
     body = sess.post.call_args[1]["json"][0]
     assert body["metric_id"] == "gross_npl_ratio" and body["status"] == "pending"
-    assert body["press_as_of"] == "2026-03-31" and body["kind"] == "fresher_period"
+    assert sess.post.call_args[1]["headers"]["Prefer"] == "return=representation"
