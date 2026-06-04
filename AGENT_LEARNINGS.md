@@ -37,6 +37,20 @@ When something ships broken, when a methodology gap is exposed, or when a smoke 
 
 ## Entries (most recent first)
 
+## 2026-06-04 — Brief served a stale NPL (35.73% vs press 32.26%): correct value, missing `source_as_of`, nothing could supersede it
+
+**Trigger:** Fact-checking The Brief — it showed `banking_npl_pct` = 35.73% while the BD press (Daily Star / TBS) reported 32.26%. Investigation on the ExonVPS: the cached BB QFSAR PDF is `qfsar (july-september 2025).pdf`.
+
+**What went wrong:** Two compounding bugs. (1) **`source_as_of` was never recovered on the LLM-extract path.** The QFSAR is prose ("as of end-September 2025" / "July-September 2025"), so the deterministic `pdf_component` parser fails on it and the value comes back via the LLM fallback (`provenance=llm_extracted`). `source_as_of` recovery only ran on the deterministic path; `_extract_quarter_end`'s regex only matched "Quarter ending DD Month YYYY" → **0 matches across 71 pages**. So a *correct* Q3-2025 value (35.73%) landed with NO reporting date. Supersession is date-driven, so an undated row can never be replaced by a newer release → the faster end-Mar-2026 BB figure (32.26%) couldn't take over, and 132 daily-dated junk rows piled up. (2) **The alias the Brief actually reads wasn't propagated.** Fixing `gross_npl_ratio` wasn't enough — `builders/banking.py` reads the derived alias `banking_npl_pct`, and `source_as_of` wasn't carried through `BRIEF_ALIASES` / `BRIEF_CONVERSIONS`. Verifying the *real read key* (not the source key) is what caught it.
+
+**Lesson:** A correct value with a missing/wrong `source_as_of` is worse than no value — it serves stale data indefinitely because supersession is date-driven and nothing can replace an undated row. Slow-cadence metrics that fall to the LLM path need date recovery on THAT path, plus a guardrail that warns when one lands undated. And when verifying a downstream display bug, trace the EXACT key the consumer reads (often a derived alias), not just the source metric.
+
+**Prevention:** PR #64 — broadened `_extract_quarter_end` + `recover_source_as_of`, wired into `hybrid.parse_one`'s LLM fallback, and `_build_source_as_of_map` now warns on any undated slow-cadence metric (it flagged ~9 others — `debt_gdp_ratio`, `gdp`, `fy_export`, `categorywise_export`, `fy_import_lc`, `fy_remittance`, debt stocks — whose parsers still lack date recovery; tracked separately). PR #65 — propagate `source_as_of` through `BRIEF_ALIASES` / `BRIEF_CONVERSIONS`. The daily human-gated **media-screen** (PRs #66-68) is the general fix for "the press reports the new quarter before BB's slow pipeline catches up": it queues a period-pinned press value for owner approve/reject and applies it as a temporary bridge until BB's own release supersedes it.
+
+**Hotfix:** Deleted 132 daily-dated junk rows (`as_of > 2025-09-30` for the 4 NPL/CAR metrics); re-extract recovered `2025-09-30`; then the live media-screen override set `gross_npl_ratio` AND `banking_npl_pct` = 32.26 @ 2026-03-31 (`source=media-approved:thedailystar`), history retaining `2025-09-30: 35.73`.
+
+**Cross-references:** PRs #64/#65 (source_as_of recovery + alias propagation), #66-68 (media-screen); `docs/media-screen-copotron-wiring.md`; auto-memory `project_econdelta_media_screen_npl`; global `~/.claude/AGENT_LEARNINGS.md` 2026-06-04; sibling lesson 2026-06-01 (`project_econdelta_tier2_writepath_fix`, "2xx ≠ persisted") — both are "the write looked fine but the data was wrong."
+
 ## 2026-06-02 — OMO scalars (slf_draw_cr / bb_repo_usage_cr) retired: walled-PDF only, no HTML route-around
 
 **Trigger:** Follow-up to the auction-tables fix. These two scalars sourced from BB's "Open Market Operations as on <date>" press release (the old combined "Result of the Auction of Repo, ALS, SLF, SDF and IBLF" release), and had never landed (0 rows since launch).
