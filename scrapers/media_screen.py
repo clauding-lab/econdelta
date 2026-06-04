@@ -1,22 +1,23 @@
 """Daily media screen — detection only (Phase 1).
 
-Collects press articles, extracts dated figures via the Max CLI, compares each
-to the currently-parsed value, applies the strict filter, dedups against open
-review rows, inserts survivors as 'pending', and pings one Discord digest.
+Collects press articles (Daily Star + TBS banking sections, or a caller-supplied
+``--url`` list), extracts dated figures via the Max CLI, compares each to the
+currently-parsed value, applies the strict filter, dedups against open review
+rows, inserts survivors as 'pending', and pings one Discord digest.
 Writes ONLY media_review — never metric_history (Phases 2/3 handle apply).
 """
 from __future__ import annotations
 
 import argparse
 import logging
+import re
 import sys
 from datetime import date as _date
+from urllib.parse import urljoin, urlparse
 from urllib.request import Request, urlopen
 
 from bs4 import BeautifulSoup
 
-from fetchers.base import FetchError
-from fetchers.news_article_discovery import discover_latest_article_link
 from media_screen.catalog import load_catalog
 from media_screen.dedup import drop_already_open
 from media_screen.digest import format_digest
@@ -28,25 +29,21 @@ from utils.supabase_writer import SupabaseWriteError, insert_media_review_rows
 
 logger = logging.getLogger("media_screen")
 
-# (outlet_label, listing_url, article_pattern) — one entry per outlet to sweep.
-# Phase 1 seed; extend or move to config as real candidate volume reveals more.
+# (outlet_label, listing_url, article_pattern). Daily Star + TBS only at this
+# stage. Patterns match these sites' real article hrefs (section path + a
+# trailing numeric article id) — NOT a keyword slug. Relevance is decided
+# downstream by the catalog match + strict filter, so the sweep only needs the
+# latest articles in each banking section.
+#   TBS:        /economy/banking/<slug>-<id>     (7-digit id)
+#   Daily Star: /business/news/<slug>-<id> and /business/economy/news/<slug>-<id>
 _OUTLET_SOURCES: tuple[tuple[str, str, str], ...] = (
-    (
-        "tbsnews",
-        "https://www.tbsnews.net/economy/banking",
-        r"/economy/banking/[^\"/]+(npl|crar|reserve|inflation|credit)[^\"/]*",
-    ),
-    (
-        "thedailystar",
-        "https://www.thedailystar.net/business/banking",
-        r"/business/banking/[^\"/]+(npl|reserve|inflation|credit)[^\"/]*",
-    ),
-    (
-        "dhakatribune",
-        "https://www.dhakatribune.com/business/banking",
-        r"/business/banking/[^\"/]+(npl|reserve|inflation|credit)[^\"/]*",
-    ),
+    ("tbsnews", "https://www.tbsnews.net/economy/banking", r"/economy/[^\"']+-\d{5,}"),
+    ("thedailystar", "https://www.thedailystar.net/business/banking", r"/business/[^\"']+-\d{6,}"),
 )
+
+# How many latest articles to read per outlet each run. The figure-bearing story
+# usually isn't the single top item, so one-per-outlet missed everything.
+_MAX_ARTICLES_PER_OUTLET = 6
 
 _LISTING_TIMEOUT_S = 30
 _USER_AGENT = "EconDelta-MediaScreen/1.0"
@@ -65,9 +62,8 @@ def _fetch_article_text(url: str) -> str:
         html = r.read().decode("utf-8", errors="replace")
     soup = BeautifulSoup(html, "html.parser")
     # Prefer a semantic body element. A bare soup.find("div") returns the first
-    # <div> in the document (usually the page header/nav wrapper) rather than the
-    # article body, so we only trust the semantic tags and otherwise fall back to
-    # the whole document text — never to an arbitrary leading <div>.
+    # <div> (usually the header/nav wrapper), so trust only semantic tags and
+    # otherwise fall back to the whole document text.
     for tag in ("article", "main"):
         el = soup.find(tag)
         if el:
@@ -75,37 +71,66 @@ def _fetch_article_text(url: str) -> str:
     return soup.get_text(" ", strip=True)
 
 
-def _collect_articles(specs) -> list[tuple[str, str, str]]:
-    """Return [(text, url, outlet)] for the day's relevant press articles.
+def _discover_article_links(listing_html: str, base_url: str, pattern: str, limit: int) -> list[str]:
+    """Latest `limit` distinct article URLs in the listing matching `pattern`,
+    in document order (newest-first on these sites), as absolute URLs."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for m in re.finditer(r'href="([^"]+)"', listing_html):
+        href = m.group(1)
+        if re.search(pattern, href) and href not in seen:
+            seen.add(href)
+            out.append(urljoin(base_url, href))
+            if len(out) >= limit:
+                break
+    return out
 
-    Reuses fetchers.news_article_discovery.discover_latest_article_link + a
-    lightweight HTTP fetch per outlet (no Playwright: news articles don't need
-    bot-bypass). Best-effort: a fetch failure for one outlet is logged and
-    skipped — the screen must never crash on a bad source.
-    """
+
+def _outlet_of(url: str) -> str:
+    """Infer the outlet label from a URL's host (for the --url feed)."""
+    host = urlparse(url).netloc.lower()
+    if "tbsnews" in host:
+        return "tbsnews"
+    if "thedailystar" in host:
+        return "thedailystar"
+    return host or "press"
+
+
+def _articles_from_urls(urls) -> list[tuple[str, str, str]]:
+    """Fetch a caller-supplied list of article URLs directly (the --url feed).
+    Best-effort: a fetch failure for one URL is logged and skipped."""
+    out: list[tuple[str, str, str]] = []
+    for u in urls:
+        try:
+            out.append((_fetch_article_text(u), u, _outlet_of(u)))
+        except Exception as e:  # noqa: BLE001 — never crash on one bad URL
+            logger.warning("media_screen: fed-URL fetch failed (%s): %s", u, e)
+    return out
+
+
+def _collect_articles(specs) -> list[tuple[str, str, str]]:
+    """Return [(text, url, outlet)] for the latest articles in each outlet's
+    banking section. Best-effort per outlet — fetch/parse failures skip-and-log,
+    so the screen never crashes on a bad source."""
     results: list[tuple[str, str, str]] = []
     for outlet, listing_url, article_pattern in _OUTLET_SOURCES:
         try:
             listing_html = _download_listing(listing_url)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.warning("media_screen: listing fetch failed for %s (%s): %s", outlet, listing_url, e)
             continue
-        try:
-            article_url = discover_latest_article_link(
-                html=listing_html,
-                base_url=listing_url,
-                article_pattern=article_pattern,
-            )
-        except (ValueError, FetchError) as e:
-            logger.warning("media_screen: article discovery failed for %s: %s", outlet, e)
+        links = _discover_article_links(listing_html, listing_url, article_pattern, _MAX_ARTICLES_PER_OUTLET)
+        if not links:
+            logger.warning("media_screen: no article links matched for %s", outlet)
             continue
-        try:
-            text = _fetch_article_text(article_url)
-        except Exception as e:
-            logger.warning("media_screen: article fetch failed for %s (%s): %s", outlet, article_url, e)
-            continue
-        logger.info("media_screen: collected article from %s: %s", outlet, article_url)
-        results.append((text, article_url, outlet))
+        for article_url in links:
+            try:
+                text = _fetch_article_text(article_url)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("media_screen: article fetch failed for %s (%s): %s", outlet, article_url, e)
+                continue
+            logger.info("media_screen: collected article from %s: %s", outlet, article_url)
+            results.append((text, article_url, outlet))
     return results
 
 
@@ -121,11 +146,12 @@ def _parsed_for(metric_id: str) -> tuple[float | None, _date | None]:
     return float(rows[0]["value"]), _date.fromisoformat(str(rows[0]["as_of"])[:10])
 
 
-def run_screen(*, dry_run: bool) -> int:
+def run_screen(*, dry_run: bool, urls=None) -> int:
     specs = load_catalog()
     by_name = {n.lower(): s for s in specs for n in s.press_names}
+    articles = _articles_from_urls(urls) if urls else _collect_articles(specs)
     candidates = []
-    for text, url, outlet in _collect_articles(specs):
+    for text, url, outlet in articles:
         for ex in extract_numbers(text, specs=specs, source_url=url, source_outlet=outlet):
             spec = by_name.get(ex.indicator_hint.lower())
             if spec is None:
@@ -148,13 +174,12 @@ def run_screen(*, dry_run: bool) -> int:
 
     if dry_run:
         for c in candidates:
-            print(f"[DRY-RUN] {c.metric_id} {c.kind} press={c.press_value}@{c.press_as_of}")
+            print(f"[DRY-RUN] {c.metric_id} {c.kind} press={c.press_value}@{c.press_as_of} "
+                  f"(parsed {c.parsed_value}@{c.parsed_as_of}) <{c.source_url}>")
         logger.info("dry-run: %d candidate(s), no insert/notify", len(candidates))
         return 0
 
-    # Insert survivors. A write failure must be logged and surfaced — the digest
-    # has already been computed, so a silent throw would leave rows unwritten with
-    # no recorded failure.
+    # Insert survivors. A write failure must be logged and surfaced.
     if candidates:
         try:
             insert_media_review_rows(candidates)
@@ -173,8 +198,10 @@ def main() -> int:
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--url", action="append", dest="urls", default=None,
+                    help="Feed specific article URL(s) instead of sweeping sections (repeatable).")
     args = ap.parse_args()
-    return run_screen(dry_run=args.dry_run)
+    return run_screen(dry_run=args.dry_run, urls=args.urls)
 
 
 if __name__ == "__main__":
