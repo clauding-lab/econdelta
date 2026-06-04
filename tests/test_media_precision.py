@@ -6,7 +6,7 @@ from datetime import date
 
 from media_screen.catalog import load_catalog
 from media_screen.filter import classify
-from media_screen.types import Extracted
+from media_screen.types import Candidate, Extracted, Skip
 
 P_AS_OF = date(2025, 9, 30)
 
@@ -16,28 +16,28 @@ def _ex(value, period=date(2026, 3, 31)):
 
 
 def test_amount_mislabelled_as_ratio_is_rejected():
-    """Tk 5.88 lakh crore (=588704) is NOT a 0-50 percent ratio → rejected,
-    even though it has a valid fresher period."""
-    assert classify("gross_npl_ratio", 35.73, P_AS_OF, _ex(588704.0),
-                    tolerance=0.05, valid_range=(0.0, 50.0)) is None
+    r = classify("gross_npl_ratio", 35.73, P_AS_OF, _ex(588704.0),
+                 tolerance=0.05, valid_range=(0.0, 50.0))
+    assert isinstance(r, Skip) and r.reason == "out-of-range"
 
 
 def test_in_range_ratio_still_classifies():
     c = classify("gross_npl_ratio", 35.73, P_AS_OF, _ex(32.26),
                  tolerance=0.05, valid_range=(0.0, 50.0))
-    assert c is not None and c.kind == "fresher_period" and c.press_value == 32.26
+    assert isinstance(c, Candidate) and c.kind == "fresher_period" and c.press_value == 32.26
 
 
 def test_range_guard_runs_before_period_check():
-    """An out-of-range value is rejected regardless of period validity."""
-    assert classify("gross_npl_ratio", 35.73, P_AS_OF, _ex(416482.0, period=None),
-                    tolerance=0.05, valid_range=(0.0, 50.0)) is None
+    """An out-of-range value is rejected (reason=out-of-range) even with period=None,
+    proving the range guard fires before the period check."""
+    r = classify("gross_npl_ratio", 35.73, P_AS_OF, _ex(416482.0, period=None),
+                 tolerance=0.05, valid_range=(0.0, 50.0))
+    assert isinstance(r, Skip) and r.reason == "out-of-range"
 
 
 def test_default_range_is_permissive():
-    """No valid_range supplied → behaves as before (no unit guard)."""
     c = classify("x", None, None, _ex(588704.0), tolerance=0.05)
-    assert c is not None
+    assert isinstance(c, Candidate)
 
 
 def test_every_catalog_spec_has_a_sane_range():
