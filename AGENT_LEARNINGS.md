@@ -37,6 +37,20 @@ When something ships broken, when a methodology gap is exposed, or when a smoke 
 
 ## Entries (most recent first)
 
+## 2026-06-04 — Approve/reject loop was broken for every future run: digest numbered by list index, not `media_review.id`
+
+**Trigger:** A 5-lens adversarial spec review (run as a Workflow BEFORE implementing the media-screen daily-report feature) — the integration lens flagged a CRITICAL by tracing the `approve N` identifier end-to-end across systems.
+
+**What went wrong:** `media_screen/digest.py` numbered candidates by their position in the digest (`enumerate` → `i+1`) and instructed *"Reply `approve N`"*. But `media_screen/decide.py` and Copotron interpret `N` as the `media_review.id`. `insert_media_review_rows` posted with `Prefer: return=minimal` and returned a count, so the real ids never reached the digest. The loop was wired + "tested" the prior session and *appeared* to work — but ONLY because the first-ever `media_review` rows had ids 1, 2, coinciding with digest positions 1, 2. On the next real candidate (ids ≥ 3) a reply of `approve 1` would PATCH `media_review.id=1` (the old, already-applied NPL row) → a silent no-op, or worse, approve the wrong row. The whole #thebrief approve loop would have silently failed in production.
+
+**Lesson:** A feature can pass a single happy-path live test *by coincidence* (here: ids == positions on the very first run) while being broken for every subsequent run. When a value shown to a human is used as a command key downstream, it MUST be the real persistent key (the DB id), never a presentation-order index. A green live test ≠ correctness — trace identifiers end-to-end across system boundaries.
+
+**Prevention:** `insert_media_review_rows` now returns the inserted ids (`Prefer: return=representation`, `?select=id`); `run_screen` inserts kept candidates FIRST, then `format_report(zip(ids, candidates), …)` numbers each line by the real id; the digest reads `approve <id>`. Unit tests assert the integer in the message equals the inserted `media_review.id`, not the loop index (`test_candidate_uses_real_id_and_approve_reject`, `test_insert_returns_inserted_ids`). Methodology: run an adversarial multi-lens review of the SPEC before building, with one lens that traces each identifier/contract across files and systems — it caught this; the per-task reviews alone would not have (they see one task in isolation).
+
+**Hotfix:** Folded into the media-screen daily-report feature (merged `6fa68b5`): `d49e58d` (insert returns ids), `a63849a` (format_report numbers by id), `dd46b1a` (run_screen insert→zip→format).
+
+**Cross-references:** spec `docs/superpowers/specs/2026-06-04-media-screen-daily-report-design.md`; `docs/media-screen-copotron-wiring.md`; auto-memory `project_econdelta_media_screen_npl`; global `~/.claude/AGENT_LEARNINGS.md` 2026-06-04 (live-test-by-coincidence). **Candidate AGENTS.md landmine:** the media-screen digest numbers by the real `media_review.id`; `insert_media_review_rows` must return ids.
+
 ## 2026-06-04 — Brief served a stale NPL (35.73% vs press 32.26%): correct value, missing `source_as_of`, nothing could supersede it
 
 **Trigger:** Fact-checking The Brief — it showed `banking_npl_pct` = 35.73% while the BD press (Daily Star / TBS) reported 32.26%. Investigation on the ExonVPS: the cached BB QFSAR PDF is `qfsar (july-september 2025).pdf`.
