@@ -14,7 +14,7 @@ python -m playwright install chromium
 
 # As root:
 sudo bash deploy/install.sh
-sudo vim /etc/econdelta.env   # set DISCORD_WEBHOOK_URL, Supabase creds, CLAUDE_CODE_OAUTH_TOKEN
+sudo vim /etc/econdelta.env   # set DISCORD_WEBHOOK_URL, MEDIA_SCREEN_WEBHOOK_URL (#thebrief), Supabase creds, CLAUDE_CODE_OAUTH_TOKEN
 ```
 
 ## Verify
