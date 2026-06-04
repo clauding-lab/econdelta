@@ -37,3 +37,21 @@ class Candidate:
     source_url: str
     source_quote: str
     confidence: str
+
+
+@dataclass(frozen=True)
+class Skip:
+    """A tracked figure the screen saw but did NOT raise as a candidate, with why."""
+    metric_id: str
+    value: float
+    period: date | None
+    reason: str               # one of SKIP_REASONS
+
+
+SKIP_REASONS = frozenset({
+    "out-of-range",           # value outside the metric's valid_range (unit guard)
+    "no-period",              # no explicit reporting period
+    "matches-current-data",   # same period, value within tolerance of current
+    "older-period",           # press period older than what we already have
+    "already-in-review",      # a valid candidate already pending/rejected in media_review
+})
