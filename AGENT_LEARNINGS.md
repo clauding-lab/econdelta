@@ -37,6 +37,20 @@ When something ships broken, when a methodology gap is exposed, or when a smoke 
 
 ## Entries (most recent first)
 
+## 2026-06-05 — New test CI caught that the suite isn't fully hermetic: 2 fetcher tests need a real headless Chromium
+
+**Trigger:** Adding the first backend CI (`.github/workflows/test.yml`, ruff + pytest on push/PR) during the repo-review fixes. A review agent had asserted "the suite is hermetic — no secrets needed" (true) and implied it was fully self-contained (not quite).
+
+**What went wrong:** The CI's first run FAILED at pytest (ruff + install were green). Two `tests/test_html_fetcher.py` cases launch a REAL headless Chromium against a local `file://` page — they are not mocked. They passed on the Mac only because a browser was already installed; the clean runner had none (`BrowserType.launch: Executable doesn't exist …chrome-headless-shell`). So "passes locally" masked a non-hermetic dependency, and the agent's hermetic claim came from grepping for `monkeypatch`, not from actually running browserless.
+
+**Lesson:** "Hermetic" is a claim you verify by RUNNING in a clean environment, not by reading the tests. The value of real CI is precisely that it runs where your local conveniences (an installed browser) are absent.
+
+**Prevention:** `test.yml` installs the browser before pytest — `python -m playwright install --with-deps --only-shell chromium` (the headless shell is sufficient; the fetcher runs headless). Keep that step. Distrust "the suite is hermetic" until it has been run with no browser/system extras present.
+
+**Hotfix:** Added the playwright-shell step; re-run green (794 passed / 5 skipped in CI). PR #70 / merge `c27143a`.
+
+**Cross-references:** AGENTS.md landmine 30; auto-memory `project_econdelta_repo_review_fixes`.
+
 ## 2026-06-04 — Two latent date-recovery bugs caught in review BEFORE merge: host-gating + first-match
 
 **Trigger:** Building PR 1 (add `source_as_of` recovery to the shared `pdf_table_row` parser). A premise-check during investigation and a 3-lens adversarial review workflow each caught a wrong assumption before it shipped.
