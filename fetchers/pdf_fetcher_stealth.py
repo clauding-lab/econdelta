@@ -105,7 +105,8 @@ def _safe_page_count(path: Path) -> int:
     try:
         with pdfplumber.open(path) as pdf:
             return len(pdf.pages)
-    except Exception:
+    except Exception as e:  # noqa: BLE001
+        logger.debug("_safe_page_count failed for %s: %s", path, e)
         return 0
 
 

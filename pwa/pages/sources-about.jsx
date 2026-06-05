@@ -11,7 +11,7 @@ const UPSTREAMS = [
     tos: 'warn — robots.txt unreadable (CAPTCHA-gated)',
     selector: 'section.content table:nth-of-type(1) (USD), nth-of-type(2) (cross rates); table#sortableTable for reserves',
     fields: ['usd_bdt_mid (WAR)', 'usd_bdt_buy', 'usd_bdt_sell', 'eur_bdt', 'gbp_bdt', 'gross_reserves_usd_bn'],
-    notes: 'Plain HTTP returns the Akamai/Radware challenge page. Playwright with stealth UA passes through; the second visit usually loads cleanly because the challenge cookie has been set. WAR (Weighted Average Rate) treated as the mid; bid → buy, ask → sell. Operating from a BD-located VPS (Exonhost BDIX, 103.187.23.22) — EU/US datacenter IPs get firewall-blocked.',
+    notes: 'Plain HTTP returns the Akamai/Radware challenge page. Playwright with stealth UA passes through; the second visit usually loads cleanly because the challenge cookie has been set. WAR (Weighted Average Rate) treated as the mid; bid → buy, ask → sell. Operating from a BD-located VPS (Exonhost BDIX, Dhaka) — EU/US datacenter IPs get firewall-blocked.',
   },
   {
     key: 'dse_market',
@@ -325,7 +325,7 @@ function PageAbout(){
       <div className="cards">
         <div className="card">
           <div className="h">Backend · Python on ExonVPS</div>
-          <div className="body">Six systemd units running from 05:00 to 14:00 BDT daily — morning scrape cascade (fetch / bb_forex / commodity / dse) 05:00–05:11, mid-day Claude-extraction parse (10:30 + 11:55 retry), afternoon aggregate (13:00 + 14:00 retry). Operating from a BD-located VPS (Exonhost BDIX, <span className="mono">103.187.23.22</span>) — bypasses BB+DSE foreign-IP firewalls.</div>
+          <div className="body">Six systemd units running from 05:00 to 14:00 BDT daily — morning scrape cascade (fetch / bb_forex / commodity / dse) 05:00–05:11, mid-day Claude-extraction parse (10:30 + 11:55 retry), afternoon aggregate (13:00 + 14:00 retry). Operating from a BD-located VPS (Exonhost BDIX, Dhaka) — bypasses BB+DSE foreign-IP firewalls.</div>
         </div>
         <div className="card">
           <div className="h">Data · Supabase Postgres</div>

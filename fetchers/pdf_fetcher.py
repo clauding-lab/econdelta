@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote, unquote, urlparse, urlunparse
@@ -12,6 +13,8 @@ import pdfplumber
 
 from fetchers.base import FetchError, FetchResult
 from fetchers.tls import ssl_context_for
+
+logger = logging.getLogger("pdf_fetcher")
 
 
 def _derive_filename(url: str) -> str:
@@ -81,5 +84,6 @@ def _safe_page_count(path: Path) -> int:
     try:
         with pdfplumber.open(path) as pdf:
             return len(pdf.pages)
-    except Exception:
+    except Exception as e:  # noqa: BLE001
+        logger.debug("_safe_page_count failed for %s: %s", path, e)
         return 0
