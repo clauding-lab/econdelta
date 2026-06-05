@@ -16,6 +16,10 @@ dependencies = [
     "pdfplumber>=0.11,<0.13",
     "playwright>=1.49,<2",
     "playwright-stealth>=2.0,<3",
+    # OCR fallback for scanned PDFs (parsers/hybrid.py); needs system tesseract+poppler at runtime
+    "pytesseract>=0.3.10,<0.4",
+    "pdf2image>=1.17,<2",
+    "Pillow>=10,<12",
 ]
 
 [tool.pytest.ini_options]
