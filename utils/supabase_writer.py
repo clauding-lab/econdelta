@@ -675,7 +675,8 @@ def upsert_metric_definitions_seed(definitions: list[dict]) -> int:
         try:
             inserted = resp.json()
             return len(inserted) if isinstance(inserted, list) else 0
-        except Exception:
+        except Exception as e:  # noqa: BLE001
+            logger.debug("upsert_metric_definitions_seed: could not parse response JSON: %s", e)
             return 0
     except SupabaseWriteError:
         raise
