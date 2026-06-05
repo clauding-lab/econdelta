@@ -35,6 +35,11 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt -r requirements-dev.txt
 
+      # Two tests in test_html_fetcher.py launch the real headless Chromium
+      # against a local file:// page, so CI needs the browser (the shell is enough).
+      - name: Install Playwright headless Chromium
+        run: python -m playwright install --with-deps --only-shell chromium
+
       - name: Lint (ruff)
         run: ruff check .
 
