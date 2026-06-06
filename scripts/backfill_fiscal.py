@@ -233,8 +233,14 @@ def discover_mfr_pdf_links(*, scrape_fn) -> list[str]:
 
 def parse_one_mfr(pdf_path: str, pdf_url: str) -> ParsedMfr:
     year, month = mfr.parse_report_month(pdf_path)
-    b = mfr.parse_bank_borrowing(pdf_path, fy_budget_crore=FY26_BORROW_BUDGET_CRORE)
-    n = mfr.parse_nbr_revenue(pdf_path, fy_budget_crore=FY26_NBR_BUDGET_CRORE)
+    fy = fiscal_year_of(year, month)
+    if fy not in FY_BORROW_BUDGET or fy not in FY_NBR_BUDGET:
+        raise mfr.MfrParseError(
+            f"no budget anchor for FY{fy % 100} ({year}-{month:02d}); "
+            f"add it to FY_BORROW_BUDGET/FY_NBR_BUDGET after confirming the value"
+        )
+    b = mfr.parse_bank_borrowing(pdf_path, fy_budget_crore=FY_BORROW_BUDGET[fy])
+    n = mfr.parse_nbr_revenue(pdf_path, fy_budget_crore=FY_NBR_BUDGET[fy])
     borrow_fytd, nbr_fytd = b.fytd, n.fytd
     # July is the fiscal year's first month: FYTD == single-month by definition.
     # In some July issues the MFR repeats a prior column in the FYTD slot

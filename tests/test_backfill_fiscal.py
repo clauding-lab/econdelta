@@ -261,3 +261,41 @@ class TestFiscalRowProvenanceField:
         assert row.fy_budget == 104000.0
         assert row.single_month == 5720.0
         assert row.fytd == 7570.0
+
+
+class TestParseOneMfrPerFyAnchor:
+    def test_fy25_report_uses_fy25_anchor(self, tmp_path):
+        # March 2025 (FY25): borrow anchor 137500 -> 29987/44346;
+        #                    nbr anchor 480000 -> 32245/255076.
+        path = _make_mfr_pdf(
+            tmp_path, month_title="March 2025",
+            borrow_row="132395 155935 13399 124150 137500 29987 44346 85298",
+            nbr_row="430000 410001 361452 31235 249572 480000 32245 255076 53.1",
+        )
+        pm = bf.parse_one_mfr(path, "url://mar2025")
+        assert (pm.year, pm.month) == (2025, 3)
+        assert pm.borrow_single == 29987.0 and pm.borrow_fytd == 44346.0
+        assert pm.nbr_single == 32245.0 and pm.nbr_fytd == 255076.0
+
+    def test_fy24_report_uses_fy24_anchor(self, tmp_path):
+        # March 2024 (FY24): borrow anchor 132395 -> 13399/54508;
+        #                    nbr anchor 430000 -> 31181/249402.
+        path = _make_mfr_pdf(
+            tmp_path, month_title="March 2024",
+            borrow_row="106334 115425 8671 118025 132395 13399 54508 44346",
+            nbr_row="370000 370000 319731 28867 222892 430000 31181 249402 58.0",
+        )
+        pm = bf.parse_one_mfr(path, "url://mar2024")
+        assert pm.borrow_single == 13399.0 and pm.borrow_fytd == 54508.0
+        assert pm.nbr_single == 31181.0 and pm.nbr_fytd == 249402.0
+
+    def test_unknown_fiscal_year_raises(self, tmp_path):
+        # FY19 not in the anchor table -> must raise (caller skips + logs),
+        # never silently fall back to a wrong-year anchor.
+        path = _make_mfr_pdf(
+            tmp_path, month_title="March 2019",
+            borrow_row="90000 90000 5000 40000 95000 8000 45000 50000",
+            nbr_row="300000 300000 250000 20000 130000 320000 22000 140000 40.0",
+        )
+        with pytest.raises(Exception):
+            bf.parse_one_mfr(path, "url://mar2019")
