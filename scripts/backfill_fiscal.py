@@ -152,17 +152,13 @@ def build_adp_rows(source: str = ADP_SOURCE) -> list[dict]:
     return rows
 
 
-def self_check_fytd(series_by_month: dict[tuple[int, int], "ParsedMfr"],
-                    which: str) -> list[str]:
-    """Cross-check: for consecutive months, published single-month value
-    should ~= (this FYTD - prior FYTD). Returns a list of human-readable
-    warning strings for any month that diverges by > SELF_CHECK_TOLERANCE.
-
-    ``which`` is 'borrow' or 'nbr'. The check only runs on truly consecutive
-    months within the same fiscal year (skips July, the FY's first month,
-    where single==FYTD by construction).
-    """
-    warnings: list[str] = []
+def _self_check_issues(series_by_month: dict[tuple[int, int], "ParsedMfr"],
+                       which: str) -> list[tuple[tuple[int, int], str]]:
+    """Shared core: for consecutive months within a fiscal year, published
+    single-month should ~= (this FYTD - prior FYTD). Returns (key, message)
+    for each month diverging by > SELF_CHECK_TOLERANCE. Skips July (FY first
+    month) and gaps (no prior month present)."""
+    issues: list[tuple[tuple[int, int], str]] = []
     keys = sorted(series_by_month)
     for (y, m) in keys:
         if m == 7:  # fiscal-year first month: single == FYTD, nothing to diff
@@ -179,11 +175,25 @@ def self_check_fytd(series_by_month: dict[tuple[int, int], "ParsedMfr"],
         denom = abs(single) if abs(single) > 1e-9 else 1.0
         rel = abs(single - implied) / denom
         if rel > SELF_CHECK_TOLERANCE:
-            warnings.append(
+            issues.append((
+                (y, m),
                 f"{which} {y}-{m:02d}: published single={single:,.0f} vs "
-                f"FYTD-diff={implied:,.0f} (rel {rel:.1%} > {SELF_CHECK_TOLERANCE:.0%})"
-            )
-    return warnings
+                f"FYTD-diff={implied:,.0f} (rel {rel:.1%} > {SELF_CHECK_TOLERANCE:.0%})",
+            ))
+    return issues
+
+
+def self_check_fytd(series_by_month: dict[tuple[int, int], "ParsedMfr"],
+                    which: str) -> list[str]:
+    """Human-readable FYTD-diff warnings (one per diverging month)."""
+    return [msg for _key, msg in _self_check_issues(series_by_month, which)]
+
+
+def self_check_failures(series_by_month: dict[tuple[int, int], "ParsedMfr"],
+                        which: str) -> set[tuple[int, int]]:
+    """The (year, month) keys that FAIL the FYTD-diff check — used as the
+    backfill write gate. July/gap months are never failures (kept)."""
+    return {key for key, _msg in _self_check_issues(series_by_month, which)}
 
 
 # ---------------------------------------------------------------------------

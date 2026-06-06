@@ -299,3 +299,29 @@ class TestParseOneMfrPerFyAnchor:
         )
         with pytest.raises(Exception):
             bf.parse_one_mfr(path, "url://mar2019")
+
+
+class TestSelfCheckFailures:
+    def _mk(self, y, m, b_single, b_fytd, n_single=0.0, n_fytd=0.0):
+        return bf.ParsedMfr(y, m, "url", b_single, b_fytd, n_single, n_fytd)
+
+    def test_returns_failing_month_keys(self):
+        series = {
+            (2025, 7): self._mk(2025, 7, 500.0, 500.0),
+            (2025, 8): self._mk(2025, 8, 100.0, 2500.0),   # single 100 vs diff 2000
+        }
+        assert bf.self_check_failures(series, "borrow") == {(2025, 8)}
+
+    def test_consistent_series_has_no_failures(self):
+        series = {
+            (2025, 7): self._mk(2025, 7, 2862.0, 2862.0),
+            (2025, 8): self._mk(2025, 8, -6289.0, -3427.0),
+        }
+        assert bf.self_check_failures(series, "borrow") == set()
+
+    def test_july_and_gap_months_never_fail(self):
+        series = {
+            (2025, 7): self._mk(2025, 7, 2862.0, 9999.0),   # July: uncheckable
+            (2025, 10): self._mk(2025, 10, 5720.0, 7570.0),  # Sep missing: gap
+        }
+        assert bf.self_check_failures(series, "borrow") == set()
