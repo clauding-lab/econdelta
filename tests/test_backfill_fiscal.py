@@ -297,7 +297,7 @@ class TestParseOneMfrPerFyAnchor:
             borrow_row="90000 90000 5000 40000 95000 8000 45000 50000",
             nbr_row="300000 300000 250000 20000 130000 320000 22000 140000 40.0",
         )
-        with pytest.raises(Exception):
+        with pytest.raises(mfr.MfrParseError):
             bf.parse_one_mfr(path, "url://mar2019")
 
 

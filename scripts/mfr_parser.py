@@ -19,7 +19,7 @@ changes between the first month of a fiscal year (July) and later months:
                         <repeat> | <repeat>
 
 So a fixed column index would silently read the wrong number. The robust
-anchor used here: locate the *FY26 annual budget* value (stable all fiscal
+anchor used here: locate the *current-FY annual budget* value (stable all fiscal
 year), then the single-month figure is the next number and the FYTD figure
 is the one after that. This is layout-independent and self-validating.
 
@@ -147,7 +147,7 @@ def _extract_month_fytd(numbers: list[float], fy_budget: float) -> tuple[float, 
 
     Raises MfrParseError if the anchor isn't found or has no trailing value.
     """
-    # Find the LAST occurrence of the budget anchor (the FY26 block is the
+    # Find the LAST occurrence of the budget anchor (the current-FY block is the
     # trailing group; FY25 budget is identical only by coincidence and lives
     # earlier — using the last match targets the current-FY block).
     anchor_idx = None

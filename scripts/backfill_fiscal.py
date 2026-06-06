@@ -10,8 +10,8 @@ Sources (all reachable from a BD-egress host; MOF Oracle CDN is global):
     JS archive page, harvesting objectstorage.oraclecloud links, then reading
     page 1 of each PDF to learn its true report month.
       - Table 6 row "2.1 Borrowing from Banking System (Net)", single-month
-        FY26 column -> govt_bank_borrow_monthly_cr  (BDT crore, as_of=month-end)
-      - Table 4 row "a. NBR", single-month FY26 column -> nbr_revenue_monthly_cr
+        current-FY column -> govt_bank_borrow_monthly_cr  (BDT crore, as_of=month-end)
+      - Table 4 row "a. NBR", single-month current-FY column -> nbr_revenue_monthly_cr
   * ADP completion % (annual) — adp_completion_pct_annual, as_of=fiscal-year-start.
     Backfilled (2026-05-30) from IMED Annual Progress Report year-end figures
     (% of revised allocation), FY21-FY25 — see ADP_VALUES. Use --adp-only to
@@ -138,8 +138,8 @@ def build_monthly_row(metric_id: str, year: int, month: int, value: float,
 def build_history_rows(
     parsed: dict[tuple[int, int], "ParsedMfr"],
     *,
-    drop_borrow: set[tuple[int, int]] = frozenset(),
-    drop_nbr: set[tuple[int, int]] = frozenset(),
+    drop_borrow: frozenset[tuple[int, int]] = frozenset(),
+    drop_nbr: frozenset[tuple[int, int]] = frozenset(),
 ) -> list[dict]:
     """Build monthly borrow/NBR upsert rows, omitting any (metric, month) that
     failed the FYTD self-check. Months in neither drop set produce two rows."""
