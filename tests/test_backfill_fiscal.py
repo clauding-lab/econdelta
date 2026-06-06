@@ -83,6 +83,20 @@ class TestFiscalYearStart:
         assert bf.fiscal_year_start(2021) == date(2020, 7, 1)
 
 
+class TestFiscalYearOf:
+    def test_july_is_first_month_of_next_fy(self):
+        assert bf.fiscal_year_of(2025, 7) == 2026
+
+    def test_december_is_same_fy_as_following_june(self):
+        assert bf.fiscal_year_of(2024, 12) == 2025
+
+    def test_june_is_last_month_of_its_fy(self):
+        assert bf.fiscal_year_of(2025, 6) == 2025
+
+    def test_october_2025_is_fy26(self):
+        assert bf.fiscal_year_of(2025, 10) == 2026
+
+
 class TestBuildMonthlyRow:
     def test_row_uses_month_end_as_of(self):
         row = bf.build_monthly_row(bf.METRIC_NBR, 2025, 10, 28027.0)

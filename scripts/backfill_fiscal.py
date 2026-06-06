@@ -101,6 +101,12 @@ def fiscal_year_start(fy_end_year: int) -> date:
     return date(fy_end_year - 1, 7, 1)
 
 
+def fiscal_year_of(year: int, month: int) -> int:
+    """Return the FY-END year for a report month. Bangladesh fiscal year runs
+    1 July -> 30 June, named by its end year (Jul 2025..Jun 2026 = FY26)."""
+    return year + 1 if month >= 7 else year
+
+
 def build_monthly_row(metric_id: str, year: int, month: int, value: float,
                       source: str = DEFAULT_SOURCE) -> dict:
     as_of = month_end(year, month).isoformat()
