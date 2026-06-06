@@ -78,7 +78,7 @@ class FiscalRow:
     metric: str          # "govt_bank_borrow" | "nbr_revenue"
     single_month: float  # this report-month's stand-alone figure
     fytd: float          # fiscal-year-to-date figure as of this report month
-    fy26_budget: float   # the annual FY26 budget anchor used (for provenance)
+    fy_budget: float     # the annual current-FY budget anchor used (provenance)
 
 
 def _to_float(token: str) -> float:

@@ -20,6 +20,8 @@ from datetime import date
 from pathlib import Path
 
 import pytest
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.platypus import Preformatted, SimpleDocTemplate
 
 import scripts.backfill_fiscal as bf
 import scripts.mfr_parser as mfr
@@ -226,3 +228,36 @@ class TestEndToEndDryRunConsistency:
         # With Jul/Aug/Sep/Oct present, both series must produce zero warnings.
         assert bf.self_check_fytd(parsed, "borrow") == []
         assert bf.self_check_fytd(parsed, "nbr") == []
+
+
+def _make_mfr_pdf(tmp_path, *, month_title, borrow_row, nbr_row):
+    """Render a synthetic single-page MFR PDF (preformatted text) containing a
+    page-1 month title plus the Table-6 borrowing row and Table-4 NBR row, so
+    scripts.mfr_parser reads them back via pdfplumber.extract_text()."""
+    text = (
+        "Monthly Report on Fiscal Position\n"
+        f"{month_title}\n"
+        "Table 6: Financing (Taka in Crore)\n"
+        f"2.1 Borrowing from Banking System (Net) {borrow_row}\n"
+        "Table 4: Revenue (Taka in Crore)\n"
+        f"a. NBR {nbr_row}\n"
+    )
+    pdf_path = tmp_path / "mfr.pdf"
+    doc = SimpleDocTemplate(str(pdf_path))
+    style = getSampleStyleSheet()["Code"]
+    doc.build([Preformatted(text, style)])
+    return str(pdf_path)
+
+
+class TestFiscalRowProvenanceField:
+    def test_fy_budget_field_holds_anchor(self, tmp_path):
+        # FY26 Oct-2025 borrow layout: anchor 104000 -> single 5720, fytd 7570.
+        path = _make_mfr_pdf(
+            tmp_path, month_title="October 2025",
+            borrow_row="137500 99000 16715 15651 114161 104000 5720 7570",
+            nbr_row="480000 463500 27289 101442 368715 21.1 79.6 499001 28027 117420 23.5",
+        )
+        row = mfr.parse_bank_borrowing(path, fy_budget_crore=104000.0)
+        assert row.fy_budget == 104000.0
+        assert row.single_month == 5720.0
+        assert row.fytd == 7570.0
