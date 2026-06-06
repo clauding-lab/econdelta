@@ -20,6 +20,8 @@ from datetime import date
 from pathlib import Path
 
 import pytest
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.platypus import Preformatted, SimpleDocTemplate
 
 import scripts.backfill_fiscal as bf
 import scripts.mfr_parser as mfr
@@ -81,6 +83,32 @@ class TestFiscalYearStart:
 
     def test_fy21_starts_july_2020(self):
         assert bf.fiscal_year_start(2021) == date(2020, 7, 1)
+
+
+class TestFiscalYearOf:
+    def test_july_is_first_month_of_next_fy(self):
+        assert bf.fiscal_year_of(2025, 7) == 2026
+
+    def test_december_is_same_fy_as_following_june(self):
+        assert bf.fiscal_year_of(2024, 12) == 2025
+
+    def test_june_is_last_month_of_its_fy(self):
+        assert bf.fiscal_year_of(2025, 6) == 2025
+
+    def test_october_2025_is_fy26(self):
+        assert bf.fiscal_year_of(2025, 10) == 2026
+
+
+class TestFyAnchorTables:
+    def test_fy26_anchors_match_known_values(self):
+        assert bf.FY_BORROW_BUDGET[2026] == 104000.0
+        assert bf.FY_NBR_BUDGET[2026] == 499001.0
+
+    def test_fy25_and_fy24_anchors_present(self):
+        assert bf.FY_BORROW_BUDGET[2025] == 137500.0
+        assert bf.FY_NBR_BUDGET[2025] == 480000.0
+        assert bf.FY_BORROW_BUDGET[2024] == 132395.0
+        assert bf.FY_NBR_BUDGET[2024] == 430000.0
 
 
 class TestBuildMonthlyRow:
@@ -166,21 +194,21 @@ class TestMfrParserAgainstRealPdfs:
     @pytest.mark.parametrize("name", list(FIXTURES))
     def test_bank_borrowing_single_month(self, name):
         path = _fixture_path(name)
-        row = mfr.parse_bank_borrowing(str(path), fy_budget_crore=bf.FY26_BORROW_BUDGET_CRORE)
+        row = mfr.parse_bank_borrowing(str(path), fy_budget_crore=bf.FY_BORROW_BUDGET[2026])
         assert row.single_month == FIXTURES[name]["borrow_single"]
 
     @pytest.mark.parametrize("name", list(FIXTURES))
     def test_nbr_revenue_single_month(self, name):
         path = _fixture_path(name)
-        row = mfr.parse_nbr_revenue(str(path), fy_budget_crore=bf.FY26_NBR_BUDGET_CRORE)
+        row = mfr.parse_nbr_revenue(str(path), fy_budget_crore=bf.FY_NBR_BUDGET[2026])
         assert row.single_month == FIXTURES[name]["nbr_single"]
 
     def test_oct_fytd_values(self):
         # FYTD only meaningful for non-July months; check October directly.
         name = "c513580c-f220-49aa-9305-605585b84180.pdf"
         path = _fixture_path(name)
-        b = mfr.parse_bank_borrowing(str(path), fy_budget_crore=bf.FY26_BORROW_BUDGET_CRORE)
-        n = mfr.parse_nbr_revenue(str(path), fy_budget_crore=bf.FY26_NBR_BUDGET_CRORE)
+        b = mfr.parse_bank_borrowing(str(path), fy_budget_crore=bf.FY_BORROW_BUDGET[2026])
+        n = mfr.parse_nbr_revenue(str(path), fy_budget_crore=bf.FY_NBR_BUDGET[2026])
         assert b.fytd == FIXTURES[name]["borrow_fytd"]
         assert n.fytd == FIXTURES[name]["nbr_fytd"]
 
@@ -200,3 +228,154 @@ class TestEndToEndDryRunConsistency:
         # With Jul/Aug/Sep/Oct present, both series must produce zero warnings.
         assert bf.self_check_fytd(parsed, "borrow") == []
         assert bf.self_check_fytd(parsed, "nbr") == []
+
+
+def _make_mfr_pdf(tmp_path, *, month_title, borrow_row, nbr_row):
+    """Render a synthetic single-page MFR PDF (preformatted text) containing a
+    page-1 month title plus the Table-6 borrowing row and Table-4 NBR row, so
+    scripts.mfr_parser reads them back via pdfplumber.extract_text()."""
+    text = (
+        "Monthly Report on Fiscal Position\n"
+        f"{month_title}\n"
+        "Table 6: Financing (Taka in Crore)\n"
+        f"2.1 Borrowing from Banking System (Net) {borrow_row}\n"
+        "Table 4: Revenue (Taka in Crore)\n"
+        f"a. NBR {nbr_row}\n"
+    )
+    pdf_path = tmp_path / "mfr.pdf"
+    doc = SimpleDocTemplate(str(pdf_path))
+    style = getSampleStyleSheet()["Code"]
+    doc.build([Preformatted(text, style)])
+    return str(pdf_path)
+
+
+class TestFiscalRowProvenanceField:
+    def test_fy_budget_field_holds_anchor(self, tmp_path):
+        # FY26 Oct-2025 borrow layout: anchor 104000 -> single 5720, fytd 7570.
+        path = _make_mfr_pdf(
+            tmp_path, month_title="October 2025",
+            borrow_row="137500 99000 16715 15651 114161 104000 5720 7570",
+            nbr_row="480000 463500 27289 101442 368715 21.1 79.6 499001 28027 117420 23.5",
+        )
+        row = mfr.parse_bank_borrowing(path, fy_budget_crore=104000.0)
+        assert row.fy_budget == 104000.0
+        assert row.single_month == 5720.0
+        assert row.fytd == 7570.0
+
+
+class TestParseOneMfrPerFyAnchor:
+    def test_fy25_report_uses_fy25_anchor(self, tmp_path):
+        # March 2025 (FY25): borrow anchor 137500 -> 29987/44346;
+        #                    nbr anchor 480000 -> 32245/255076.
+        path = _make_mfr_pdf(
+            tmp_path, month_title="March 2025",
+            borrow_row="132395 155935 13399 124150 137500 29987 44346 85298",
+            nbr_row="430000 410001 361452 31235 249572 480000 32245 255076 53.1",
+        )
+        pm = bf.parse_one_mfr(path, "url://mar2025")
+        assert (pm.year, pm.month) == (2025, 3)
+        assert pm.borrow_single == 29987.0 and pm.borrow_fytd == 44346.0
+        assert pm.nbr_single == 32245.0 and pm.nbr_fytd == 255076.0
+
+    def test_fy24_report_uses_fy24_anchor(self, tmp_path):
+        # March 2024 (FY24): borrow anchor 132395 -> 13399/54508;
+        #                    nbr anchor 430000 -> 31181/249402.
+        path = _make_mfr_pdf(
+            tmp_path, month_title="March 2024",
+            borrow_row="106334 115425 8671 118025 132395 13399 54508 44346",
+            nbr_row="370000 370000 319731 28867 222892 430000 31181 249402 58.0",
+        )
+        pm = bf.parse_one_mfr(path, "url://mar2024")
+        assert pm.borrow_single == 13399.0 and pm.borrow_fytd == 54508.0
+        assert pm.nbr_single == 31181.0 and pm.nbr_fytd == 249402.0
+
+    def test_unknown_fiscal_year_raises(self, tmp_path):
+        # FY19 not in the anchor table -> must raise (caller skips + logs),
+        # never silently fall back to a wrong-year anchor.
+        path = _make_mfr_pdf(
+            tmp_path, month_title="March 2019",
+            borrow_row="90000 90000 5000 40000 95000 8000 45000 50000",
+            nbr_row="300000 300000 250000 20000 130000 320000 22000 140000 40.0",
+        )
+        with pytest.raises(mfr.MfrParseError):
+            bf.parse_one_mfr(path, "url://mar2019")
+
+
+class TestSelfCheckFailures:
+    def _mk(self, y, m, b_single, b_fytd, n_single=0.0, n_fytd=0.0):
+        return bf.ParsedMfr(y, m, "url", b_single, b_fytd, n_single, n_fytd)
+
+    def test_returns_failing_month_keys(self):
+        series = {
+            (2025, 7): self._mk(2025, 7, 500.0, 500.0),
+            (2025, 8): self._mk(2025, 8, 100.0, 2500.0),   # single 100 vs diff 2000
+        }
+        assert bf.self_check_failures(series, "borrow") == {(2025, 8)}
+
+    def test_consistent_series_has_no_failures(self):
+        series = {
+            (2025, 7): self._mk(2025, 7, 2862.0, 2862.0),
+            (2025, 8): self._mk(2025, 8, -6289.0, -3427.0),
+        }
+        assert bf.self_check_failures(series, "borrow") == set()
+
+    def test_july_and_gap_months_never_fail(self):
+        series = {
+            (2025, 7): self._mk(2025, 7, 2862.0, 9999.0),   # July: uncheckable
+            (2025, 10): self._mk(2025, 10, 5720.0, 7570.0),  # Sep missing: gap
+        }
+        assert bf.self_check_failures(series, "borrow") == set()
+
+
+class TestBuildHistoryRowsGate:
+    def _mk(self, y, m, b_single, n_single):
+        return bf.ParsedMfr(y, m, "url", b_single, 0.0, n_single, 0.0)
+
+    def test_drops_only_the_failing_metric_month(self):
+        parsed = {
+            (2025, 8): self._mk(2025, 8, -6289.0, 26643.0),
+            (2025, 9): self._mk(2025, 9, 1111.0, 27000.0),
+        }
+        rows = bf.build_history_rows(
+            parsed, drop_borrow={(2025, 8)}, drop_nbr=set())
+        keys = {(r["metric_id"], r["as_of"]) for r in rows}
+        # Aug borrow dropped; Aug NBR + both Sep rows kept.
+        assert (bf.METRIC_BORROW, "2025-08-31") not in keys
+        assert (bf.METRIC_NBR, "2025-08-31") in keys
+        assert (bf.METRIC_BORROW, "2025-09-30") in keys
+        assert (bf.METRIC_NBR, "2025-09-30") in keys
+
+    def test_no_drops_keeps_two_rows_per_month(self):
+        parsed = {(2025, 9): self._mk(2025, 9, 1111.0, 27000.0)}
+        rows = bf.build_history_rows(parsed)
+        assert len(rows) == 2
+
+
+class TestStaticMonthlyBackfill:
+    def test_row_count_nbr_24_borrow_23(self):
+        rows = bf.build_static_monthly_rows()
+        nbr = [r for r in rows if r["metric_id"] == bf.METRIC_NBR]
+        borrow = [r for r in rows if r["metric_id"] == bf.METRIC_BORROW]
+        assert len(nbr) == 24
+        assert len(borrow) == 23  # Aug 2024 excluded (suspect restatement)
+
+    def test_nbr_value_and_provenance(self):
+        rows = bf.build_static_monthly_rows()
+        jun24 = next(r for r in rows
+                     if r["metric_id"] == bf.METRIC_NBR and r["as_of"] == "2024-06-30")
+        assert jun24["value"] == 52720.0
+        assert jun24["source"] == "mof_mfr_static"
+        assert jun24["source_as_of"] == "2024-06-30"
+
+    def test_borrow_value_and_provisional_source(self):
+        rows = bf.build_static_monthly_rows()
+        mar25 = next(r for r in rows
+                     if r["metric_id"] == bf.METRIC_BORROW and r["as_of"] == "2025-03-31")
+        assert mar25["value"] == 29987.0
+        assert mar25["source"] == "mof_mfr_static_provisional"
+
+    def test_aug_2024_borrow_excluded_but_nbr_present(self):
+        rows = bf.build_static_monthly_rows()
+        keys = {(r["metric_id"], r["as_of"]) for r in rows}
+        assert (bf.METRIC_BORROW, "2024-08-31") not in keys  # dropped — suspect
+        assert (bf.METRIC_NBR, "2024-08-31") in keys         # kept — clean

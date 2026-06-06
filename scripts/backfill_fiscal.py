@@ -10,8 +10,8 @@ Sources (all reachable from a BD-egress host; MOF Oracle CDN is global):
     JS archive page, harvesting objectstorage.oraclecloud links, then reading
     page 1 of each PDF to learn its true report month.
       - Table 6 row "2.1 Borrowing from Banking System (Net)", single-month
-        FY26 column -> govt_bank_borrow_monthly_cr  (BDT crore, as_of=month-end)
-      - Table 4 row "a. NBR", single-month FY26 column -> nbr_revenue_monthly_cr
+        current-FY column -> govt_bank_borrow_monthly_cr  (BDT crore, as_of=month-end)
+      - Table 4 row "a. NBR", single-month current-FY column -> nbr_revenue_monthly_cr
   * ADP completion % (annual) — adp_completion_pct_annual, as_of=fiscal-year-start.
     Backfilled (2026-05-30) from IMED Annual Progress Report year-end figures
     (% of revised allocation), FY21-FY25 — see ADP_VALUES. Use --adp-only to
@@ -53,11 +53,27 @@ MFR_ARCHIVE_URL = (
 )
 ORACLE_CDN_HOST = "objectstorage.ap-dcc-gazipur-1.oraclecloud15.com"
 
-# FY26 annual-budget anchors (stable all fiscal year; used to locate the
-# single-month column robustly across the July vs Aug+ layout shift). These
-# are read straight off any FY26 MFR and are identical in every monthly issue.
-FY26_BORROW_BUDGET_CRORE = 104000.0   # Table 6 "Borrowing from Banking System (Net)" Budget FY26
-FY26_NBR_BUDGET_CRORE = 499001.0      # Table 4 "a. NBR" Budget FY26
+# Per-fiscal-year annual-budget anchors (BDT crore), keyed by FY-END year.
+# The MFR table layout is not fixed-position, so the parser locates the
+# current fiscal year's annual *Budget* value (stable across all 12 monthly
+# issues of that FY) and reads the single-month + FYTD figures right after it.
+# Each value is read straight off the printed table and CROSS-CHECKED across
+# two fiscal years' reports (every report prints both its own year's Budget
+# and the prior year's). Verified 2026-06-06.
+#   FY26: reproduces the live DB (borrow 5,720 / NBR 28,027 for Oct 2025).
+#   FY25/FY24: confirmed in both the year's own reports and the next year's
+#   prior-year column. FY23 and older are added during the dry-run (Task 8),
+#   each confirmed the same way; unconfirmable years are skipped, not guessed.
+FY_BORROW_BUDGET: dict[int, float] = {
+    2026: 104000.0,   # Table 6 "Borrowing from Banking System (Net)" Budget FY26
+    2025: 137500.0,   # Budget FY25
+    2024: 132395.0,   # Budget FY24
+}
+FY_NBR_BUDGET: dict[int, float] = {
+    2026: 499001.0,   # Table 4 "a. NBR" Budget FY26
+    2025: 480000.0,   # Budget FY25
+    2024: 430000.0,   # Budget FY24
+}
 
 # Self-check tolerance: |published_single_month - (fytd_t - fytd_{t-1})| / single
 SELF_CHECK_TOLERANCE = 0.05
@@ -101,6 +117,12 @@ def fiscal_year_start(fy_end_year: int) -> date:
     return date(fy_end_year - 1, 7, 1)
 
 
+def fiscal_year_of(year: int, month: int) -> int:
+    """Return the FY-END year for a report month. Bangladesh fiscal year runs
+    1 July -> 30 June, named by its end year (Jul 2025..Jun 2026 = FY26)."""
+    return year + 1 if month >= 7 else year
+
+
 def build_monthly_row(metric_id: str, year: int, month: int, value: float,
                       source: str = DEFAULT_SOURCE) -> dict:
     as_of = month_end(year, month).isoformat()
@@ -111,6 +133,23 @@ def build_monthly_row(metric_id: str, year: int, month: int, value: float,
         "source": source,
         "source_as_of": as_of,
     }
+
+
+def build_history_rows(
+    parsed: dict[tuple[int, int], "ParsedMfr"],
+    *,
+    drop_borrow: frozenset[tuple[int, int]] = frozenset(),
+    drop_nbr: frozenset[tuple[int, int]] = frozenset(),
+) -> list[dict]:
+    """Build monthly borrow/NBR upsert rows, omitting any (metric, month) that
+    failed the FYTD self-check. Months in neither drop set produce two rows."""
+    rows: list[dict] = []
+    for (y, m), pm in sorted(parsed.items()):
+        if (y, m) not in drop_borrow:
+            rows.append(build_monthly_row(METRIC_BORROW, y, m, pm.borrow_single))
+        if (y, m) not in drop_nbr:
+            rows.append(build_monthly_row(METRIC_NBR, y, m, pm.nbr_single))
+    return rows
 
 
 def build_adp_rows(source: str = ADP_SOURCE) -> list[dict]:
@@ -130,17 +169,66 @@ def build_adp_rows(source: str = ADP_SOURCE) -> list[dict]:
     return rows
 
 
-def self_check_fytd(series_by_month: dict[tuple[int, int], "ParsedMfr"],
-                    which: str) -> list[str]:
-    """Cross-check: for consecutive months, published single-month value
-    should ~= (this FYTD - prior FYTD). Returns a list of human-readable
-    warning strings for any month that diverges by > SELF_CHECK_TOLERANCE.
+# ---------------------------------------------------------------------------
+# Hand-verified static monthly backfill (FY24-FY25).
+# The deterministic parser handles FY26+ (consistent recent layout), but older
+# MFRs shift their column layout report-to-report (an inserted "Revised Budget"
+# column, trailing memo columns), so these months are loaded as hand-verified
+# static values, mirroring ADP_VALUES. Verified 2026-06 by reading each report's
+# "Actual FY (Month)" column; the method was cross-checked against the live FY26
+# DB values (Jul'25 borrow 2,862 / Aug -6,289 / Oct 5,720) and, for NBR, against
+# the FYTD self-check (single == cumulative increase reconciled 22/22).
+#
+# NBR (tax revenue) is clean + self-consistent. Bank borrowing (Net) is volatile
+# and revised between MoF issues, so it does NOT form a clean running total --
+# each value is the figure MoF PUBLISHED for that month (provisional; marked via
+# the source field). Aug-2024 borrow is omitted: its published single-month
+# conflicts with the restated cumulative (suspect). Keyed by (year, month);
+# as_of = month-end. Idempotent on (metric_id, as_of).
+STATIC_NBR_SOURCE = "mof_mfr_static"
+STATIC_BORROW_SOURCE = "mof_mfr_static_provisional"
 
-    ``which`` is 'borrow' or 'nbr'. The check only runs on truly consecutive
-    months within the same fiscal year (skips July, the FY's first month,
-    where single==FYTD by construction).
-    """
-    warnings: list[str] = []
+STATIC_NBR_MONTHLY: dict[tuple[int, int], float] = {
+    (2023, 7): 22005.0, (2023, 8): 25404.0, (2023, 9): 28384.0,
+    (2023, 10): 26845.0, (2023, 11): 27917.0, (2023, 12): 27732.0,
+    (2024, 1): 33117.0, (2024, 2): 26649.0, (2024, 3): 31181.0,
+    (2024, 4): 28421.0, (2024, 5): 30702.0, (2024, 6): 52720.0,
+    (2024, 7): 21478.0, (2024, 8): 22647.0, (2024, 9): 30149.0,
+    (2024, 10): 26555.0, (2024, 11): 25426.0, (2024, 12): 32133.0,
+    (2025, 1): 34811.0, (2025, 2): 27801.0, (2025, 3): 32245.0,
+    (2025, 4): 36003.0, (2025, 5): 34658.0, (2025, 6): 42612.0,
+}
+STATIC_BORROW_MONTHLY: dict[tuple[int, int], float] = {
+    (2023, 7): -3298.0, (2023, 8): 6246.0, (2023, 9): 3668.0,
+    (2023, 10): -704.0, (2023, 11): 7055.0, (2023, 12): -4887.0,
+    (2024, 1): 15548.0, (2024, 2): -14475.0, (2024, 3): 13399.0,
+    (2024, 4): 24131.0, (2024, 5): 13245.0, (2024, 6): 42429.0,
+    (2024, 7): 8448.0,                       # (2024, 8) omitted -- suspect restatement
+    (2024, 9): 898.0, (2024, 10): 16715.0, (2024, 11): 22651.0,
+    (2024, 12): -4450.0, (2025, 1): 6934.0, (2025, 2): 11838.0,
+    (2025, 3): 29987.0, (2025, 4): 610.0, (2025, 5): 21884.0,
+    (2025, 6): 14791.0,
+}
+
+
+def build_static_monthly_rows() -> list[dict]:
+    """Hand-verified FY24-FY25 monthly NBR + bank-borrowing single-month rows
+    (BDT crore) from STATIC_*_MONTHLY. Idempotent on (metric_id, as_of)."""
+    rows: list[dict] = []
+    for (y, m), v in sorted(STATIC_NBR_MONTHLY.items()):
+        rows.append(build_monthly_row(METRIC_NBR, y, m, v, source=STATIC_NBR_SOURCE))
+    for (y, m), v in sorted(STATIC_BORROW_MONTHLY.items()):
+        rows.append(build_monthly_row(METRIC_BORROW, y, m, v, source=STATIC_BORROW_SOURCE))
+    return rows
+
+
+def _self_check_issues(series_by_month: dict[tuple[int, int], "ParsedMfr"],
+                       which: str) -> list[tuple[tuple[int, int], str]]:
+    """Shared core: for consecutive months within a fiscal year, published
+    single-month should ~= (this FYTD - prior FYTD). Returns (key, message)
+    for each month diverging by > SELF_CHECK_TOLERANCE. Skips July (FY first
+    month) and gaps (no prior month present)."""
+    issues: list[tuple[tuple[int, int], str]] = []
     keys = sorted(series_by_month)
     for (y, m) in keys:
         if m == 7:  # fiscal-year first month: single == FYTD, nothing to diff
@@ -157,11 +245,25 @@ def self_check_fytd(series_by_month: dict[tuple[int, int], "ParsedMfr"],
         denom = abs(single) if abs(single) > 1e-9 else 1.0
         rel = abs(single - implied) / denom
         if rel > SELF_CHECK_TOLERANCE:
-            warnings.append(
+            issues.append((
+                (y, m),
                 f"{which} {y}-{m:02d}: published single={single:,.0f} vs "
-                f"FYTD-diff={implied:,.0f} (rel {rel:.1%} > {SELF_CHECK_TOLERANCE:.0%})"
-            )
-    return warnings
+                f"FYTD-diff={implied:,.0f} (rel {rel:.1%} > {SELF_CHECK_TOLERANCE:.0%})",
+            ))
+    return issues
+
+
+def self_check_fytd(series_by_month: dict[tuple[int, int], "ParsedMfr"],
+                    which: str) -> list[str]:
+    """Human-readable FYTD-diff warnings (one per diverging month)."""
+    return [msg for _key, msg in _self_check_issues(series_by_month, which)]
+
+
+def self_check_failures(series_by_month: dict[tuple[int, int], "ParsedMfr"],
+                        which: str) -> set[tuple[int, int]]:
+    """The (year, month) keys that FAIL the FYTD-diff check — used as the
+    backfill write gate. July/gap months are never failures (kept)."""
+    return {key for key, _msg in _self_check_issues(series_by_month, which)}
 
 
 # ---------------------------------------------------------------------------
@@ -211,8 +313,14 @@ def discover_mfr_pdf_links(*, scrape_fn) -> list[str]:
 
 def parse_one_mfr(pdf_path: str, pdf_url: str) -> ParsedMfr:
     year, month = mfr.parse_report_month(pdf_path)
-    b = mfr.parse_bank_borrowing(pdf_path, fy_budget_crore=FY26_BORROW_BUDGET_CRORE)
-    n = mfr.parse_nbr_revenue(pdf_path, fy_budget_crore=FY26_NBR_BUDGET_CRORE)
+    fy = fiscal_year_of(year, month)
+    if fy not in FY_BORROW_BUDGET or fy not in FY_NBR_BUDGET:
+        raise mfr.MfrParseError(
+            f"no budget anchor for FY{fy % 100} ({year}-{month:02d}); "
+            f"add it to FY_BORROW_BUDGET/FY_NBR_BUDGET after confirming the value"
+        )
+    b = mfr.parse_bank_borrowing(pdf_path, fy_budget_crore=FY_BORROW_BUDGET[fy])
+    n = mfr.parse_nbr_revenue(pdf_path, fy_budget_crore=FY_NBR_BUDGET[fy])
     borrow_fytd, nbr_fytd = b.fytd, n.fytd
     # July is the fiscal year's first month: FYTD == single-month by definition.
     # In some July issues the MFR repeats a prior column in the FYTD slot
@@ -316,6 +424,8 @@ def main(argv: list[str] | None = None) -> int:
                    help="cap number of MFRs to download (newest-first)")
     p.add_argument("--adp-only", action="store_true",
                    help="seed only the annual ADP completion %% rows (no MFR fetch)")
+    p.add_argument("--static-only", action="store_true",
+                   help="seed only the hand-verified FY24-FY25 monthly rows (no MFR fetch)")
     p.add_argument("--verbose", "-v", action="store_true")
     args = p.parse_args(argv)
 
@@ -337,6 +447,23 @@ def main(argv: list[str] | None = None) -> int:
         sent = _upsert(url, key, adp_rows,
                        table="metric_history_monthly", on_conflict="metric_id,as_of")
         logger.info("upsert ok: %d ADP rows -> metric_history_monthly", sent)
+        return 0
+
+    if args.static_only:
+        static_rows = build_static_monthly_rows()
+        n_nbr = sum(1 for r in static_rows if r["metric_id"] == METRIC_NBR)
+        n_bor = sum(1 for r in static_rows if r["metric_id"] == METRIC_BORROW)
+        logger.info("static-only: %d rows (%d NBR + %d borrow, FY24-FY25)",
+                    len(static_rows), n_nbr, n_bor)
+        if args.dry_run:
+            for r in static_rows:
+                logger.info("  %s", r)
+            logger.info("=== --dry-run: %d static rows would upsert ===", len(static_rows))
+            return 0
+        url, key = _resolve_credentials()
+        sent = _upsert(url, key, static_rows,
+                       table="metric_history_monthly", on_conflict="metric_id,as_of")
+        logger.info("upsert ok: %d static rows -> metric_history_monthly", sent)
         return 0
 
     links = _load_links(args)[: args.max_reports]
@@ -365,19 +492,24 @@ def main(argv: list[str] | None = None) -> int:
             pm.year, pm.month, pm.borrow_single, pm.borrow_fytd, pm.nbr_single, pm.nbr_fytd,
         )
 
-    # FYTD-diff self-checks
+    # FYTD-diff self-check is a HARD GATE: log every warning, then drop the
+    # failing (metric, month) rows. July / gap-isolated months are never
+    # failures (kept on parse-strength — they are the anchor points).
+    drops: dict[str, set[tuple[int, int]]] = {}
     for which in ("borrow", "nbr"):
         for w in self_check_fytd(parsed, which):
             logger.warning("SELF-CHECK: %s", w)
+        drops[which] = self_check_failures(parsed, which)
+        for (y, m) in sorted(drops[which]):
+            logger.warning("DROP %s %04d-%02d: failed FYTD self-check", which, y, m)
 
-    # Build rows
-    history_rows: list[dict] = []
-    for (y, m), pm in sorted(parsed.items()):
-        history_rows.append(build_monthly_row(METRIC_BORROW, y, m, pm.borrow_single))
-        history_rows.append(build_monthly_row(METRIC_NBR, y, m, pm.nbr_single))
+    history_rows = build_history_rows(
+        parsed, drop_borrow=drops["borrow"], drop_nbr=drops["nbr"])
 
-    logger.info("prepared %d monthly borrow/NBR rows (%d months x 2 metrics)",
-                len(history_rows), len(parsed))
+    logger.info("prepared %d monthly borrow/NBR rows from %d months "
+                "(%d borrow + %d nbr dropped by self-check)",
+                len(history_rows), len(parsed),
+                len(drops["borrow"]), len(drops["nbr"]))
 
     # ADP annual rows (static; always appended so a full run seeds all 3 series)
     adp_rows = build_adp_rows()

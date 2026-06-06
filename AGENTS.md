@@ -130,6 +130,12 @@ Pre-merge smoke list for backend changes:
 
 30. **The `Tests` CI (`.github/workflows/test.yml`) MUST install the Playwright headless shell before `pytest` — the suite is NOT fully browserless.** Two `tests/test_html_fetcher.py` cases launch a REAL headless Chromium against a `file://` page (not mocked), so they pass locally only because a browser is already installed; a clean runner fails with `BrowserType.launch: Executable doesn't exist …chrome-headless-shell`. The job runs `python -m playwright install --with-deps --only-shell chromium` (the `--only-shell` is enough — the fetcher runs headless). ruff + pytest fire on push-to-main and every PR; the suite is otherwise secret-free (env-touching tests use fakes), so no Actions secrets are needed. Don't delete the playwright step or assume "the suite is hermetic." (2026-06-05, PR #70 / merge `c27143a`.)
 
+31. **Library/framework API calls → Context7 first.** Before writing or editing code that calls a third-party library or framework API, query **Context7** for current, version-pinned docs — do NOT rely on training-cutoff memory.
+    - **Flow:** `resolve-library-id` (name → `/org/project` ID) → `query-docs` (PIN the version this repo ships, e.g. `/pydantic/pydantic/v2`).
+    - **Applies to:** pydantic v2 (`>=2.8`), playwright (`>=1.49`) + playwright-stealth (`>=2.0`), pdfplumber (`>=0.11`), beautifulsoup4 (`>=4.12`), requests (`>=2.32`), yfinance (`>=0.2.40`), pytesseract / pdf2image / Pillow.
+    - **Skip for:** business/domain logic, general programming concepts, or libraries Context7 does not index.
+    - **Query specifically:** library + version + exact task (e.g. `pydantic v2 model_validator mode=before for sources-v3 indicator specs`), never one-word topics like "auth".
+
 ## Communication & timezone
 
 - **All times in BDT (UTC+6).** When generating timestamps, dates, or schedules, convert to BDT and label it. UTC appears in some systemd unit files and `scraped_at` ISO strings — convert before showing to Adnan.
