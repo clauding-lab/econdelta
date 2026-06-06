@@ -325,3 +325,27 @@ class TestSelfCheckFailures:
             (2025, 10): self._mk(2025, 10, 5720.0, 7570.0),  # Sep missing: gap
         }
         assert bf.self_check_failures(series, "borrow") == set()
+
+
+class TestBuildHistoryRowsGate:
+    def _mk(self, y, m, b_single, n_single):
+        return bf.ParsedMfr(y, m, "url", b_single, 0.0, n_single, 0.0)
+
+    def test_drops_only_the_failing_metric_month(self):
+        parsed = {
+            (2025, 8): self._mk(2025, 8, -6289.0, 26643.0),
+            (2025, 9): self._mk(2025, 9, 1111.0, 27000.0),
+        }
+        rows = bf.build_history_rows(
+            parsed, drop_borrow={(2025, 8)}, drop_nbr=set())
+        keys = {(r["metric_id"], r["as_of"]) for r in rows}
+        # Aug borrow dropped; Aug NBR + both Sep rows kept.
+        assert (bf.METRIC_BORROW, "2025-08-31") not in keys
+        assert (bf.METRIC_NBR, "2025-08-31") in keys
+        assert (bf.METRIC_BORROW, "2025-09-30") in keys
+        assert (bf.METRIC_NBR, "2025-09-30") in keys
+
+    def test_no_drops_keeps_two_rows_per_month(self):
+        parsed = {(2025, 9): self._mk(2025, 9, 1111.0, 27000.0)}
+        rows = bf.build_history_rows(parsed)
+        assert len(rows) == 2

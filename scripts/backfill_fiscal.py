@@ -135,6 +135,23 @@ def build_monthly_row(metric_id: str, year: int, month: int, value: float,
     }
 
 
+def build_history_rows(
+    parsed: dict[tuple[int, int], "ParsedMfr"],
+    *,
+    drop_borrow: set[tuple[int, int]] = frozenset(),
+    drop_nbr: set[tuple[int, int]] = frozenset(),
+) -> list[dict]:
+    """Build monthly borrow/NBR upsert rows, omitting any (metric, month) that
+    failed the FYTD self-check. Months in neither drop set produce two rows."""
+    rows: list[dict] = []
+    for (y, m), pm in sorted(parsed.items()):
+        if (y, m) not in drop_borrow:
+            rows.append(build_monthly_row(METRIC_BORROW, y, m, pm.borrow_single))
+        if (y, m) not in drop_nbr:
+            rows.append(build_monthly_row(METRIC_NBR, y, m, pm.nbr_single))
+    return rows
+
+
 def build_adp_rows(source: str = ADP_SOURCE) -> list[dict]:
     """Annual ADP completion % rows from ADP_VALUES (static backfill).
 
@@ -403,19 +420,24 @@ def main(argv: list[str] | None = None) -> int:
             pm.year, pm.month, pm.borrow_single, pm.borrow_fytd, pm.nbr_single, pm.nbr_fytd,
         )
 
-    # FYTD-diff self-checks
+    # FYTD-diff self-check is a HARD GATE: log every warning, then drop the
+    # failing (metric, month) rows. July / gap-isolated months are never
+    # failures (kept on parse-strength — they are the anchor points).
+    drops: dict[str, set[tuple[int, int]]] = {}
     for which in ("borrow", "nbr"):
         for w in self_check_fytd(parsed, which):
             logger.warning("SELF-CHECK: %s", w)
+        drops[which] = self_check_failures(parsed, which)
+        for (y, m) in sorted(drops[which]):
+            logger.warning("DROP %s %04d-%02d: failed FYTD self-check", which, y, m)
 
-    # Build rows
-    history_rows: list[dict] = []
-    for (y, m), pm in sorted(parsed.items()):
-        history_rows.append(build_monthly_row(METRIC_BORROW, y, m, pm.borrow_single))
-        history_rows.append(build_monthly_row(METRIC_NBR, y, m, pm.nbr_single))
+    history_rows = build_history_rows(
+        parsed, drop_borrow=drops["borrow"], drop_nbr=drops["nbr"])
 
-    logger.info("prepared %d monthly borrow/NBR rows (%d months x 2 metrics)",
-                len(history_rows), len(parsed))
+    logger.info("prepared %d monthly borrow/NBR rows from %d months "
+                "(%d borrow + %d nbr dropped by self-check)",
+                len(history_rows), len(parsed),
+                len(drops["borrow"]), len(drops["nbr"]))
 
     # ADP annual rows (static; always appended so a full run seeds all 3 series)
     adp_rows = build_adp_rows()
