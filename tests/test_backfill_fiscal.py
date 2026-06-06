@@ -97,6 +97,18 @@ class TestFiscalYearOf:
         assert bf.fiscal_year_of(2025, 10) == 2026
 
 
+class TestFyAnchorTables:
+    def test_fy26_anchors_match_known_values(self):
+        assert bf.FY_BORROW_BUDGET[2026] == 104000.0
+        assert bf.FY_NBR_BUDGET[2026] == 499001.0
+
+    def test_fy25_and_fy24_anchors_present(self):
+        assert bf.FY_BORROW_BUDGET[2025] == 137500.0
+        assert bf.FY_NBR_BUDGET[2025] == 480000.0
+        assert bf.FY_BORROW_BUDGET[2024] == 132395.0
+        assert bf.FY_NBR_BUDGET[2024] == 430000.0
+
+
 class TestBuildMonthlyRow:
     def test_row_uses_month_end_as_of(self):
         row = bf.build_monthly_row(bf.METRIC_NBR, 2025, 10, 28027.0)
@@ -180,21 +192,21 @@ class TestMfrParserAgainstRealPdfs:
     @pytest.mark.parametrize("name", list(FIXTURES))
     def test_bank_borrowing_single_month(self, name):
         path = _fixture_path(name)
-        row = mfr.parse_bank_borrowing(str(path), fy_budget_crore=bf.FY26_BORROW_BUDGET_CRORE)
+        row = mfr.parse_bank_borrowing(str(path), fy_budget_crore=bf.FY_BORROW_BUDGET[2026])
         assert row.single_month == FIXTURES[name]["borrow_single"]
 
     @pytest.mark.parametrize("name", list(FIXTURES))
     def test_nbr_revenue_single_month(self, name):
         path = _fixture_path(name)
-        row = mfr.parse_nbr_revenue(str(path), fy_budget_crore=bf.FY26_NBR_BUDGET_CRORE)
+        row = mfr.parse_nbr_revenue(str(path), fy_budget_crore=bf.FY_NBR_BUDGET[2026])
         assert row.single_month == FIXTURES[name]["nbr_single"]
 
     def test_oct_fytd_values(self):
         # FYTD only meaningful for non-July months; check October directly.
         name = "c513580c-f220-49aa-9305-605585b84180.pdf"
         path = _fixture_path(name)
-        b = mfr.parse_bank_borrowing(str(path), fy_budget_crore=bf.FY26_BORROW_BUDGET_CRORE)
-        n = mfr.parse_nbr_revenue(str(path), fy_budget_crore=bf.FY26_NBR_BUDGET_CRORE)
+        b = mfr.parse_bank_borrowing(str(path), fy_budget_crore=bf.FY_BORROW_BUDGET[2026])
+        n = mfr.parse_nbr_revenue(str(path), fy_budget_crore=bf.FY_NBR_BUDGET[2026])
         assert b.fytd == FIXTURES[name]["borrow_fytd"]
         assert n.fytd == FIXTURES[name]["nbr_fytd"]
 

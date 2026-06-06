@@ -53,11 +53,27 @@ MFR_ARCHIVE_URL = (
 )
 ORACLE_CDN_HOST = "objectstorage.ap-dcc-gazipur-1.oraclecloud15.com"
 
-# FY26 annual-budget anchors (stable all fiscal year; used to locate the
-# single-month column robustly across the July vs Aug+ layout shift). These
-# are read straight off any FY26 MFR and are identical in every monthly issue.
-FY26_BORROW_BUDGET_CRORE = 104000.0   # Table 6 "Borrowing from Banking System (Net)" Budget FY26
-FY26_NBR_BUDGET_CRORE = 499001.0      # Table 4 "a. NBR" Budget FY26
+# Per-fiscal-year annual-budget anchors (BDT crore), keyed by FY-END year.
+# The MFR table layout is not fixed-position, so the parser locates the
+# current fiscal year's annual *Budget* value (stable across all 12 monthly
+# issues of that FY) and reads the single-month + FYTD figures right after it.
+# Each value is read straight off the printed table and CROSS-CHECKED across
+# two fiscal years' reports (every report prints both its own year's Budget
+# and the prior year's). Verified 2026-06-06.
+#   FY26: reproduces the live DB (borrow 5,720 / NBR 28,027 for Oct 2025).
+#   FY25/FY24: confirmed in both the year's own reports and the next year's
+#   prior-year column. FY23 and older are added during the dry-run (Task 8),
+#   each confirmed the same way; unconfirmable years are skipped, not guessed.
+FY_BORROW_BUDGET: dict[int, float] = {
+    2026: 104000.0,   # Table 6 "Borrowing from Banking System (Net)" Budget FY26
+    2025: 137500.0,   # Budget FY25
+    2024: 132395.0,   # Budget FY24
+}
+FY_NBR_BUDGET: dict[int, float] = {
+    2026: 499001.0,   # Table 4 "a. NBR" Budget FY26
+    2025: 480000.0,   # Budget FY25
+    2024: 430000.0,   # Budget FY24
+}
 
 # Self-check tolerance: |published_single_month - (fytd_t - fytd_{t-1})| / single
 SELF_CHECK_TOLERANCE = 0.05
