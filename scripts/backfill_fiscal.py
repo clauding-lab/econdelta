@@ -169,6 +169,59 @@ def build_adp_rows(source: str = ADP_SOURCE) -> list[dict]:
     return rows
 
 
+# ---------------------------------------------------------------------------
+# Hand-verified static monthly backfill (FY24-FY25).
+# The deterministic parser handles FY26+ (consistent recent layout), but older
+# MFRs shift their column layout report-to-report (an inserted "Revised Budget"
+# column, trailing memo columns), so these months are loaded as hand-verified
+# static values, mirroring ADP_VALUES. Verified 2026-06 by reading each report's
+# "Actual FY (Month)" column; the method was cross-checked against the live FY26
+# DB values (Jul'25 borrow 2,862 / Aug -6,289 / Oct 5,720) and, for NBR, against
+# the FYTD self-check (single == cumulative increase reconciled 22/22).
+#
+# NBR (tax revenue) is clean + self-consistent. Bank borrowing (Net) is volatile
+# and revised between MoF issues, so it does NOT form a clean running total --
+# each value is the figure MoF PUBLISHED for that month (provisional; marked via
+# the source field). Aug-2024 borrow is omitted: its published single-month
+# conflicts with the restated cumulative (suspect). Keyed by (year, month);
+# as_of = month-end. Idempotent on (metric_id, as_of).
+STATIC_NBR_SOURCE = "mof_mfr_static"
+STATIC_BORROW_SOURCE = "mof_mfr_static_provisional"
+
+STATIC_NBR_MONTHLY: dict[tuple[int, int], float] = {
+    (2023, 7): 22005.0, (2023, 8): 25404.0, (2023, 9): 28384.0,
+    (2023, 10): 26845.0, (2023, 11): 27917.0, (2023, 12): 27732.0,
+    (2024, 1): 33117.0, (2024, 2): 26649.0, (2024, 3): 31181.0,
+    (2024, 4): 28421.0, (2024, 5): 30702.0, (2024, 6): 52720.0,
+    (2024, 7): 21478.0, (2024, 8): 22647.0, (2024, 9): 30149.0,
+    (2024, 10): 26555.0, (2024, 11): 25426.0, (2024, 12): 32133.0,
+    (2025, 1): 34811.0, (2025, 2): 27801.0, (2025, 3): 32245.0,
+    (2025, 4): 36003.0, (2025, 5): 34658.0, (2025, 6): 42612.0,
+}
+STATIC_BORROW_MONTHLY: dict[tuple[int, int], float] = {
+    (2023, 7): -3298.0, (2023, 8): 6246.0, (2023, 9): 3668.0,
+    (2023, 10): -704.0, (2023, 11): 7055.0, (2023, 12): -4887.0,
+    (2024, 1): 15548.0, (2024, 2): -14475.0, (2024, 3): 13399.0,
+    (2024, 4): 24131.0, (2024, 5): 13245.0, (2024, 6): 42429.0,
+    (2024, 7): 8448.0,                       # (2024, 8) omitted -- suspect restatement
+    (2024, 9): 898.0, (2024, 10): 16715.0, (2024, 11): 22651.0,
+    (2024, 12): -4450.0, (2025, 1): 6934.0, (2025, 2): 11838.0,
+    (2025, 3): 29987.0, (2025, 4): 610.0, (2025, 5): 21884.0,
+    (2025, 6): 14791.0,
+}
+
+
+def build_static_monthly_rows() -> list[dict]:
+    """Hand-verified FY24-FY25 monthly NBR + bank-borrowing single-month rows
+    (BDT crore) from STATIC_*_MONTHLY. Idempotent on (metric_id, as_of)."""
+    rows: list[dict] = []
+    for (y, m), v in sorted(STATIC_NBR_MONTHLY.items()):
+        rows.append(build_monthly_row(METRIC_NBR, y, m, v, source=STATIC_NBR_SOURCE))
+    for (y, m), v in sorted(STATIC_BORROW_MONTHLY.items()):
+        rows.append(build_monthly_row(METRIC_BORROW, y, m, v, source=STATIC_BORROW_SOURCE))
+    return rows
+
+
 def _self_check_issues(series_by_month: dict[tuple[int, int], "ParsedMfr"],
                        which: str) -> list[tuple[tuple[int, int], str]]:
     """Shared core: for consecutive months within a fiscal year, published
@@ -371,6 +424,8 @@ def main(argv: list[str] | None = None) -> int:
                    help="cap number of MFRs to download (newest-first)")
     p.add_argument("--adp-only", action="store_true",
                    help="seed only the annual ADP completion %% rows (no MFR fetch)")
+    p.add_argument("--static-only", action="store_true",
+                   help="seed only the hand-verified FY24-FY25 monthly rows (no MFR fetch)")
     p.add_argument("--verbose", "-v", action="store_true")
     args = p.parse_args(argv)
 
@@ -392,6 +447,23 @@ def main(argv: list[str] | None = None) -> int:
         sent = _upsert(url, key, adp_rows,
                        table="metric_history_monthly", on_conflict="metric_id,as_of")
         logger.info("upsert ok: %d ADP rows -> metric_history_monthly", sent)
+        return 0
+
+    if args.static_only:
+        static_rows = build_static_monthly_rows()
+        n_nbr = sum(1 for r in static_rows if r["metric_id"] == METRIC_NBR)
+        n_bor = sum(1 for r in static_rows if r["metric_id"] == METRIC_BORROW)
+        logger.info("static-only: %d rows (%d NBR + %d borrow, FY24-FY25)",
+                    len(static_rows), n_nbr, n_bor)
+        if args.dry_run:
+            for r in static_rows:
+                logger.info("  %s", r)
+            logger.info("=== --dry-run: %d static rows would upsert ===", len(static_rows))
+            return 0
+        url, key = _resolve_credentials()
+        sent = _upsert(url, key, static_rows,
+                       table="metric_history_monthly", on_conflict="metric_id,as_of")
+        logger.info("upsert ok: %d static rows -> metric_history_monthly", sent)
         return 0
 
     links = _load_links(args)[: args.max_reports]

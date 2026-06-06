@@ -349,3 +349,33 @@ class TestBuildHistoryRowsGate:
         parsed = {(2025, 9): self._mk(2025, 9, 1111.0, 27000.0)}
         rows = bf.build_history_rows(parsed)
         assert len(rows) == 2
+
+
+class TestStaticMonthlyBackfill:
+    def test_row_count_nbr_24_borrow_23(self):
+        rows = bf.build_static_monthly_rows()
+        nbr = [r for r in rows if r["metric_id"] == bf.METRIC_NBR]
+        borrow = [r for r in rows if r["metric_id"] == bf.METRIC_BORROW]
+        assert len(nbr) == 24
+        assert len(borrow) == 23  # Aug 2024 excluded (suspect restatement)
+
+    def test_nbr_value_and_provenance(self):
+        rows = bf.build_static_monthly_rows()
+        jun24 = next(r for r in rows
+                     if r["metric_id"] == bf.METRIC_NBR and r["as_of"] == "2024-06-30")
+        assert jun24["value"] == 52720.0
+        assert jun24["source"] == "mof_mfr_static"
+        assert jun24["source_as_of"] == "2024-06-30"
+
+    def test_borrow_value_and_provisional_source(self):
+        rows = bf.build_static_monthly_rows()
+        mar25 = next(r for r in rows
+                     if r["metric_id"] == bf.METRIC_BORROW and r["as_of"] == "2025-03-31")
+        assert mar25["value"] == 29987.0
+        assert mar25["source"] == "mof_mfr_static_provisional"
+
+    def test_aug_2024_borrow_excluded_but_nbr_present(self):
+        rows = bf.build_static_monthly_rows()
+        keys = {(r["metric_id"], r["as_of"]) for r in rows}
+        assert (bf.METRIC_BORROW, "2024-08-31") not in keys  # dropped — suspect
+        assert (bf.METRIC_NBR, "2024-08-31") in keys         # kept — clean
