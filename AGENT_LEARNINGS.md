@@ -37,6 +37,20 @@ When something ships broken, when a methodology gap is exposed, or when a smoke 
 
 ## Entries (most recent first)
 
+## 2026-06-07 — Older MoF MFRs reflow their columns between issues; the dry-run + FYTD self-check caught it before any bad write (fiscal backfill)
+
+**Trigger:** "F7" — backfilling FY24/FY25 monthly fiscal data (govt bank borrowing + NBR revenue) to deepen The Brief's fiscal charts. After shipping a per-fiscal-year anchor parser (PR #72), a full-archive `--static-only`-precursor `--dry-run` over the real MFR PDFs.
+
+**What went wrong:** Two findings. (1) **Forward-fill was a no-op** — MoF's newest published MFR is Oct 2025 (~8-month lag), already in the DB; "stale at Oct 2025" was the source's publishing frontier, not a pipeline gap. (2) The per-FY value-anchor parser (find the current-FY annual *Budget* in the row, take the next two numbers as single/FYTD) works for FY26 but FAILS for FY24/FY25: those reports shift their Table-6/Table-4 column layout report-to-report — an inserted "Revised Budget FYxx" column, a dropped prior-FY full-year column, trailing memo columns — so `anchor+1/+2` lands on the wrong cells. Apr-2025 read 99,000 (the FY25 *revised budget*) as April's single-month with a YTD of 610.
+
+**Lesson:** A value-anchor + fixed column offset is only as stable as the table's column COUNT; multi-year government PDFs reflow columns between issues. And a cross-issue FYTD self-check (single ≈ Δ cumulative) is a reliable validator for clean additive series (NBR reconciled **22/22**) but NOT for figures the source restates between issues (bank borrowing reconciled **0/20** — MoF revises borrowing). Same extraction logic, opposite trust.
+
+**Prevention:** The FYTD self-check is a HARD GATE on the parser write-path (drops non-reconciling months; July/gap months kept); the dry-run prints every parsed month for human review BEFORE the VPS write. Layout-inconsistent historical data is loaded as a hand-verified static dict (`STATIC_*_MONTHLY` + `--static-only`), mirroring `ADP_VALUES`, with extraction cross-validated against the live FY26 DB values (Jul'25 borrow 2,862 / Oct 5,720). Restated/provisional series are tagged via the `source` field so downstream can flag them.
+
+**Hotfix:** PR #72 (merge `957e68f`). NBR 24 mo (`mof_mfr_static`) + borrow 23 mo (`mof_mfr_static_provisional`, Aug-2024 omitted — its published single conflicts with the restated cumulative). Written to prod 2026-06-07; verified 28 NBR / 27 borrow rows Jul'23→Oct'25, FY26 rows untouched.
+
+**Cross-references:** AGENTS.md landmine 32; auto-memory `project_econdelta_fiscal_backfill`; spec/plan `docs/superpowers/{specs,plans}/2026-06-06-fiscal-backfill-per-fy-anchor*`; relates to `project_econdelta_pdf_table_row_source_as_of` (the source_as_of-recovery work).
+
 ## 2026-06-05 — New test CI caught that the suite isn't fully hermetic: 2 fetcher tests need a real headless Chromium
 
 **Trigger:** Adding the first backend CI (`.github/workflows/test.yml`, ruff + pytest on push/PR) during the repo-review fixes. A review agent had asserted "the suite is hermetic — no secrets needed" (true) and implied it was fully self-contained (not quite).
