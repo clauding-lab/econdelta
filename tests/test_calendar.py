@@ -2,12 +2,48 @@
 
 import json
 import tempfile
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 import pytest
 
-from utils.calendar import is_bd_trading_day, load_holidays, previous_trading_day
+from utils.calendar import (
+    is_bd_trading_day,
+    last_trading_close,
+    load_holidays,
+    previous_trading_day,
+)
+
+
+class TestLastTradingClose:
+    """DSE closes ~14:30 BD (08:30 UTC), trades Sun–Thu. Reference week (2026):
+    Thu 06-25 (trade) · Fri 06-26 / Sat 06-27 (weekend) · Sun 06-28 (trade)."""
+
+    def test_saturday_returns_thursday_close(self):
+        # Sat 2026-06-27 06:00 UTC -> last close is Thursday's (weekend skipped)
+        now = datetime(2026, 6, 27, 6, 0, tzinfo=timezone.utc)
+        assert last_trading_close(now) == datetime(2026, 6, 25, 8, 30, tzinfo=timezone.utc)
+
+    def test_sunday_before_close_returns_thursday(self):
+        # Sun 2026-06-28 06:00 UTC = 12:00 BD, before the 14:30 close -> Thursday's
+        now = datetime(2026, 6, 28, 6, 0, tzinfo=timezone.utc)
+        assert last_trading_close(now) == datetime(2026, 6, 25, 8, 30, tzinfo=timezone.utc)
+
+    def test_trading_day_after_close_returns_today(self):
+        # Sun 2026-06-28 09:00 UTC = 15:00 BD, after the 14:30 close -> today's close
+        now = datetime(2026, 6, 28, 9, 0, tzinfo=timezone.utc)
+        assert last_trading_close(now) == datetime(2026, 6, 28, 8, 30, tzinfo=timezone.utc)
+
+    def test_naive_now_is_treated_as_utc(self):
+        now = datetime(2026, 6, 27, 6, 0)  # naive
+        assert last_trading_close(now) == datetime(2026, 6, 25, 8, 30, tzinfo=timezone.utc)
+
+    def test_holiday_is_skipped(self):
+        # If Thursday 06-25 is a holiday, the last close rolls back to Wednesday 06-24
+        now = datetime(2026, 6, 27, 6, 0, tzinfo=timezone.utc)
+        assert last_trading_close(now, holidays={date(2026, 6, 25)}) == datetime(
+            2026, 6, 24, 8, 30, tzinfo=timezone.utc
+        )
 
 
 class TestIsBdTradingDay:

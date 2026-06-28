@@ -13,6 +13,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from utils.calendar import last_trading_close, load_holidays
 from utils.notifier import notify
 from utils.opus_review import archive_latest, load_history, review_data
 from utils.schema import (
@@ -32,6 +33,12 @@ LATEST_PATH = DATA_DIR / "latest.json"
 ARCHIVE_DIR = DATA_DIR / "archive"
 CONFIG_PATH = REPO_ROOT / "config" / "sources.json"
 SOURCES_V3_PATH = REPO_ROOT / "config" / "sources-v3.json"
+HOLIDAYS_PATH = REPO_ROOT / "config" / "holidays_2026.json"
+
+# Sources whose data only exists on DSE trading days (Sun–Thu). Their freshness is
+# judged against the last *closed* trading session, not raw age — so a Fri/Sat/holiday
+# gap is NOT flagged stale. Everything else uses the plain age threshold.
+_TRADING_DAY_SOURCES = frozenset({"dse_market"})
 
 STALE_THRESHOLD_HOURS = 24.0
 
@@ -98,8 +105,20 @@ def load_snapshot(path: Path, schema_class: type) -> Any:
         return None
 
 
-def compute_status(snapshot: Any, url: str | None, now: datetime) -> SourceStatus:
-    """Derive SourceStatus from a loaded snapshot + current time."""
+def compute_status(
+    snapshot: Any,
+    url: str | None,
+    now: datetime,
+    *,
+    key: str | None = None,
+    holidays: set[date] | None = None,
+) -> SourceStatus:
+    """Derive SourceStatus from a loaded snapshot + current time.
+
+    Trading-day-bound sources (``_TRADING_DAY_SOURCES``, i.e. DSE) are judged against
+    the last *closed* DSE session, not raw age: DSE has no Fri/Sat/holiday data, so a
+    weekend gap is fresh, not stale. All other sources use the plain age threshold.
+    """
     if snapshot is None:
         return SourceStatus(
             status="missing",
@@ -112,7 +131,13 @@ def compute_status(snapshot: Any, url: str | None, now: datetime) -> SourceStatu
     if scraped_at.tzinfo is None:
         scraped_at = scraped_at.replace(tzinfo=timezone.utc)
     age_hours = (now - scraped_at).total_seconds() / 3600.0
-    status = "ok" if age_hours <= STALE_THRESHOLD_HOURS else "stale"
+    if key in _TRADING_DAY_SOURCES:
+        try:
+            status = "ok" if scraped_at >= last_trading_close(now, holidays) else "stale"
+        except RuntimeError:  # broken holiday data — fall back to raw age, never crash
+            status = "ok" if age_hours <= STALE_THRESHOLD_HOURS else "stale"
+    else:
+        status = "ok" if age_hours <= STALE_THRESHOLD_HOURS else "stale"
     return SourceStatus(
         status=status,
         last_success=scraped_at,
@@ -942,6 +967,14 @@ def main() -> int:
     with CONFIG_PATH.open() as f:
         sources_cfg = json.load(f)["sources"]
 
+    # Trading-day-aware DSE staleness skips Fri/Sat + public holidays. Fall back to
+    # weekend-only (holidays=None) if the holiday file is missing/malformed.
+    try:
+        holidays = load_holidays(HOLIDAYS_PATH)
+    except (FileNotFoundError, ValueError) as e:
+        logger.warning("holidays load failed (%s); DSE staleness uses weekends only", e)
+        holidays = None
+
     snapshots: dict[str, Any] = {}
     sources_status: dict[str, SourceStatus] = {}
 
@@ -951,7 +984,7 @@ def main() -> int:
         snapshot = load_snapshot(latest_file, schema_class) if latest_file else None
         snapshots[key] = snapshot
         url = sources_cfg.get(url_key, {}).get("url") if url_key else None
-        sources_status[key] = compute_status(snapshot, url, now)
+        sources_status[key] = compute_status(snapshot, url, now, key=key, holidays=holidays)
 
     data = flatten_data(snapshots)
 
