@@ -65,6 +65,7 @@ from datetime import date, timedelta
 from bs4 import BeautifulSoup
 
 from utils.http_client import HttpClient
+from utils.notifier import notify
 
 logger = logging.getLogger("backfill_dse_dayend")
 
@@ -89,6 +90,12 @@ _BROWSER_UA = (
 _REQUEST_DELAY_S = 2.0
 _DEFAULT_LOOKBACK_DAYS = 60
 _DRY_RUN_SAMPLE_SCRIPS = 3
+
+# Alert floor for the DAILY production path (dse_dayend). DS30 is 30 tickers; a
+# full run that lands fewer than this many distinct tickers means the source or
+# TLS chain is degrading (the 24-silent-day DSE freeze was exactly this, unwatched).
+# Only enforced when notify_on_failure=True AND the run covers the full DS30 set.
+_TICKER_FLOOR = 25
 
 # Sanity envelope for a parsed close (taka). DS30 names trade well within this.
 _MIN_CLOSE = 0.0
@@ -337,8 +344,17 @@ def run_backfill(
     dry_run: bool,
     sample_only: bool,
     codes_override: list[str] | None = None,
+    notify_on_failure: bool = False,
 ) -> int:
-    """Fetch DS30 closes and either print (dry-run) or upsert (real)."""
+    """Fetch DS30 closes and either print (dry-run) or upsert (real).
+
+    ``notify_on_failure`` (default False so manual backfills and dry-runs stay
+    quiet) is set True by the daily ``scrapers.dse_dayend`` production path so a
+    total fetch failure, a below-floor partial, or a Supabase write error fires a
+    Discord ``error`` alert instead of failing silently — this scraper was the
+    ONLY one without alerting, which is how the DSE feed froze unnoticed for 24
+    days (E1.6).
+    """
     client = _make_client()
 
     if codes_override:
@@ -346,7 +362,22 @@ def run_backfill(
         print(f"Using {len(codes)} override code(s): {codes}")
     else:
         print(f"Fetching DS30 constituent list from {DS30_URL} ...")
-        codes = fetch_ds30_codes(client)
+        try:
+            codes = fetch_ds30_codes(client)
+        except (HttpClient.FetchError, BackfillError) as e:
+            # The list fetch runs BEFORE the per-scrip loop — without this guard
+            # a TLS break / host block / page reshape here escapes the alerting
+            # below entirely (run_logs says fail, nobody pinged): the exact E1.6
+            # silent-failure class this module's alerting exists to kill.
+            if notify_on_failure:
+                notify(
+                    "error",
+                    "dse_dayend — DS30 list fetch failed",
+                    f"Could not fetch/parse the DS30 constituent list from {DS30_URL}; "
+                    f"no tickers scraped for window {start.isoformat()}..{end.isoformat()}. "
+                    f"{type(e).__name__}: {e}",
+                )
+            raise
         print(f"DS30 list: {len(codes)} codes -> {codes}")
 
     if sample_only:
@@ -379,24 +410,53 @@ def run_backfill(
         print("\nDRY RUN — nothing written to Supabase.")
         return 0 if all_rows else 1
 
-    # --- Real write path (NOT exercised in this build/validation run) -------
-    from utils.supabase_writer import upsert_metric_history  # local import
+    # --- Real write path ----------------------------------------------------
+    from utils.supabase_writer import SupabaseWriteError, upsert_metric_history
 
     if not all_rows:
         print("No rows parsed; nothing to upsert.")
+        if notify_on_failure:
+            notify(
+                "error",
+                "dse_dayend — zero tickers written",
+                f"No DS30 closes parsed for window {start.isoformat()}..{end.isoformat()}; "
+                f"all {len(codes)} ticker fetches failed (likely a DSE TLS-chain break "
+                "or host block).",
+            )
         return 1
 
-    total = 0
-    for trading_day, day_rows in sorted(group_rows_by_date(all_rows).items()):
-        data, as_of_map = rows_to_supabase_payload(day_rows)
-        n = upsert_metric_history(
-            data=data,
-            as_of=trading_day,
-            source=SOURCE_LABEL,
-            source_as_of_map=as_of_map,
+    distinct = len({r.metric_id for r in all_rows})
+    is_full_run = codes_override is None and not sample_only
+    if notify_on_failure and is_full_run and distinct < _TICKER_FLOOR:
+        notify(
+            "error",
+            "dse_dayend — below ticker floor",
+            f"Only {distinct}/{len(codes)} DS30 tickers parsed for window "
+            f"{start.isoformat()}..{end.isoformat()} (floor {_TICKER_FLOOR}); the source "
+            "may be partially degraded. Writing the partial set.",
         )
-        total += n
-        logger.info("upserted %d rows for %s", n, trading_day.isoformat())
+
+    total = 0
+    try:
+        for trading_day, day_rows in sorted(group_rows_by_date(all_rows).items()):
+            data, as_of_map = rows_to_supabase_payload(day_rows)
+            n = upsert_metric_history(
+                data=data,
+                as_of=trading_day,
+                source=SOURCE_LABEL,
+                source_as_of_map=as_of_map,
+            )
+            total += n
+            logger.info("upserted %d rows for %s", n, trading_day.isoformat())
+    except SupabaseWriteError as e:
+        if notify_on_failure:
+            notify(
+                "error",
+                "dse_dayend — Supabase write failed",
+                f"metric_history upsert failed after {total} row(s) for window "
+                f"{start.isoformat()}..{end.isoformat()}: {type(e).__name__}: {e}",
+            )
+        raise
     print(f"Upserted {total} rows to metric_history.")
     return 0
 

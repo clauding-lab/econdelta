@@ -60,7 +60,13 @@ def main() -> int:
     # codes_override omitted -> run_backfill fetches the 30 DS30 codes live.
     # dry_run/sample_only False -> a real write of the full set (run_backfill
     # prints the ticker x day counts it wrote).
-    return run_backfill(start=start, end=end, dry_run=False, sample_only=False)
+    # notify_on_failure=True -> the daily production path fires a Discord error
+    # alert on a total fetch failure, a below-floor partial, or a Supabase write
+    # error, instead of failing silently (E1.6 — this was the ONLY scraper with
+    # no alerting, the path behind the 24-day silent DSE freeze).
+    return run_backfill(
+        start=start, end=end, dry_run=False, sample_only=False, notify_on_failure=True,
+    )
 
 
 if __name__ == "__main__":
