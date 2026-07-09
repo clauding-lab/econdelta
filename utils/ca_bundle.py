@@ -11,12 +11,18 @@ Concretely (E1.2, 2026-07-09): DSE renewed its cert ~2026-06-09 and its servers
 (``…Root R46``) but not that intermediate, so every DSE fetch broke — the daily
 index scraper AND the day-end backfill — for weeks.
 
-The fix is NOT ``verify=False`` (never do that). Instead we bundle the missing
-intermediate(s) as PEM files under ``certs/`` and merge them with certifi's
-trusted roots into one CA bundle that :class:`utils.http_client.HttpClient` points
-``verify`` at. This is purely ADDITIVE — it adds trust anchors, never removes a
-certifi root — so it is safe for every host, and any bundle-build failure degrades
-gracefully to plain certifi (no fetch is ever left un-verified).
+The fix is NOT ``verify=False`` (never do that). Instead we merge certifi's
+trusted roots with the intermediates vendored under ``fetchers/ca/`` — the ONE
+canonical location for vendored intermediates in this repo, shared with the
+host-scoped urllib path in ``fetchers/tls.py`` (mof.gov.bd) so there is a single
+cert file and a single rotation point (see that module's docstring). The result
+is one CA bundle that :class:`utils.http_client.HttpClient` points ``verify`` at.
+
+This is purely ADDITIVE — it adds a publicly-issued intermediate as a chain-
+building link, never removes a certifi root — so it cannot weaken verification
+for any host: a leaf must still chain to a certifi-trusted ROOT and match the
+hostname; an intermediate can't make a bad cert good. Any bundle-build failure
+degrades gracefully to plain certifi (no fetch is ever left un-verified).
 
 This travels with the repo, so a from-scratch redeploy verifies DSE without the
 manual box-level ``certifi/cacert.pem`` append.
@@ -32,18 +38,23 @@ import certifi
 
 logger = logging.getLogger("ca_bundle")
 
-_CERTS_DIR = Path(__file__).resolve().parent.parent / "certs"
+# The single canonical home for vendored intermediates — shared with the
+# host-scoped urllib path (fetchers/tls.py). Do NOT create a second cert dir:
+# two copies of the same intermediate means two rotation points and a silent
+# drift trap when the CA eventually rotates.
+_CERTS_DIR = Path(__file__).resolve().parent.parent / "fetchers" / "ca"
 _cached_bundle: str | None = None
 
 
 def combined_ca_bundle() -> str:
-    """Return a path to a CA bundle = certifi roots + every ``certs/*.pem`` extra.
+    """Return a path to a CA bundle = certifi roots + every ``fetchers/ca/*.pem``.
 
     Memoised per process (the merged file is written once to the temp dir). On any
-    failure — no ``certs/`` dir, unreadable PEM, un-writable temp — this returns
-    ``certifi.where()`` so callers still verify against the standard root store.
-    The bundled intermediate is only additive trust, so losing it never weakens
-    verification; it just means an incomplete-chain host (DSE) fails as before.
+    failure — no ``fetchers/ca/`` dir, unreadable PEM, un-writable temp — this
+    returns ``certifi.where()`` so callers still verify against the standard root
+    store. The bundled intermediate is only additive trust, so losing it never
+    weakens verification; it just means an incomplete-chain host (DSE) fails as
+    before.
     """
     global _cached_bundle
     if _cached_bundle is not None:
@@ -58,7 +69,7 @@ def combined_ca_bundle() -> str:
 
         parts = [Path(base).read_text()]
         for pem in extras:
-            parts.append(f"\n# --- extra CA bundled from certs/{pem.name} ---\n")
+            parts.append(f"\n# --- extra CA bundled from fetchers/ca/{pem.name} ---\n")
             parts.append(pem.read_text())
 
         fd, path = tempfile.mkstemp(prefix="econdelta-ca-", suffix=".pem")

@@ -1,9 +1,12 @@
 """Tests for utils.ca_bundle — the additive certifi + intermediates CA bundle (E1.2).
 
 DSE's servers send an incomplete TLS chain (leaf only, missing the Sectigo R36
-intermediate). We bundle that intermediate under certs/ and merge it with certifi
-so HttpClient verifies DSE without ever disabling verification. These tests pin
-that the merge is additive, loadable, and actually wired into HttpClient.
+intermediate). The intermediate is vendored at fetchers/ca/sectigo_r36.pem — the
+ONE canonical cert location, shared with fetchers/tls.py's host-scoped urllib
+path — and merged with certifi so HttpClient verifies DSE without ever disabling
+verification. These tests pin that the merge is additive, loadable, actually
+wired into HttpClient, and that it reads the SAME vendored file fetchers/tls.py
+uses (one rotation point — no second cert copy may reappear).
 """
 from __future__ import annotations
 
@@ -12,10 +15,10 @@ from pathlib import Path
 
 import certifi
 
-from utils.ca_bundle import combined_ca_bundle
+from utils.ca_bundle import _CERTS_DIR, combined_ca_bundle
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
-_DSE_INTERMEDIATE = _REPO_ROOT / "certs" / "dse_sectigo_r36.pem"
+_DSE_INTERMEDIATE = _REPO_ROOT / "fetchers" / "ca" / "sectigo_r36.pem"
 
 
 def _pem_body(path: Path) -> str:
@@ -53,3 +56,17 @@ def test_http_client_verifies_against_the_combined_bundle():
     client = HttpClient()
     assert client._session.verify == combined_ca_bundle()
     assert Path(client._session.verify).exists()
+
+
+def test_single_vendored_cert_location_shared_with_fetchers_tls():
+    """Consolidation guard (review MEDIUM on PR #78): utils/ca_bundle and
+    fetchers/tls must read the SAME vendored directory, and no second cert dir
+    (the old certs/) may reappear — two copies of one intermediate means two
+    rotation points and silent drift when the CA rotates."""
+    import fetchers.tls as ftls
+
+    assert _CERTS_DIR == ftls._CA_DIR, "ca_bundle and fetchers.tls must share one cert dir"
+    assert _DSE_INTERMEDIATE.exists(), "the vendored Sectigo R36 intermediate is missing"
+    assert not (_REPO_ROOT / "certs").exists(), (
+        "a second cert dir (certs/) reappeared — vendor intermediates ONLY in fetchers/ca/"
+    )

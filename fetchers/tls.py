@@ -13,16 +13,30 @@ trusts the standard roots (certifi) AND is pre-loaded with the missing intermedi
 vendored under ``fetchers/ca/``. OpenSSL then uses the vendored intermediate to
 bridge leaf → root.
 
-Scope is intentionally narrow (``_HOST_INTERMEDIATES``) so every other source keeps
-the stock default context. Add a host here only after confirming — on a host with
-egress to it — that it actually serves an incomplete chain; over-applying a custom
-CA bundle is a silent way to mask a genuinely bad cert elsewhere.
+Scope here is narrow (``_HOST_INTERMEDIATES``) so the urllib fetchers keep the
+stock default context for every other source. Add a host here only after
+confirming — on a host with egress to it — that it actually serves an incomplete
+chain. NOTE (2026-07-09, E1.2): the ``requests`` path takes a different route —
+``utils/ca_bundle.combined_ca_bundle`` merges certifi with EVERY PEM in
+``fetchers/ca/`` and ``utils/http_client.HttpClient`` verifies against that
+globally. That is safe because an intermediate is only a chain-building link: a
+leaf must still chain to a certifi-trusted ROOT and match the hostname, so an
+additive intermediate cannot mask a genuinely bad cert (the original caution
+above applies to adding ROOTS or swapping the whole bundle, not to additive
+intermediates). The DSE break proved the same intermediate is needed by multiple
+unrelated hosts (mof.gov.bd, www.dse.com.bd, dsebd.org), which host-scoping
+handles poorly for requests-based scrapers.
 
-Vendored intermediate:
+Vendored intermediates (``fetchers/ca/`` is the ONE canonical location — never
+create a second cert dir; both this module and ``utils/ca_bundle.py`` read it,
+one file = one rotation point):
   fetchers/ca/sectigo_r36.pem — "Sectigo Public Server Authentication CA DV R36",
-  issued by Root R46 (already in certifi), valid through 2036-03-21. When it
-  eventually rotates, mof.gov.bd fetches will fail again with CERTIFICATE_VERIFY_FAILED
-  until the new intermediate is re-vendored here.
+  issued by Root R46 (already in certifi), valid through 2036-03-21. Completes the
+  chain for mof.gov.bd (urllib path, host-scoped here) AND www.dse.com.bd /
+  dsebd.org (requests path, via utils/ca_bundle). When it eventually rotates,
+  those fetches fail again with CERTIFICATE_VERIFY_FAILED until the new
+  intermediate is re-vendored here (fetch it from the leaf's AIA "CA Issuers"
+  URL — see AGENTS.md landmine 33).
 """
 from __future__ import annotations
 

@@ -44,9 +44,10 @@ class HttpClient:
         self._timeout = timeout
         self._session = requests.Session()
         self._session.headers.update({"User-Agent": _USER_AGENT})
-        # Verify against certifi PLUS any repo-bundled intermediates (certs/*.pem).
-        # DSE's servers send an incomplete chain (leaf only, missing the Sectigo
-        # R36 intermediate); this additive bundle lets requests verify them without
+        # Verify against certifi PLUS the vendored intermediates (fetchers/ca/*.pem,
+        # shared with fetchers/tls.py — one cert file, one rotation point). DSE's
+        # servers send an incomplete chain (leaf only, missing the Sectigo R36
+        # intermediate); this additive bundle lets requests verify them without
         # ever disabling verification. Falls back to certifi on any build failure.
         self._session.verify = combined_ca_bundle()
 
