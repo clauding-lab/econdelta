@@ -115,3 +115,38 @@ def get_active_media_review(*, url: str | None = None, key: str | None = None,
         "press_as_of,kind,source_outlet,status&status=in.(approved,applied)",
         url=url, key=key, session=session,
     )
+
+
+_FRESHNESS_PAGE_SIZE = 1000
+
+
+def fetch_all_freshness_rows(
+    table: str, *, url: str | None = None, key: str | None = None,
+    session: requests.Session | None = None, page_size: int = _FRESHNESS_PAGE_SIZE,
+) -> list[dict[str, Any]]:
+    """Page through an entire history table → ``[{metric_id, as_of, ingested_at}]``.
+
+    The freshness sentinel (E2.1) needs per-metric ``max(as_of)`` +
+    ``max(ingested_at)`` across ``metric_history`` and ``metric_history_monthly``.
+    Postgres/PostgREST caps a single response (default 1000 rows), so we page
+    with limit/offset until a short page signals the end. Ordered by
+    ``(metric_id, as_of)`` for deterministic paging. Runs in the sentinel's
+    07:30-UTC window when no writer is active, so offset paging can't skip rows.
+
+    Raises ``SupabaseReadError`` on any page failure — a partial read must not
+    read as "everything is fresh".
+    """
+    rows: list[dict[str, Any]] = []
+    offset = 0
+    sess = session or requests.Session()
+    while True:
+        path = (
+            f"{table}?select=metric_id,as_of,ingested_at"
+            f"&order=metric_id.asc,as_of.asc&limit={page_size}&offset={offset}"
+        )
+        page = _get(path, url=url, key=key, session=sess)
+        rows.extend(page)
+        if len(page) < page_size:
+            break
+        offset += page_size
+    return rows

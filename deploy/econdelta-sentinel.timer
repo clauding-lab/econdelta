@@ -1,0 +1,11 @@
+[Unit]
+Description=Run EconDelta freshness sentinel daily at 07:30 UTC (13:30 BDT) — after the 07:00 aggregate grades the day
+Requires=econdelta-sentinel.service
+
+[Timer]
+OnCalendar=*-*-* 07:30:00 UTC
+Persistent=true
+RandomizedDelaySec=60
+
+[Install]
+WantedBy=timers.target
