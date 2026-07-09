@@ -1,0 +1,38 @@
+[Unit]
+Description=EconDelta — Freshness sentinel (daily data-staleness digest + dead-man's-switch)
+Documentation=https://github.com/clauding-lab/econdelta
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=3600
+StartLimitBurst=3
+
+[Service]
+Type=oneshot
+User=adnan-local
+Group=adnan-local
+WorkingDirectory=/home/adnan-local/econdelta
+EnvironmentFile=/etc/econdelta.env
+ExecStart=/home/adnan-local/econdelta/.venv/bin/python -m sentinel
+
+MemoryMax=400M
+MemoryHigh=300M
+TasksMax=256
+
+PrivateTmp=true
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/adnan-local/econdelta/logs
+
+TimeoutStartSec=600
+# Read failure (exit 1) is transient (Supabase blip) — retry via StartLimitBurst.
+# A staleness digest is a clean run (exit 0) and never retries.
+Restart=on-failure
+RestartSec=120
+
+StandardOutput=append:/home/adnan-local/econdelta/logs/sentinel-systemd.log
+StandardError=append:/home/adnan-local/econdelta/logs/sentinel-systemd.log
+SyslogIdentifier=econdelta-sentinel
+
+[Install]
+WantedBy=multi-user.target
