@@ -37,6 +37,20 @@ When something ships broken, when a methodology gap is exposed, or when a smoke 
 
 ## Entries (most recent first)
 
+## 2026-07-09 — "MEI held April while BB published May" was a parse-side glob bug, not discovery staleness
+
+**Trigger:** E1.1 handoff flagged, as a follow-up, that "the underlying MEI issue the pipeline holds is April 2026 while BB has published May 2026 (a separate fetch/discover staleness)". Executed as the E2/E3 session's E1 leftover.
+
+**What went wrong:** The premise ("discover staleness") was wrong, and chasing it would have "fixed" a healthy component. Two first-hand observations corrected it: (1) fetching BB's live MEI index and running `discover_latest_pdf_link` on it returned `2026_may.pdf` — discovery correctly picks the latest issue. (2) Read-only ExonVPS listing showed the real bug: `fetch_pdf` writes into a dir keyed by the CURRENT calendar month and the filename is edition-named, so when a new issue drops mid-month BOTH land in the same dir — `money_multiplier/2026-06/` held `2026_april.pdf` AND `2026_may.pdf` (and `2026-05/` held january+march+april). `parse_all._load_artifact_for` selected `pdfs[0]` from an UNSORTED `glob("*.pdf")`, so parse could read the stale April even though May was fetched. The "discover staleness" symptom was produced entirely in artifact SELECTION, one layer below discovery.
+
+**Lesson:** When a handoff names a probable cause ("fetch/discover staleness"), verify the named layer before fixing it — probe discovery against the live source and inspect the actual on-disk artifacts. A stale OUTPUT can come from a healthy fetcher + a wrong file-picker. "glob()[0]" is an ordering assumption disguised as a default; filesystem glob order is arbitrary.
+
+**Prevention:** `_load_artifact_for` now picks `max(pdfs, key=mtime)` (discovery only advances to newer issues, cache-hits don't rewrite → freshest mtime = latest issue). Regression test mirrors the real 2026-06 accumulation. Distilled to AGENTS.md landmine 35. Same code path protects QFSAR.
+
+**Hotfix:** PR (E1 MEI leftover) `fix(parse): parse the newest-fetched PDF when a month-dir holds multiple issues`. Companion finding, no code: BB has NOT published a QFSAR newer than Jul-Sep 2025 (Issue 33) — index lists it as latest, discovery picks it — so `banking_sector_crar`/`gross_npl_ratio` @ 2025-09-30 is BB's own publishing frontier (source lag), NOT a pipeline bug. The E2.1 sentinel flagging CRAR stale (282d > 165d) is a correct true-positive.
+
+**Cross-references:** AGENTS.md landmine 35 (PDF month-dir accumulation); `parse_all._load_artifact_for`; landmine 29 (`finditer` latest-date — a sibling "pick the latest, not the first" rule); the 2026-07-09 E1.1 entry below (the ingested_at freeze this was mistakenly conflated with); CLAUDE.md rule 10 (show the observation before the inference).
+
 ## 2026-07-09 — DSE feed dead 24 days: server sends an incomplete TLS chain, requests won't AIA-chase the intermediate
 
 **Trigger:** Ecosystem-review handoff (E1.2). `dse_market` frozen in Supabase at 2026-06-11, `dse_dayend` at 2026-06-10, both while `run_logs` looked clean (index scraper "skips" on non-trading days; dayend all-fail was unalerted — see the E1.6 entry).

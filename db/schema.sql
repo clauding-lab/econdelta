@@ -41,11 +41,14 @@ CREATE INDEX IF NOT EXISTS metric_history_as_of_idx
 -- =====================================================================
 -- Row-Level Security
 -- =====================================================================
--- The table is currently service-role-only — there is no public anon
--- read path. Future consumers that don't run on a trusted VPS should:
---   1. get a scoped role added (e.g. ``econdelta_reader``)
---   2. have RLS policies attached to that role
---   3. authenticate with a per-app key, NOT the service role
+-- RLS: anon-read IS enabled on this table (verified live 2026-07-09 via
+-- pg_policies — TWO anon SELECT policies exist, ``anon_read_metric_history``
+-- plus a legacy duplicate ``anon read history``; the duplicate is a dedupe
+-- candidate — see docs/data-contract.md). So the PWA reads with the ANON key.
+-- This SUPERSEDES the old "service-role-only, no anon read path" note here and
+-- in AGENTS.md landmine 18. EconDelta (ExonVPS), the briefing job, and the
+-- freshness sentinel still use the SERVICE ROLE for run_logs and other
+-- non-anon tables.
 --
 -- Don't drop the service-role write path; it's how EconDelta itself
 -- (running on ExonVPS) and the bb/dse builders (transitional) upsert.
@@ -99,8 +102,12 @@ COMMENT ON COLUMN public.metric_history.ingested_at IS
     'Write-liveness timestamp, POSTED BY THE CLIENT on every upsert (the '
     'column default now() fires only on INSERT, never on the UPDATE half of '
     'a merge-upsert — see utils/supabase_writer.py:_rows_from_data, E1.1). '
-    'Diagnostics only — consumers should order by ``as_of``, not '
-    '``ingested_at``.';
+    'Data-contract rule (docs/data-contract.md, Option A): ``as_of`` is the '
+    'source''s reporting vintage and never advances without republication, so '
+    'ORDER BY as_of gives the correct data VINTAGE. A consumer that needs '
+    'WRITE-liveness for a vintage-stamped id (is the pipeline still writing?) '
+    'reads latest-by-``ingested_at``; the ``v_metric_freshness`` view (E3.1) is '
+    'the canonical freshness surface for all three consumers.';
 
 -- ============================================================================
 -- 0008 — briefings

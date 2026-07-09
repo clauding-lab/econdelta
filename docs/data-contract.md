@@ -9,6 +9,12 @@ This is the **stable interface**. Internal scraper details (which
 parser handles which PDF, what regex extracts what) live in code; this
 file describes what consumers can *depend on*.
 
+> **Contract version 2 — 2026-07-09.** Adds the canonical **freshness &
+> vintage contract** and the `v_metric_freshness` surface — see
+> [§10 Freshness & vintage contract (E3.1)](#10-freshness--vintage-contract-e31).
+> The Brief, YieldScope, and the EconDelta PWA should all read freshness from
+> that one view instead of hand-rolling staleness.
+
 ---
 
 ## 1. What lives where
@@ -438,6 +444,217 @@ ORDER BY days_old DESC;
   `tbond_tbill_91d`) have older rows from the brief's transitional
   inline upserts. Use `select min(as_of), max(as_of)` per-indicator
   to know what you can plot.
+
+---
+
+## 10. Freshness & vintage contract (E3.1)
+
+The single rule every consumer must internalise, and the one surface they should
+read freshness from.
+
+### 10.1 The canonical rules
+
+**Vintage rule (`as_of`).** `as_of` is the **source's reporting vintage** — the
+period the data describes — **never the run date**. It **does not advance until
+the source republishes**. A monthly figure last published for May stays at
+`as_of = 2026-05-31` every day until BB puts out the June issue. `ORDER BY as_of
+DESC LIMIT 1` therefore gives you the **correct data vintage** — that is the
+right default for displaying a value.
+
+**Write-liveness rule (`ingested_at`, Option A — owner decision 2026-07-09).**
+Because `as_of` legitimately stalls, a value's `as_of` cannot tell you whether
+the *pipeline* is still alive. `ingested_at` is POSTED on every upsert (E1.1), so
+it advances every run even when `as_of` is pinned. A consumer that needs to know
+"is EconDelta still writing this id?" reads **latest-by-`ingested_at`**. **Legacy
+daily-stamped rows are NOT deleted** (owner decision) — they are point-in-time
+history; the freshness *view* below is the long-term surface that makes the
+distinction clean for new consumers.
+
+**Freshness definition.** A metric is fresh when
+`as_of >= today − grace(cadence)`. Grace tiers:
+
+| cadence | grace | note |
+|---|---|---|
+| daily | 2 BD **trading** days | weekend/holiday gap is not stale; the sentinel does the trading-day math, the view approximates with 4 calendar days |
+| weekly | 10 days | |
+| monthly | 45 days | |
+| quarterly | 165 days | |
+| fiscal_year | 400 days | |
+
+**Future `as_of` is excluded from "latest".** `debt_gdp_ratio` carries 6 IMF
+**projection** rows out to `2031-12-31` (verified 2026-07-09; latest *real*
+vintage is `2026-06-05`). Any "latest" read must filter `as_of <= current_date`
+or it will read a value from the future.
+
+### 10.2 The surface: `v_metric_freshness`
+
+All three consumers (The Brief, YieldScope, EconDelta PWA) should read freshness
+from this **one view** instead of hand-rolling staleness. The freshness sentinel
+(E2.1) enforces the same contract on the write side and pages when it breaks.
+
+### 10.3 SQL package — PREPARED, NOT APPLIED
+
+> **These are DDL/data changes for Adnan's SQL editor only** (no programmatic
+> path — the DB is shared with The Brief; `db push` can't reconcile it). Apply in
+> order; each block is idempotent. Nothing here has been executed.
+
+**Block 1 — `grace_days` columns + cadence-seeded defaults:**
+
+```sql
+alter table metric_definitions          add column if not exists grace_days integer;
+alter table metric_definitions_monthly   add column if not exists grace_days integer;
+
+update metric_definitions set grace_days = case cadence
+    when 'daily' then 4        -- 2 trading days + weekend cushion (view is calendar-day)
+    when 'weekly' then 10
+    when 'monthly' then 45
+    when 'quarterly' then 165
+    when 'fiscal_year' then 400
+    else grace_days end
+ where grace_days is null;
+
+update metric_definitions_monthly set grace_days = coalesce(grace_days, 45)
+ where grace_days is null;
+```
+
+**Block 2 — the `v_metric_freshness` view (over BOTH tables, future-excluded):**
+
+```sql
+create or replace view v_metric_freshness as
+with per_table as (
+    select metric_id,
+           max(as_of) filter (where as_of <= current_date) as latest_as_of,
+           max(ingested_at)                                 as latest_ingested_at
+    from metric_history group by metric_id
+    union all
+    select metric_id,
+           max(as_of) filter (where as_of <= current_date),
+           max(ingested_at)
+    from metric_history_monthly group by metric_id
+),
+agg as (
+    select metric_id,
+           max(latest_as_of)       as latest_as_of,
+           max(latest_ingested_at) as latest_ingested_at
+    from per_table group by metric_id
+)
+select a.metric_id,
+       a.latest_as_of,
+       a.latest_ingested_at,
+       coalesce(d.cadence,    dm.cadence)    as cadence,
+       coalesce(d.grace_days, dm.grace_days) as grace_days,
+       (current_date - a.latest_as_of)       as age_days,
+       (a.latest_as_of >= current_date - coalesce(d.grace_days, dm.grace_days)) as is_fresh
+from agg a
+left join metric_definitions         d  on d.metric_id  = a.metric_id
+left join metric_definitions_monthly dm on dm.metric_id = a.metric_id;
+
+grant select on v_metric_freshness to anon;
+```
+
+`grace_days is null` (no definition row) ⇒ `is_fresh` is `null` = "unknown" — it
+surfaces the ~100 live metric_ids with no `metric_definitions` row (a real
+coverage gap flagged by the PWA work; back-filling those definitions is a
+follow-up).
+
+**Block 3 — deprecate/alias the frozen legacy ids** (all verified frozen
+2026-07-09 — `ingested_at` stopped in Apr–May and a superseding id is live):
+
+```sql
+alter table metric_definitions add column if not exists deprecated boolean default false;
+alter table metric_definitions add column if not exists alias_of  text;
+
+update metric_definitions d set deprecated = true, alias_of = v.alias_of
+from (values
+    ('dse_dsex_close',                'dsex'),
+    ('policy_rate_slf_sdf',           'policy_rate_sdf'),   -- superseded by the repo/sdf/slf split (PR #30)
+    ('nbr_fytd_collected_tbs',        'tax_revenue'),        -- news scrapers retired (landmine 4)
+    ('nbr_fytd_collected_dailystar',  'tax_revenue'),
+    ('bb_gross_reserves',             'gross_reserves_usd_bn'),
+    ('comm_lng_jkm',                  'lng_price_usd_mmbtu')
+) as v(metric_id, alias_of)
+where d.metric_id = v.metric_id;
+```
+
+Consumers then filter `where not deprecated`.
+
+**Block 4 — drop the duplicate anon policies** (each table carries two identical
+anon SELECT policies; keep the canonically-named one):
+
+```sql
+drop policy if exists "anon read history"                  on metric_history;
+drop policy if exists "anon read metric_history_monthly"   on metric_history_monthly;
+```
+
+**Block 5 (optional) — split the IMF projections off `debt_gdp_ratio`** so no
+"latest" read can ever touch a future vintage (the view already filters them, so
+this is cleanliness, not correctness):
+
+```sql
+update metric_history set metric_id = 'debt_gdp_ratio_proj'
+ where metric_id = 'debt_gdp_ratio' and as_of > current_date;
+```
+
+**Verification (run after applying):**
+
+```sql
+select cadence, count(*), min(grace_days), max(grace_days)
+  from metric_definitions group by cadence;                     -- grace seeded
+select * from v_metric_freshness where is_fresh = false
+  order by age_days desc limit 30;                              -- current breaches
+select metric_id, alias_of from metric_definitions where deprecated;  -- marked
+select tablename, policyname, roles::text, cmd from pg_policies       -- policies deduped
+  where tablename in ('metric_history','metric_history_monthly','auction_calendar','auction_results')
+  order by tablename, policyname;
+```
+
+### 10.4 pg_policies — live state (verified 2026-07-09)
+
+| table | anon SELECT policies | note |
+|---|---|---|
+| `metric_history` | `anon_read_metric_history` **+** `anon read history` | anon-readable; DUPLICATE → Block 4 |
+| `metric_history_monthly` | `anon_read_metric_history_monthly` **+** `anon read metric_history_monthly` | anon-readable; DUPLICATE → Block 4 |
+| `auction_calendar` | `anon read auction_calendar` (+ `service_role_all`) | anon-readable |
+| `auction_results` | `anon read auction_results` (+ `service_role_all`) | anon-readable |
+
+All four consumer tables are anon-readable — **AGENTS.md landmine 18's "daily
+metric_history has no anon-read" is superseded** (updated). run_logs and other
+ops tables remain service-role-only.
+
+### 10.5 Zero-row config ids — retire-or-source decision table
+
+12 `config/sources-v3.json` ids have **never produced a `metric_history` row**
+(re-confirmed 2026-07-09 — all 12 return 0 rows). Retiring >1 config id is a
+sign-off item (VISION.md) — this is the **decision table, presented not acted**:
+
+| metric_id | domain | recommendation | rationale |
+|---|---|---|---|
+| `non_nbr_tax_revenue` | fiscal | **SOURCE** | still has a literal `TODO_VPS_FILL_FY26_NON_NBR_BUDGET_CRORE` anchor in its `task`; finish the MFR Table-4 anchor like the fiscal backfill, or retire |
+| `non_tax_revenue` | fiscal | **SOURCE** | MoF MFR Table-4 row; same anchor pattern as the working fiscal metrics |
+| `tax_gdp_ratio` | fiscal | **DERIVE** | = `tax_revenue` / GDP; mint in aggregate like crr/slr utilisation rather than scrape |
+| `rev_gdp_ratio` | fiscal | **DERIVE** | = total revenue / GDP; same |
+| `total_revenue_budget_vs_actual` | fiscal | **RETIRE or SOURCE** | no clean single-cell source; budget-vs-actual needs two figures |
+| `budget_opex_of_the_fy_vs_utilization` | fiscal | **RETIRE** | no accessible source found; utilisation-vs-budget is not a single scrape |
+| `budget_adpex_of_the_fy_vs_utilization` | fiscal | **RETIRE** | same |
+| `fx_buy_sale_from_market` | monetary | **SOURCE or RETIRE** | BB FX-intervention figure; confirm a stable BB source cell exists before keeping |
+| `nbr_vat_collected_cr` | fiscal | **SOURCE** | brief `nbr_vat_bn` conversion already targets it; wire the NBR component source (media-screen or MFR) or retire the conversion too |
+| `nbr_it_collected_cr` | fiscal | **SOURCE** | same |
+| `nbr_customs_collected_cr` | fiscal | **SOURCE** | same |
+| `ways_means_usage_cr` | monetary | **RETIRE** | BB ways-and-means advances live behind the same walled OMO PDF as the retired `slf_draw_cr` (landmine 24) — likely no HTML route-around |
+
+### 10.6 Legacy-id dedupe decision table (Block 3 targets)
+
+| legacy id | rows | last as_of | last ingested_at | superseded by |
+|---|---|---|---|---|
+| `dse_dsex_close` | 34 | 2026-04-21 | 2026-04-25 | `dsex` |
+| `policy_rate_slf_sdf` | 27 | 2026-05-28 | 2026-05-28 | `policy_rate_sdf` / `_slf` (PR #30) |
+| `nbr_fytd_collected_tbs` | 24 | 2026-05-25 | 2026-05-25 | `tax_revenue` (landmine 4) |
+| `nbr_fytd_collected_dailystar` | 24 | 2026-05-25 | 2026-05-25 | `tax_revenue` |
+| `bb_gross_reserves` | 1 | 2026-03-01 | 2026-04-25 | `gross_reserves_usd_bn` |
+| `comm_lng_jkm` | 12 | 2026-04-20 | 2026-04-25 | `lng_price_usd_mmbtu` |
+
+All frozen (`ingested_at` stopped weeks ago) with a live successor — safe to mark
+`deprecated` (Block 3). Rows are kept, not pruned (owner decision Option A).
 
 ---
 
