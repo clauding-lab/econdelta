@@ -93,14 +93,16 @@ systemctl daemon-reload
 # post precision-fix (NPL 32.26% @ 2026-03-31, one per outlet, zero junk), so the
 # daily timer (21:30 BDT) is now on. Schedule/units: deploy/econdelta-media-screen.*.
 # econdelta-sentinel: freshness sentinel (E2.1), daily 07:30 UTC (13:30 BDT).
+# econdelta-gitpull: ordered deploy pull (E2.3), daily 22:50 UTC (04:50 BDT).
 # Added to this list per landmine 19 — copied by the glob above but only
-# ENABLED because it appears here.
+# ENABLED because they appear here.
 TIMERS=(
   econdelta-forex econdelta-commodity econdelta-aggregate econdelta-dse econdelta-dse-dayend econdelta-fetch econdelta-parse
   econdelta-forex-retry econdelta-aggregate-retry econdelta-parse-retry econdelta-briefing
   econdelta-auction econdelta-pink-sheet econdelta-imf-eff econdelta-imf-debt
   econdelta-media-screen
   econdelta-sentinel
+  econdelta-gitpull
 )
 for t in "${TIMERS[@]}"; do
   systemctl enable --now "${t}.timer"

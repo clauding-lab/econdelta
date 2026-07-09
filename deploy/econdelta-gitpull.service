@@ -1,0 +1,38 @@
+[Unit]
+Description=EconDelta — ordered deploy pull (git pull --ff-only main before the fetch cascade)
+Documentation=https://github.com/clauding-lab/econdelta
+After=network-online.target
+Wants=network-online.target
+Before=econdelta-fetch.service
+StartLimitIntervalSec=3600
+StartLimitBurst=3
+
+[Service]
+Type=oneshot
+User=adnan-local
+Group=adnan-local
+WorkingDirectory=/home/adnan-local/econdelta
+EnvironmentFile=/etc/econdelta.env
+ExecStart=/home/adnan-local/econdelta/deploy/gitpull.sh
+
+MemoryMax=300M
+TasksMax=128
+
+PrivateTmp=true
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+# git pull writes .git/ + the working tree, both under the repo dir in $HOME,
+# so the repo itself must be writable even though the rest of home is read-only.
+ReadWritePaths=/home/adnan-local/econdelta
+
+TimeoutStartSec=300
+Restart=on-failure
+RestartSec=60
+
+StandardOutput=append:/home/adnan-local/econdelta/logs/gitpull-systemd.log
+StandardError=append:/home/adnan-local/econdelta/logs/gitpull-systemd.log
+SyslogIdentifier=econdelta-gitpull
+
+[Install]
+WantedBy=multi-user.target
