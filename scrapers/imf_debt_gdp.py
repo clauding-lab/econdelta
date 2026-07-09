@@ -28,13 +28,13 @@ from __future__ import annotations
 
 import logging
 import sys
-from datetime import date
+from datetime import date, datetime, timezone
 
 import requests
 
 from utils.ipv4 import force_ipv4_only
 from utils.notifier import notify
-from utils.supabase_writer import upsert_metric_history
+from utils.supabase_writer import upsert_metric_history, verify_landed_count
 
 logger = logging.getLogger("imf_debt_gdp")
 
@@ -142,6 +142,10 @@ def upsert_history(series: dict[int, float]) -> int:
     only carry one as_of per metric_id, so — like backfill_dse_dayend — we call
     upsert_metric_history once per year. Returns the total rows written.
     """
+    # One write timestamp for the whole multi-year run so the E2.2 read-back
+    # counts every year's row this run wrote (scoped to METRIC_ID — the other
+    # Sunday-23:xx writers can't inflate the count).
+    write_ts = datetime.now(timezone.utc)
     total = 0
     for year in sorted(series):
         as_of = date(year, 12, 31)
@@ -150,7 +154,9 @@ def upsert_history(series: dict[int, float]) -> int:
             as_of=as_of,
             source="IMF DataMapper",
             source_as_of_map={METRIC_ID: as_of},
+            ingested_at=write_ts,
         )
+    verify_landed_count(total, since=write_ts, metric_ids=[METRIC_ID], source_label="imf_debt_gdp")
     return total
 
 

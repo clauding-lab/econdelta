@@ -1104,19 +1104,29 @@ def main() -> int:
             from utils.supabase_writer import (
                 SupabaseWriteError,
                 upsert_metric_history,
+                verify_landed_count,
             )
             # Build per-metric publication-date overrides from v3 snapshot metadata.
             # Slow-cadence metrics (quarterly FSAR, monthly news) carry source_as_of
             # from the parser so metric_history.as_of reflects the true publication
             # date rather than today's run date — fixing the freshness-pill lie.
             source_as_of_map = _build_source_as_of_map(domains)
+            # Explicit write timestamp so the E2.2 landed-count read-back counts
+            # exactly this upsert's rows.
+            write_ts = datetime.now(timezone.utc)
             n_rows = upsert_metric_history(
                 data=data, as_of=now.date(), source_as_of_map=source_as_of_map,
+                ingested_at=write_ts,
             )
             logger.info(
                 "upserted %d rows to Supabase metric_history (as_of=%s, overrides=%d)",
                 n_rows, now.date(), len(source_as_of_map),
             )
+            # Landed-count invariant (E2.2): a 2xx / "wrote N" log is not proof of
+            # persistence (landmine 22). Re-query BEFORE media overrides so the
+            # count is this upsert's rows only. Aggregate is the sole writer in
+            # its 07:00 window, so an unscoped ingested_at>= count is exact.
+            verify_landed_count(n_rows, since=write_ts, source_label="aggregate")
             _apply_media_overrides(data, source_as_of_map)
         except SupabaseWriteError as e:
             logger.warning(
