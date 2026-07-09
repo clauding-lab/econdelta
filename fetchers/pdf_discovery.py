@@ -18,7 +18,16 @@ _MONTH_RE = re.compile(
 )
 
 
-def discover_latest_pdf_link(*, html: str, base_url: str) -> str:
+def discover_latest_pdf(*, html: str, base_url: str) -> tuple[str, tuple[int, int]]:
+    """Return ``(url, (year, month))`` for the most recent PDF on a BB index page.
+
+    The ``(year, month)`` is the issue's reporting period, parsed from the link's
+    row text — the authoritative vintage of the chosen issue. Callers persist it
+    into the artifact's ``.meta.json`` sidecar so parse can select the newest
+    ISSUE by recorded period rather than by file mtime, which is immune to both
+    mtime races and filename-convention drift when a month-dir accumulates
+    multiple issues (E1 MEI leftover — see parse_all._load_artifact_for).
+    """
     soup = BeautifulSoup(html, "html.parser")
     candidates: list[tuple[tuple[int, int], str]] = []
     for a in soup.find_all("a", href=True):
@@ -36,4 +45,11 @@ def discover_latest_pdf_link(*, html: str, base_url: str) -> str:
     if not candidates:
         raise ValueError("no pdf links with month/year context found")
     candidates.sort(reverse=True)
-    return candidates[0][1]
+    period, url = candidates[0]
+    return url, period
+
+
+def discover_latest_pdf_link(*, html: str, base_url: str) -> str:
+    """Back-compat wrapper returning only the URL (period discarded)."""
+    url, _period = discover_latest_pdf(html=html, base_url=base_url)
+    return url

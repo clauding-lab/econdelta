@@ -25,7 +25,7 @@ import parsers.pdf_table_column_latest  # noqa: F401
 import parsers.pdf_table_latest  # noqa: F401
 import parsers.pdf_table_row  # noqa: F401
 import parsers.pdf_table_total  # noqa: F401
-from fetchers.base import FetchResult
+from fetchers.base import FetchResult, parse_period
 from parsers.hybrid import parse_one
 
 REPO_ROOT = Path(__file__).resolve().parent
@@ -33,6 +33,33 @@ DEFAULT_CONFIG = REPO_ROOT / "config" / "sources-v3.json"
 DEFAULT_DATA_ROOT = REPO_ROOT / "data"
 
 logger = logging.getLogger("parse_all")
+
+
+def _read_sidecar_period(pdf: Path) -> tuple[int, int] | None:
+    """The (year, month) issue period recorded in a PDF's .meta.json sidecar.
+
+    Returns None for a legacy dir whose sidecar predates the period field, a
+    missing/unreadable/hand-broken sidecar — the caller then falls back to mtime.
+    """
+    meta = pdf.with_suffix(".meta.json")
+    if not meta.exists():
+        return None
+    try:
+        data = json.loads(meta.read_text())
+    except (OSError, ValueError):
+        return None
+    return parse_period(data.get("period"))
+
+
+def _pdf_recency_key(pdf: Path) -> tuple[bool, tuple[int, int], float]:
+    """Sort key selecting the newest ISSUE among the PDFs in one month-dir.
+
+    Primary: the recorded (year, month) period — a PDF with a period always
+    outranks a legacy period-less one, and among periods the later issue wins.
+    Fallback / tiebreak: file mtime (all a legacy sidecar-less dir has).
+    """
+    period = _read_sidecar_period(pdf)
+    return (period is not None, period or (0, 0), pdf.stat().st_mtime)
 
 
 def _load_artifact_for(indicator: dict, data_root: Path) -> FetchResult | None:
@@ -62,13 +89,16 @@ def _load_artifact_for(indicator: dict, data_root: Path) -> FetchResult | None:
         # ExonVPS: 2026-06/ held BOTH 2026_april.pdf AND 2026_may.pdf). glob()
         # order is arbitrary, so a bare pdfs[0] could read the STALE issue — this
         # is how the pipeline "held April 2026 while BB published May 2026"
-        # (E1 leftover). Discovery only ever advances to a newer issue and a
-        # cache-hit doesn't rewrite, so the most recently FETCHED pdf (max mtime)
-        # is the latest issue. A stable month keeps a single file — unaffected.
-        artifact_path = max(pdfs, key=lambda p: p.stat().st_mtime)
+        # (E1 leftover). Pick the newest ISSUE by the (year, month) period each
+        # artifact recorded in its .meta.json sidecar at fetch time — immune to
+        # both mtime races (a re-fetch/rsync rewriting a stale file's mtime,
+        # landmine 13) and filename drift. mtime is only the tiebreak and the
+        # fallback for legacy dirs whose sidecars predate the period field. A
+        # stable single-PDF month is unaffected.
+        artifact_path = max(pdfs, key=_pdf_recency_key)
         if len(pdfs) > 1:
             logger.info(
-                "%s: %d PDFs in %s — parsing newest by mtime (%s)",
+                "%s: %d PDFs in %s — parsing newest issue (%s)",
                 indicator_id, len(pdfs), month_dirs[0].name, artifact_path.name,
             )
     else:

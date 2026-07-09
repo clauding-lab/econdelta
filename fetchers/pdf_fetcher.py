@@ -11,7 +11,7 @@ from urllib.request import Request, urlopen
 
 import pdfplumber
 
-from fetchers.base import FetchError, FetchResult
+from fetchers.base import FetchError, FetchResult, format_period
 from fetchers.tls import ssl_context_for
 
 logger = logging.getLogger("pdf_fetcher")
@@ -40,7 +40,14 @@ def _encode_url_path(url: str) -> str:
     return urlunparse(parsed._replace(path=encoded_path))
 
 
-def fetch_pdf(*, url: str, indicator_id: str, snapshot_dir: Path, as_of_month: str) -> FetchResult:
+def fetch_pdf(
+    *,
+    url: str,
+    indicator_id: str,
+    snapshot_dir: Path,
+    as_of_month: str,
+    period: tuple[int, int] | None = None,
+) -> FetchResult:
     out_dir = snapshot_dir / "_pdfs" / indicator_id / as_of_month
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / _derive_filename(url)
@@ -67,6 +74,11 @@ def fetch_pdf(*, url: str, indicator_id: str, snapshot_dir: Path, as_of_month: s
             "page_count": page_count,
             "byte_size": len(body),
         }
+        # The discovered issue period ("YYYY-MM"). parse_all._load_artifact_for
+        # picks the newest ISSUE by this recorded period (mtime is only a fallback
+        # for legacy sidecar-less dirs) — see E1 MEI leftover.
+        if period is not None:
+            sidecar["period"] = format_period(period)
         out_path.with_suffix(".meta.json").write_text(json.dumps(sidecar, indent=2))
 
     return FetchResult(

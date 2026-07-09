@@ -35,10 +35,13 @@ def test_parse_all_writes_per_indicator_snapshots(tmp_path: Path):
     assert len(out_files) == 1
 
 
-def test_load_artifact_picks_newest_pdf_by_mtime(tmp_path: Path):
-    """E1 leftover: a month-dir that accumulated a stale + fresh MEI issue (as
-    ExonVPS's 2026-06/ held 2026_april.pdf AND 2026_may.pdf) must parse the
-    NEWEST-fetched one, not an arbitrary glob[0] that read stale April."""
+def test_load_artifact_prefers_recorded_period_over_mtime(tmp_path: Path):
+    """E1 leftover, hardened: a month-dir that accumulated a stale + fresh MEI
+    issue (ExonVPS's 2026-06/ held 2026_april.pdf AND 2026_may.pdf) must parse
+    the newest ISSUE by the (year, month) recorded in each .meta.json sidecar —
+    NOT file mtime. Here the STALE April file is given the NEWER mtime (a
+    re-fetch / rsync race, landmine 13), so an mtime heuristic would pick the
+    wrong issue; period selection must still pick May."""
     import os
 
     ind = {"id": "money_multiplier", "fetch": {"type": "pdf", "url": "https://bb/mei"}}
@@ -48,9 +51,57 @@ def test_load_artifact_picks_newest_pdf_by_mtime(tmp_path: Path):
     fresh = month / "2026_may.pdf"
     stale.write_bytes(b"%PDF-april")
     fresh.write_bytes(b"%PDF-may")
+    stale.with_suffix(".meta.json").write_text(json.dumps({"period": "2026-04"}))
+    fresh.with_suffix(".meta.json").write_text(json.dumps({"period": "2026-05"}))
+    # Adversarial: give the STALE issue the NEWER mtime — mtime alone would lie.
     now = datetime.now(timezone.utc).timestamp()
-    os.utime(stale, (now - 1000, now - 1000))  # April fetched earlier
-    os.utime(fresh, (now, now))                 # May fetched when BB published it
+    os.utime(fresh, (now - 1000, now - 1000))
+    os.utime(stale, (now, now))
+
+    artifact = parse_all._load_artifact_for(ind, tmp_path)
+    assert artifact is not None
+    assert artifact.artifact_path.name == "2026_may.pdf"
+
+
+def test_load_artifact_falls_back_to_mtime_without_sidecars(tmp_path: Path):
+    """Legacy dirs fetched before the period sidecar field carry no recorded
+    period, so selection falls back to newest-by-mtime (the pre-existing
+    behaviour) — the fresh issue must still win."""
+    import os
+
+    ind = {"id": "money_multiplier", "fetch": {"type": "pdf", "url": "https://bb/mei"}}
+    month = tmp_path / "_pdfs" / "money_multiplier" / "2026-06"
+    month.mkdir(parents=True)
+    older = month / "2026_april.pdf"
+    newer = month / "2026_may.pdf"
+    older.write_bytes(b"%PDF-april")
+    newer.write_bytes(b"%PDF-may")  # no .meta.json sidecars — legacy dir
+    now = datetime.now(timezone.utc).timestamp()
+    os.utime(older, (now - 1000, now - 1000))
+    os.utime(newer, (now, now))
+
+    artifact = parse_all._load_artifact_for(ind, tmp_path)
+    assert artifact is not None
+    assert artifact.artifact_path.name == "2026_may.pdf"
+
+
+def test_load_artifact_period_outranks_periodless_legacy_sibling(tmp_path: Path):
+    """Transition case: a legacy period-less April file coexists with a fresh
+    May file that recorded its period. The one WITH a period must win even if the
+    legacy file happens to have the newer mtime."""
+    import os
+
+    ind = {"id": "money_multiplier", "fetch": {"type": "pdf", "url": "https://bb/mei"}}
+    month = tmp_path / "_pdfs" / "money_multiplier" / "2026-06"
+    month.mkdir(parents=True)
+    legacy = month / "2026_april.pdf"
+    fresh = month / "2026_may.pdf"
+    legacy.write_bytes(b"%PDF-april")  # no sidecar (pre-change fetch)
+    fresh.write_bytes(b"%PDF-may")
+    fresh.with_suffix(".meta.json").write_text(json.dumps({"period": "2026-05"}))
+    now = datetime.now(timezone.utc).timestamp()
+    os.utime(fresh, (now - 1000, now - 1000))
+    os.utime(legacy, (now, now))  # legacy file has the newer mtime
 
     artifact = parse_all._load_artifact_for(ind, tmp_path)
     assert artifact is not None
