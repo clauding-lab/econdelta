@@ -37,6 +37,76 @@ When something ships broken, when a methodology gap is exposed, or when a smoke 
 
 ## Entries (most recent first)
 
+## 2026-07-09 — DSE feed dead 24 days: server sends an incomplete TLS chain, requests won't AIA-chase the intermediate
+
+**Trigger:** Ecosystem-review handoff (E1.2). `dse_market` frozen in Supabase at 2026-06-11, `dse_dayend` at 2026-06-10, both while `run_logs` looked clean (index scraper "skips" on non-trading days; dayend all-fail was unalerted — see the E1.6 entry).
+
+**What went wrong:** DSE renewed its cert ~2026-06-09. Its servers (`www.dse.com.bd`, `dsebd.org`) send only the leaf (`CN=*.dsebd.org`), OMITTING the issuing intermediate `Sectigo Public Server Authentication CA DV R36`. certifi trusts the *root* (`…Root R46`) but not that intermediate, and python `requests`/`urllib3` do NOT AIA-chase the missing intermediate the way browsers do — so `openssl s_client` returns `Verify return code: 21` and every DSE fetch dies with `CERTIFICATE_VERIFY_FAILED`. External cause (the server's chain), not our code, not a network block: `www.bb.org.bd` verified clean, box `ca-certificates` healthy.
+
+**Lesson:** "Works in a browser, fails in requests" for TLS almost always means the server sends an incomplete chain and the client isn't AIA-chasing. The fix is to supply the missing intermediate — NEVER `verify=False` (that trades a fetch bug for a MITM hole). certifi having the *root* is not enough; the *intermediate* must chain.
+
+**Prevention:** Vendored the intermediate at `fetchers/ca/sectigo_r36.pem` (the single canonical cert location, shared with `fetchers/tls.py`'s pre-existing host-scoped mof.gov.bd path — one file, one rotation point; the review caught that a first draft duplicated it under `certs/`) and merge it with certifi into one additive CA bundle (`utils/ca_bundle.combined_ca_bundle`) that `HttpClient` points `session.verify` at — additive so it's safe for every host and degrades to certifi-only on any failure. Tests pin the merge is additive, loadable, and wired in. Immediate hotfix appended the same intermediate to the venv's `certifi/cacert.pem` on ExonVPS + the Mac so the feed recovered ahead of the merge; that append is fragile to a certifi upgrade, which is why the repo bundle is the durable path.
+
+**Hotfix:** PR (E1.2) `fix(http-client): bundle DSE's Sectigo intermediate`. Verified on ExonVPS BD egress: default certifi → SSLError on all 3 DSE hosts; combined bundle → HTTP 200 on all 3. `scrapers.dse_market` then ran clean (DSEX 5804.06, was 5516.82).
+
+**Cross-references:** AGENTS.md landmine 33 (TLS incomplete chains); `utils/ca_bundle.py`; `fetchers/ca/sectigo_r36.pem` (+ `fetchers/tls.py`, the other consumer); the E1.6 entry below (dse_dayend had no alerting, which is why this stayed dark 24 days).
+
+## 2026-07-09 — 22 indicators "frozen" for 34 days: a merge-upsert never bumped ingested_at
+
+**Trigger:** Ecosystem-review handoff (E1.1). The inflation family, `deposits_of_the_system`, `money_multiplier`, debt stocks, and their Brief aliases all showed `max(as_of)=2026-06-05` / `max(ingested_at)=2026-06-05` in live Supabase — yet `parse_all` produced their values EVERY day.
+
+**What went wrong:** After the `source_as_of` recovery (#64/#65), each affected metric is written to its recovered reporting vintage (e.g. `debt_domestic_stock_cr` → `as_of=2025-12-31`). The upsert `ON CONFLICT (metric_id, as_of) DO UPDATE` lands on the SAME static row every run — `value` updates in place, but `ingested_at` was NOT a posted column, so it kept the row's first-insert time (the column default `now()` fires only on INSERT, never on the UPDATE half of a merge-upsert). A pipeline writing daily therefore read as "stale for weeks" to any `ingested_at`-keyed freshness check, and `max(as_of)` stalled at the last pre-recovery daily row (2026-06-05). The vintage rule itself is CORRECT — `as_of` should stall when the source hasn't republished; the bug was that the *write* was invisible.
+
+**Lesson:** With PostgREST `resolution=merge-duplicates`, a column you don't POST is not touched on conflict — so a "default now()" write-timestamp freezes the moment you stop posting it. If you need write-liveness to be observable independently of the business date, POST the timestamp explicitly every run.
+
+**Prevention:** `_rows_from_data` now posts `ingested_at` on every row (defaults to `now()`, overridable for tests). `as_of` still stalls at the vintage; `ingested_at` advances each run. Regression test asserts a recovered-vintage row keeps its stalled `as_of` but gets a fresh, distinct `ingested_at`.
+
+**Hotfix:** PR (E1.1) `fix(supabase-writer): post ingested_at so a merge-upsert bumps write-liveness`. NOTE: this also masks a deeper question returned to the owner — the underlying MEI issue the pipeline holds is April 2026 while BB has published May 2026 (a separate fetch/discover staleness), and the consumer read-rule for vintage-stamped ids (max-by-`as_of` vs max-by-`ingested_at`) needs an owner decision.
+
+**Cross-references:** `utils/supabase_writer.py` `_rows_from_data`; relates to the #64/#65 `source_as_of` recovery (landmine 26) and the 2026-06-01 "2xx ≠ persisted" entry (both "the write looked fine but the freshness signal lied").
+
+## 2026-07-09 — Pink sheet: 10/10 green runs writing nothing because the source URL was pinned to a stale edition
+
+**Trigger:** Ecosystem-review handoff (E1.5). `world_bank_pink_sheet` `run_logs` all `ok`/exit 0 (~1.3s) while lng/palm/wheat held one row each frozen at `as_of=2025-12-31` since 2026-06-01.
+
+**What went wrong:** `PINK_SHEET_URL` was pinned to the World Bank doc-id `…-0050012025`, whose `CMO-Historical-Data-Monthly.xlsx` ends at period `2025M12`. The scraper fetched it, parsed the latest month (Dec-2025), and upserted the SAME `(metric_id, 2025-12-31)` row every day — so it looked healthy while the *source edition itself* was frozen. Not deploy drift (box code current), not a no-op write (the write succeeds and matches the workbook). Confirmed by fetching that exact workbook: latest row `2025M12`, values identical to Supabase.
+
+**Lesson:** A "download this file" URL with an embedded document/edition id is a silent staleness trap: the publisher rolls the id and the old file freezes at its edition's last period, so a healthy-looking daily job serves a fixed snapshot forever. Green runs + unchanging data = check whether the SOURCE moved, not just whether the write worked.
+
+**Prevention:** Repointed to the current edition `…-0050012026` (verified live: latest `2026M06`, values in range, same "Monthly Prices" shape) and added a landmine note in the scraper. Durable fix (follow-up): discover the latest link from `worldbank.org/en/research/commodity-markets` instead of pinning; the E2 freshness sentinel also catches the next roll.
+
+**Hotfix:** PR (E1.5) `fix(pink-sheet): repoint to WB 2026 edition`. Also benefits from the E1.1 `ingested_at` bump (the metric now advances in both `as_of` and freshness once deployed).
+
+**Cross-references:** `scrapers/world_bank_pink_sheet.py` `PINK_SHEET_URL` note; sibling 2026-06-01 Tier-2 write-path entry (same "green but empty" shape, different cause).
+
+## 2026-07-09 — "Fabricated CRAR = 1.56%" wasn't fabricated: 25-agent review convergence vs one primary-source read
+
+**Trigger:** Ecosystem-review handoff (E1.3) asserted, with adversarial re-verification by an independent review agent, that `banking_sector_crar = 1.56` was a fabricated LLM-fallback value ("real BD CRAR is ~10-13%; 1.56 implies insolvency") and prescribed tightening `valid_range` + correcting the row.
+
+**What went wrong (in the review, not the pipeline):** Opening BB's actual QFSAR PDF (Issue 33, Jul–Sep 2025) that the pipeline holds showed **1.56% is BB's own printed figure** — the system-wide *pre-shock* CRAR at end-Sept-2025, stated on p13 (Exec Summary: "the pre-shock Capital Adequacy Ratio (CAR) stood at 1.56 percent"), p38, p39, and the p40 stress-test table ("Pre-shock CRAR: 4.47 [Jun-25] | 1.56 [Sep-25]", "Required minimum 10"). It is exactly what the config `task` instructs the parser to extract. The wider distress picture corroborates it (gross NPL 35.73%, ROE −15.1%, quarterly net loss). The review's 25 agents converged on "fabricated" because they reasoned from the ~10-13% prior WITHOUT reading the stress-test chapter; the config's own `valid_range` was already `[-50, 30]` (deliberately widened to permit the sector's trajectory toward the negative CRAR press reports cite for Q4-2025). Had E1.3 been executed as prescribed, a tighter range would have SUPPRESSED a true, alarming figure and a "correction" would have FABRICATED a wrong one.
+
+**Lesson:** AI convergence is correlated bias, not proof (CLAUDE.md rule 9). When many agents agree a number is "impossible," verify against the PRIMARY artifact before acting — a bad number and correctly-reported bad news look identical from the outside. The domain expert (and the source PDF) outranks converging AIs. Show the observation (the PDF quote) before the inference (CLAUDE.md rule 10).
+
+**Prevention:** Do NOT tighten `banking_sector_crar` `valid_range` and do NOT "correct" the 1.56 row — both were premised on a false claim. The residual question (should the dashboard surface the stress-test *pre-shock* CRAR, or is a different headline figure expected?) is a metric-DEFINITION decision returned to the owner, presented not acted. The deterministic `pdf_component` parser failing → LLM fallback here is expected (landmine 26, prose exec-summary) and produced the CORRECT number.
+
+**Hotfix:** None — the value is correct; the safe action was to change nothing and report. First-hand verification: `pdfplumber` extract of `data/_pdfs/banking_sector_crar/.../qfsar (july-september 2025).pdf` on ExonVPS confirmed the four in-document occurrences of 1.56%.
+
+**Cross-references:** AGENTS.md landmine 26 (QFSAR LLM-fallback path); global `~/.claude/AGENT_LEARNINGS.md` (convergence-isn't-proof); relates to the 2026-06-04 NPL entry (same report, the 35.73% NPL).
+
+## 2026-07-09 — The one scraper with no notifier import went dark for 24 days; the aggregate write-swallow was equally silent
+
+**Trigger:** Ecosystem-review handoff (E1.6). `dse_dayend` failed every trading day for ~24 days and nobody was paged; the DSE TLS break (entry above) stayed invisible that whole time.
+
+**What went wrong:** `scrapers/dse_dayend.py` + `scripts/backfill_dse_dayend.py` were the ONLY scrapers that imported no `utils.notifier` — every sibling calls `notify("error", …)` on failure. All-fail → `return 1` → `run_logs` `fail` → silence (no `OnFailure=` unit either). Separately, `aggregate_latest.main()` caught `SupabaseWriteError` with a bare `logger.warning` and continued (correctly, on the local archive) — but a rotated key / PostgREST outage would leave every consumer serving yesterday's data with zero signal.
+
+**Lesson:** "Success measured at the wrong layer" — a scraper can exit 1 and log `fail` while nobody watches `run_logs`; a swallowed exception can be the *right* fallback and still need to be loud. Every failure path that a human isn't actively tailing needs an active alert, and "continue on fallback" is not a reason to stay silent.
+
+**Prevention:** `run_backfill` gained `notify_on_failure` (True on the daily `dse_dayend` path, False for manual backfills/dry-runs) — fires an `error` alert on zero-tickers, a below-floor partial (25/30), or a `SupabaseWriteError` (then re-raises). `aggregate_latest`'s swallow path now `notify("error", …)` before continuing. Tests assert BOTH the exit code AND the notify for each path.
+
+**Hotfix:** PR (E1.6) `fix(dse-dayend): alert on empty/below-floor write + swallowed Supabase failure`. This is a specific instance of the class Phase E2 (freshness sentinel + landed-count invariant) exists to kill wholesale.
+
+**Cross-references:** `scrapers/dse_dayend.py`, `scripts/backfill_dse_dayend.py`, `aggregate_latest.py`; the E1.2 TLS entry above (the failure this silence hid).
+
 ## 2026-06-07 — Older MoF MFRs reflow their columns between issues; the dry-run + FYTD self-check caught it before any bad write (fiscal backfill)
 
 **Trigger:** "F7" — backfilling FY24/FY25 monthly fiscal data (govt bank borrowing + NBR revenue) to deepen The Brief's fiscal charts. After shipping a per-fiscal-year anchor parser (PR #72), a full-archive `--static-only`-precursor `--dry-run` over the real MFR PDFs.
