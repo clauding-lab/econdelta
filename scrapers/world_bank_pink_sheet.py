@@ -58,9 +58,19 @@ _REL_NS = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}
 # The Pink Sheet monthly historical workbook. Stable, openly downloadable from any
 # host (NO BD egress wall — World Bank global data; verified HTTP 200 from this Mac
 # 2026-05-31). Published only as .xlsx (no CSV/JSON variant exists).
+#
+# LANDMINE — the doc-id path segment is EDITION-PINNED (``…-005001<YEAR>``). The
+# World Bank rolls the Pink Sheet to a NEW doc-id periodically, and each edition's
+# workbook stops at that edition's last month. So this URL SILENTLY FREEZES at its
+# edition's final period once WB moves on: the prior ``…-0050012025`` URL stalled at
+# 2025M12 and the daily run kept upserting Dec-2025 with exit 0 for weeks (E1.5,
+# 2026-07-09). When freshness alerts flag lng/palm/wheat stalling for >1 month,
+# re-check https://www.worldbank.org/en/research/commodity-markets for the current
+# ``CMO-Historical-Data-Monthly.xlsx`` link and bump the doc-id below. The proper
+# durable fix is to DISCOVER the latest link from that landing page rather than pin.
 PINK_SHEET_URL = (
     "https://thedocs.worldbank.org/en/doc/"
-    "18675f1d1639c7a34d463f59263ba0a2-0050012025/related/"
+    "74e8be41ceb20fa0da750cda2f6b9e4e-0050012026/related/"
     "CMO-Historical-Data-Monthly.xlsx"
 )
 
