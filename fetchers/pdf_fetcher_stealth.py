@@ -20,7 +20,7 @@ import pdfplumber
 from playwright.sync_api import sync_playwright
 from playwright_stealth import Stealth
 
-from fetchers.base import FetchError, FetchResult
+from fetchers.base import FetchError, FetchResult, format_period
 
 logger = logging.getLogger("pdf_fetcher_stealth")
 
@@ -118,6 +118,7 @@ def fetch_pdf_stealth(
     as_of_month: str,
     prime_url: str = _DEFAULT_PRIME_URL,
     timeout_ms: int = _DEFAULT_TIMEOUT_MS,
+    period: tuple[int, int] | None = None,
 ) -> FetchResult:
     out_dir = snapshot_dir / "_pdfs" / indicator_id / as_of_month
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -146,6 +147,10 @@ def fetch_pdf_stealth(
             "byte_size": len(body),
             "fetch_strategy": "stealth_playwright",
         }
+        # Discovered issue period ("YYYY-MM") — parse selects the newest issue by
+        # this, not mtime (E1 MEI leftover). See parse_all._load_artifact_for.
+        if period is not None:
+            sidecar["period"] = format_period(period)
         out_path.with_suffix(".meta.json").write_text(json.dumps(sidecar, indent=2))
 
     return FetchResult(

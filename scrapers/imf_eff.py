@@ -37,13 +37,13 @@ import html as _html
 import logging
 import re
 import sys
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 
 import requests
 
 from utils.ipv4 import force_ipv4_only
 from utils.notifier import notify
-from utils.supabase_writer import upsert_metric_history
+from utils.supabase_writer import upsert_metric_history, verify_landed_count
 
 logger = logging.getLogger("imf_eff")
 
@@ -164,13 +164,21 @@ def _parse_as_of(html_text: str) -> date | None:
 
 
 def upsert_eff(value: float, as_of: date) -> int:
-    """Upsert the EFF outstanding as one metric_history row stamped at as_of."""
-    return upsert_metric_history(
+    """Upsert the EFF outstanding as one metric_history row stamped at as_of.
+
+    Verified per E2.2 (landmine 22): this scraper misrouted its write once; the
+    landed-count read-back scoped to METRIC_ID alerts if the row doesn't persist.
+    """
+    write_ts = datetime.now(timezone.utc)
+    n = upsert_metric_history(
         data={METRIC_ID: value},
         as_of=as_of,
         source="IMF Financial Position in the Fund",
         source_as_of_map={METRIC_ID: as_of},
+        ingested_at=write_ts,
     )
+    verify_landed_count(n, since=write_ts, metric_ids=[METRIC_ID], source_label="imf_eff")
+    return n
 
 
 def main() -> int:

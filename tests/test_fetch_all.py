@@ -38,13 +38,18 @@ def test_fetch_all_dispatches_html_and_pdf(tmp_path: Path):
     with patch("fetch_all.fetch_html") as html_mock, patch("fetch_all.fetch_pdf") as pdf_mock:
         html_mock.return_value = MagicMock(cache_hit=False, indicator_id="policy_rate")
         pdf_mock.return_value = MagicMock(cache_hit=False, indicator_id="broad_money")
-        with patch("fetch_all.discover_latest_pdf_link", return_value="https://example.com/x.pdf"), \
-             patch("fetch_all._download_index_html", return_value="<html></html>"):
+        with patch(
+            "fetch_all.discover_latest_pdf",
+            return_value=("https://example.com/x.pdf", (2026, 5)),
+        ), patch("fetch_all._download_index_html", return_value="<html></html>"):
             results = fetch_all.run(config_path=cfg, data_root=tmp_path / "data")
 
     assert len(results) == 2
     html_mock.assert_called_once()
     pdf_mock.assert_called_once()
+    # The discovered issue period is threaded to fetch_pdf so it lands in the
+    # artifact sidecar (E1 MEI leftover — parse selects newest issue by period).
+    assert pdf_mock.call_args.kwargs["period"] == (2026, 5)
 
 
 def test_pdf_index_fetch_error_is_contained_not_crashing(tmp_path: Path):

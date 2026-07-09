@@ -39,7 +39,7 @@ import logging
 import re
 import sys
 import zipfile
-from datetime import date
+from datetime import date, datetime, timezone
 from io import BytesIO
 from xml.etree import ElementTree as ET
 
@@ -47,7 +47,7 @@ import requests
 
 from utils.ipv4 import force_ipv4_only
 from utils.notifier import notify
-from utils.supabase_writer import upsert_metric_history
+from utils.supabase_writer import upsert_metric_history, verify_landed_count
 
 logger = logging.getLogger("world_bank_pink_sheet")
 
@@ -287,13 +287,24 @@ def parse_pink_sheet(
 
 
 def upsert_commodities(values: dict[str, float], as_of: date) -> int:
-    """Upsert each {metric_id: value} as one metric_history row stamped at as_of."""
-    return upsert_metric_history(
+    """Upsert each {metric_id: value} as one metric_history row stamped at as_of.
+
+    The exemplar of landmine 22 (a misrouted ``url=`` override 2xx'd while nothing
+    landed) — so this write is verified: the E2.2 landed-count read-back scoped to
+    these commodity ids alerts if the rows don't actually persist.
+    """
+    write_ts = datetime.now(timezone.utc)
+    n = upsert_metric_history(
         data=values,
         as_of=as_of,
         source="World Bank Pink Sheet",
         source_as_of_map={metric_id: as_of for metric_id in values},
+        ingested_at=write_ts,
     )
+    verify_landed_count(
+        n, since=write_ts, metric_ids=list(values), source_label="world_bank_pink_sheet"
+    )
+    return n
 
 
 def main() -> int:

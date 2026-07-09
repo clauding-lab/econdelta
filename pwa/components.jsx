@@ -8,7 +8,69 @@ const SOURCE_LABELS = {
   fetch: 'Fetch',
   parse: 'Parse',
   aggregate: 'Aggregate',
+  // Backfilled 2026-07 (E3.2) — 7 sources added since the original 6-source
+  // launch set. Keep in sync with SOURCE_LABELS' sibling map, CADENCES, in
+  // pwa/pages/runs.jsx (grep deploy/econdelta-*.timer for the schedule).
+  bb_auction: 'BB auction',
+  dse_dayend: 'DSE day-end',
+  imf_eff: 'IMF EFF',
+  imf_debt_gdp: 'IMF debt/GDP',
+  media_screen: 'Media screen',
+  world_bank_pink_sheet: 'WB pink sheet',
+  briefing: 'Weekly briefing',
 };
+
+// Expected data-refresh cadence, in days, keyed by metric_definitions.cadence
+// (daily | weekly | monthly | quarterly | fiscal_year — the values actually
+// seen in the live catalog). `daily` carries a 4-day grace window, matching the
+// canonical v_metric_freshness grace_days=4 (E3.1). A Thursday public holiday
+// butting against Bangladesh's Fri-Sat weekend is a real 4-day publishing gap
+// (e.g. 2026-01-01 New Year's Day and 2026-03-26 Independence Day both fall on
+// a Thursday), so a daily series last published the preceding Wednesday is
+// legitimately 4 days old on Sunday without anything being broken. The prior
+// 3-day window false-ambered every daily ticker on those dates.
+const CADENCE_DAYS = {
+  daily: 4,
+  weekly: 9,
+  monthly: 35,
+  quarterly: 97,
+  fiscal_year: 380,
+};
+
+/**
+ * Classify a metric's staleness from its last-published date and its
+ * declared cadence. Returns null (no pill) when either input is missing or
+ * the cadence label isn't one we recognise — per the E3.2 brief, an
+ * unresolvable cadence must never be guessed at.
+ * @param {string|null} asOf - ISO date (YYYY-MM-DD) of the metric's latest value.
+ * @param {string|null} cadenceLabel - one of CADENCE_DAYS' keys.
+ * @returns {{level:'amber'|'red', ageDays:number}|null}
+ */
+function vintageStatus(asOf, cadenceLabel){
+  if(!asOf || !cadenceLabel) return null;
+  const days = CADENCE_DAYS[cadenceLabel];
+  if(days == null) return null;
+  const ageDays = Math.floor((Date.now() - new Date(asOf + 'T00:00:00Z').getTime()) / 86400000);
+  if(ageDays > days * 2) return { level: 'red', ageDays };
+  if(ageDays > days) return { level: 'amber', ageDays };
+  return null;
+}
+
+/** Small "as of <date>" label plus an amber/red pill when the metric is stale for its cadence. */
+function VintagePill({ asOf, cadenceLabel }){
+  if(!asOf) return null;
+  const status = vintageStatus(asOf, cadenceLabel);
+  return (
+    <div className="vintage">
+      <span>as of {asOf}</span>
+      {status && (
+        <span className={`pill ${status.level === 'red' ? 'pill-fail' : 'pill-stale'}`}>
+          {status.ageDays}d old
+        </span>
+      )}
+    </div>
+  );
+}
 
 function useHashRoute(){
   const [hash, setHash] = useState(() => window.location.hash || '#/latest');
@@ -20,17 +82,21 @@ function useHashRoute(){
   return hash.replace(/^#/, '');
 }
 
+const WEEKDAY_ABBR = ['SUN','MON','TUE','WED','THU','FRI','SAT'];
+
 function fmtTime(iso){
   const d = new Date(iso);
   return d.toISOString().replace('T',' ').replace(/\.\d+Z$/,'Z').slice(0,17);
 }
 function relTime(iso, nowOverride){
   // nowOverride: pass a Date to use a live clock (refresh button needs this).
-  // Default falls back to the mock anchor so existing callers keep working.
+  // Default used to fall back to a frozen mock anchor (2026-05-02T10:35:00Z) —
+  // that made every real timestamp after that date read as "just now" (E3.2).
+  // Callers that don't pass nowOverride now get the real live clock instead.
   const target = new Date(iso).getTime();
   const anchor = nowOverride
     ? nowOverride.getTime()
-    : new Date('2026-05-02T10:35:00Z').getTime();
+    : Date.now();
   const delta = anchor - target;
   const sec = Math.round(delta/1000);
   if(sec < 45) return 'just now';
@@ -66,6 +132,31 @@ function Sidebar({ route }){
   const themeIcon = theme === 'dark' ? '☀' : '☾';
   const themeLabel = theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode';
 
+  // Live pipeline health for the footer + Sources badge — replaces the
+  // hardcoded "all sources OK / last sync 2026-05-02" mock chrome (E3.2).
+  // window.ED_DATA may not be populated yet on first paint; degrade to a
+  // neutral "loading" state rather than claiming health we haven't checked.
+  const edData = window.ED_DATA;
+  const sourcesStatus = (edData && edData.bundle && edData.bundle.sources_status) || null;
+  const sourceKeys = sourcesStatus ? Object.keys(sourcesStatus) : [];
+  const totalSources = sourceKeys.length;
+  // A long-running job (status: 'running') isn't a failure — don't count it
+  // against "all OK", but don't call it OK either.
+  const okCount = sourceKeys.filter(k => sourcesStatus[k].status === 'ok').length;
+  const failCount = sourceKeys.filter(k => sourcesStatus[k].status === 'fail' || sourcesStatus[k].status === 'failed').length;
+  const allOk = totalSources > 0 && okCount === totalSources;
+  const dotClass = !sourcesStatus ? '' : failCount > 0 ? 'fail' : allOk ? '' : 'warn';
+  const lastSyncIso = edData && edData.bundle && edData.bundle.updated_at;
+  const lastSyncLabel = lastSyncIso
+    ? new Date(lastSyncIso).toISOString().slice(0,16).replace('T',' ') + 'Z'
+    : null;
+  const healthLabel = !sourcesStatus
+    ? 'loading…'
+    : allOk ? 'all sources OK' : `${okCount}/${totalSources} sources OK`;
+  const footTitle = sourcesStatus
+    ? `${healthLabel} · last sync ${lastSyncLabel || '—'}`
+    : 'loading…';
+
   const items = [
     { group: 'Pipeline', links: [
       { href:'#/latest',  label:'Latest',   badge:'live', icon:'◐' },
@@ -76,7 +167,7 @@ function Sidebar({ route }){
       { href:'#/macro',   label:'Macro',    badge:'14y',  icon:'≋' },
     ]},
     { group: 'Reference', links: [
-      { href:'#/sources', label:'Sources',  badge:'4',  icon:'◆' },
+      { href:'#/sources', label:'Sources',  badge: totalSources > 0 ? String(totalSources) : null,  icon:'◆' },
       { href:'#/about',   label:'About',    badge:null, icon:'§' },
     ]},
   ];
@@ -97,8 +188,8 @@ function Sidebar({ route }){
             );
           })}
         </nav>
-        <div className="foot-mini" title="all sources OK · last sync 10:35Z">
-          <span className="dot"></span>
+        <div className="foot-mini" title={footTitle}>
+          <span className={`dot ${dotClass}`}></span>
         </div>
       </aside>
     );
@@ -130,8 +221,8 @@ function Sidebar({ route }){
         ))}
       </nav>
       <div className="foot">
-        <div><span className="dot"></span>all sources OK</div>
-        <div style={{marginTop:6}}>last sync 2026-05-02 10:35Z</div>
+        <div><span className={`dot ${dotClass}`}></span>{healthLabel}</div>
+        <div style={{marginTop:6}}>{lastSyncLabel ? `last sync ${lastSyncLabel}` : '—'}</div>
       </div>
     </aside>
   );
@@ -196,8 +287,11 @@ function Drawer({ open, onClose, title, children }){
 }
 
 function StatusPill({ status }){
+  // 'running' means a long-running job hasn't finished yet (e.g. media_screen,
+  // which regularly takes 15+ minutes) — that's a caution, not a failure, so
+  // it shares the amber 'stale' styling rather than reading as red (E3.2).
   const cls = status === 'ok' ? 'pill-ok'
-            : status === 'stale' ? 'pill-stale'
+            : status === 'stale' || status === 'running' ? 'pill-stale'
             : status === 'fail' || status === 'failed' ? 'pill-fail'
             : 'pill-skip';
   return <span className={`pill ${cls}`}>{status}</span>;
@@ -257,6 +351,24 @@ function Masthead(){
     try { return new Date(data.bundle.updated_at); } catch { return null; }
   })();
   const lastRefreshRel = lastRefresh ? relTime(lastRefresh, now) : '—';
+
+  // Oldest metric in the payload — "snapshot fetched" only tells you when the
+  // PWA last talked to Supabase, not whether the data underneath is fresh.
+  // Surface the single stalest metric_id so a frozen source can't hide behind
+  // a live "fetched Xm ago" stamp (E3.2).
+  const oldestMetric = (() => {
+    const values = (data.dashboard && data.dashboard.values) || {};
+    let oldest = null;
+    Object.entries(values).forEach(([metricId, v]) => {
+      if (!v || !v.as_of) return;
+      if (!oldest || v.as_of < oldest.as_of) oldest = { metricId, as_of: v.as_of };
+    });
+    return oldest;
+  })();
+  const oldestAgeDays = oldestMetric
+    ? Math.floor((now.getTime() - new Date(oldestMetric.as_of + 'T00:00:00Z').getTime()) / 86400000)
+    : null;
+
   const tape = (data.tickers || []).filter(t => t.delta != null);
   // Repeat tape items twice for seamless loop
   const tapeRow = (
@@ -317,9 +429,11 @@ function Masthead(){
         </div>
 
         <div className="right">
-          <div className="issue">Vol. 1, No. 122</div>
-          <div className="date">2026-05-02 SAT</div>
-          <div className="smol">10:35 UTC · v1.0.0</div>
+          {/* Was hardcoded "Vol. 1, No. 122 / 2026-05-02 SAT / 10:35 UTC" mock
+              chrome — now the real live clock (E3.2). */}
+          <div className="issue">Live · {WEEKDAY_ABBR[now.getUTCDay()]}</div>
+          <div className="date">{now.toISOString().slice(0,10)}</div>
+          <div className="smol">{now.toISOString().slice(11,16)} UTC · v1.0.0</div>
           <div className="refreshRow">
             <button
               type="button"
@@ -335,9 +449,19 @@ function Masthead(){
               </svg>
               <span>{refreshing ? 'refreshing…' : 'refresh'}</span>
             </button>
+            {/* "updated" -> "snapshot fetched": this timestamp is when the PWA
+                last talked to Supabase, not when the underlying data changed
+                (E3.2). The oldest-metric line below is the actual freshness
+                signal — a fetch can succeed every 30s while a source has been
+                silently frozen for months. */}
             <span className="refreshAge" title={lastRefresh ? lastRefresh.toISOString() : ''}>
-              {refreshErr ? `failed · ${refreshErr.slice(0,40)}` : `updated ${lastRefreshRel}`}
+              {refreshErr ? `failed · ${refreshErr.slice(0,40)}` : `snapshot fetched ${lastRefreshRel}`}
             </span>
+            {oldestMetric && (
+              <span className="refreshAge" title={`${oldestMetric.metricId} · as of ${oldestMetric.as_of}`}>
+                · oldest metric {oldestAgeDays}d old ({oldestMetric.metricId})
+              </span>
+            )}
           </div>
         </div>
       </header>
@@ -348,4 +472,4 @@ function Masthead(){
   );
 }
 
-Object.assign(window, { useHashRoute, Sidebar, PageHead, Sparkline, Drawer, StatusPill, fmtTime, relTime, fmtPct, SOURCE_LABELS, Masthead });
+Object.assign(window, { useHashRoute, Sidebar, PageHead, Sparkline, Drawer, StatusPill, fmtTime, relTime, fmtPct, SOURCE_LABELS, Masthead, CADENCE_DAYS, vintageStatus, VintagePill });
