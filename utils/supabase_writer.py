@@ -157,6 +157,7 @@ def upsert_metric_history(
     as_of: date,
     source: str = _DEFAULT_SOURCE,
     source_as_of_map: Mapping[str, date] | None = None,
+    ingested_at: datetime | None = None,
     url: str | None = None,
     service_key: str | None = None,
     timeout: int = _DEFAULT_TIMEOUT,
@@ -176,6 +177,9 @@ def upsert_metric_history(
             Overrides ``as_of`` for those specific metrics. Metrics absent from
             this map use the global ``as_of`` fallback. Pass None (default) for
             backward compatibility.
+        ingested_at: Explicit write timestamp posted on every row. Pass the same
+            value to ``verify_landed_count(since=...)`` so the post-write read-back
+            counts exactly this run's rows (E2.2). Defaults to now (UTC).
         url, service_key: Override for SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY
                 env vars. Tests pass these directly.
         timeout: Per-request timeout seconds.
@@ -190,7 +194,7 @@ def upsert_metric_history(
             response. Caller decides whether to abort or continue.
     """
     base_url, key = _resolve_credentials(url, service_key)
-    rows = _rows_from_data(data, as_of, source, source_as_of_map)
+    rows = _rows_from_data(data, as_of, source, source_as_of_map, ingested_at)
     if not rows:
         logger.info("no scalar values to upsert (snapshot empty or non-numeric only)")
         return 0
@@ -218,6 +222,114 @@ def upsert_metric_history(
         upserted += len(batch)
 
     return upserted
+
+
+def verify_landed_count(
+    expected: int,
+    *,
+    since: datetime,
+    metric_ids: "list[str] | None" = None,
+    table: str = "metric_history",
+    source_label: str = "",
+    url: str | None = None,
+    service_key: str | None = None,
+    timeout: int = _DEFAULT_TIMEOUT,
+    session: requests.Session | None = None,
+) -> bool | None:
+    """Read-back guard: confirm ``expected`` rows actually landed; alert if not.
+
+    The enforced invariant landmine 22 never got. A 2xx response / a "wrote N
+    rows" log is NOT proof of persistence: a misrouted ``url=`` override 2xx'd to
+    the source host while nothing landed (E1.5 / Tier-2 class), and a frozen
+    merge-upsert re-wrote the same row daily. After an upsert made with an
+    explicit ``ingested_at=since``, this counts the rows now carrying
+    ``ingested_at >= since`` and compares to ``expected``. Mismatch →
+    ``notify('error')``.
+
+    Args:
+        expected: rows the upsert reported writing (its return value).
+        since: the SAME timestamp passed as ``upsert_metric_history(ingested_at=)``.
+        metric_ids: scope the count to these ids. The aggregate (sole writer in
+            its 07:00 window) can leave this None; a direct writer that shares a
+            fire window with siblings (the 23:xx cascade) passes its own ids so a
+            neighbouring writer's rows can't inflate the count.
+        source_label: label for the log/alert (e.g. "aggregate", "pink_sheet").
+
+    Returns:
+        True if the landed count matches, False on mismatch (after alerting),
+        None if it couldn't verify (skipped in tests, or the read failed —
+        verification must never crash or block the writer).
+    """
+    if os.environ.get("ECONDELTA_SKIP_SUPABASE") == "1":
+        return None
+    label = source_label or table
+    try:
+        base_url, key = _resolve_credentials(url, service_key)
+        stamp = since.isoformat() if isinstance(since, datetime) else str(since)
+        params = {"select": "metric_id", "ingested_at": f"gte.{stamp}"}
+        if metric_ids:
+            params["metric_id"] = "in.(" + ",".join(sorted(set(metric_ids))) + ")"
+        headers = {
+            "apikey": key,
+            "Authorization": f"Bearer {key}",
+            # count=exact returns the true total in Content-Range regardless of
+            # the page-size cap, and Range 0-0 transfers ~1 row, not thousands.
+            "Prefer": "count=exact",
+            "Range-Unit": "items",
+            "Range": "0-0",
+        }
+        endpoint = f"{base_url}/rest/v1/{table}"
+        sess = session or requests.Session()
+        resp = sess.get(endpoint, params=params, headers=headers, timeout=timeout)
+        if resp.status_code not in (200, 206):
+            logger.warning(
+                "verify_landed_count[%s]: read HTTP %s: %s",
+                label, resp.status_code, resp.text[:200],
+            )
+            return None
+        landed = _parse_content_range_total(resp)
+    except Exception as e:  # noqa: BLE001 — verification must not crash the writer
+        logger.warning("verify_landed_count[%s]: read failed: %s", label, e)
+        return None
+
+    if landed == expected:
+        logger.info("verify_landed_count[%s]: %d row(s) landed as expected", label, landed)
+        return True
+
+    notify = _lazy_notify()
+    notify(
+        "error",
+        "landed-count mismatch",
+        f"{label}: expected {expected} metric_history row(s) with ingested_at>={stamp} "
+        f"but found {landed}. A 2xx write is NOT proof of persistence (landmine 22) — "
+        f"check for a misrouted write (url= override), a frozen merge-upsert, or a "
+        f"dropped/partial batch.",
+    )
+    return False
+
+
+def _parse_content_range_total(resp: requests.Response) -> int:
+    """Extract the exact row total from a PostgREST ``count=exact`` response.
+
+    Content-Range looks like ``0-0/1234`` (or ``*/1234`` when the range is empty).
+    Falls back to counting the returned body if the header is missing/unparseable.
+    """
+    cr = resp.headers.get("Content-Range", "")
+    if "/" in cr:
+        total = cr.rsplit("/", 1)[-1].strip()
+        if total.isdigit():
+            return int(total)
+    try:
+        body = resp.json()
+        return len(body) if isinstance(body, list) else 0
+    except Exception:  # noqa: BLE001
+        return 0
+
+
+def _lazy_notify():
+    """Import notify lazily so the writer's import graph stays minimal."""
+    from utils.notifier import notify
+    return notify
 
 
 # ============================================================================

@@ -60,7 +60,7 @@ import re
 import sys
 import time
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 from bs4 import BeautifulSoup
 
@@ -411,7 +411,11 @@ def run_backfill(
         return 0 if all_rows else 1
 
     # --- Real write path ----------------------------------------------------
-    from utils.supabase_writer import SupabaseWriteError, upsert_metric_history
+    from utils.supabase_writer import (
+        SupabaseWriteError,
+        upsert_metric_history,
+        verify_landed_count,
+    )
 
     if not all_rows:
         print("No rows parsed; nothing to upsert.")
@@ -436,6 +440,11 @@ def run_backfill(
             "may be partially degraded. Writing the partial set.",
         )
 
+    # One write timestamp for the whole run so the E2.2 read-back counts every
+    # ticker/day row written this run (scoped to these ids so a sibling 23:xx
+    # writer can't inflate the count).
+    write_ts = datetime.now(timezone.utc)
+    metric_ids = sorted({r.metric_id for r in all_rows})
     total = 0
     try:
         for trading_day, day_rows in sorted(group_rows_by_date(all_rows).items()):
@@ -445,6 +454,7 @@ def run_backfill(
                 as_of=trading_day,
                 source=SOURCE_LABEL,
                 source_as_of_map=as_of_map,
+                ingested_at=write_ts,
             )
             total += n
             logger.info("upserted %d rows for %s", n, trading_day.isoformat())
@@ -457,6 +467,10 @@ def run_backfill(
                 f"{start.isoformat()}..{end.isoformat()}: {type(e).__name__}: {e}",
             )
         raise
+    # Landed-count invariant (E2.2) — only on the daily path (notify_on_failure);
+    # an interactive wide-window backfill is human-watched and shouldn't alert.
+    if notify_on_failure:
+        verify_landed_count(total, since=write_ts, metric_ids=metric_ids, source_label="dse_dayend")
     print(f"Upserted {total} rows to metric_history.")
     return 0
 
