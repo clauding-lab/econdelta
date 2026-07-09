@@ -56,7 +56,21 @@ def _load_artifact_for(indicator: dict, data_root: Path) -> FetchResult | None:
         pdfs = list(month_dirs[0].glob("*.pdf"))
         if not pdfs:
             return None
-        artifact_path = pdfs[0]
+        # A month-dir accumulates >1 PDF when a NEW source issue drops mid-month:
+        # discovery returns whatever is latest each day, and fetch_pdf writes by
+        # CURRENT month, so successive issues land in the same dir (observed on
+        # ExonVPS: 2026-06/ held BOTH 2026_april.pdf AND 2026_may.pdf). glob()
+        # order is arbitrary, so a bare pdfs[0] could read the STALE issue — this
+        # is how the pipeline "held April 2026 while BB published May 2026"
+        # (E1 leftover). Discovery only ever advances to a newer issue and a
+        # cache-hit doesn't rewrite, so the most recently FETCHED pdf (max mtime)
+        # is the latest issue. A stable month keeps a single file — unaffected.
+        artifact_path = max(pdfs, key=lambda p: p.stat().st_mtime)
+        if len(pdfs) > 1:
+            logger.info(
+                "%s: %d PDFs in %s — parsing newest by mtime (%s)",
+                indicator_id, len(pdfs), month_dirs[0].name, artifact_path.name,
+            )
     else:
         return None
     return FetchResult(
