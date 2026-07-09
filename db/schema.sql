@@ -96,8 +96,11 @@ COMMENT ON COLUMN public.metric_history.source IS
     'should use ``EconDelta`` unless they have a strong reason otherwise.';
 
 COMMENT ON COLUMN public.metric_history.ingested_at IS
-    'Server-side timestamp of the last upsert. Diagnostics only — '
-    'consumers should order by ``as_of``, not ``ingested_at``.';
+    'Write-liveness timestamp, POSTED BY THE CLIENT on every upsert (the '
+    'column default now() fires only on INSERT, never on the UPDATE half of '
+    'a merge-upsert — see utils/supabase_writer.py:_rows_from_data, E1.1). '
+    'Diagnostics only — consumers should order by ``as_of``, not '
+    '``ingested_at``.';
 
 -- ============================================================================
 -- 0008 — briefings
