@@ -519,6 +519,14 @@ update metric_definitions_monthly set grace_days = coalesce(grace_days, 45)
 
 **Block 2 — the `v_metric_freshness` view (over BOTH tables, future-excluded):**
 
+> `metric_definitions_monthly` has **no `cadence` column** (verified live
+> 2026-07-09 — its columns are metric_id, display_name, unit, source_url,
+> source_attribution, domain, description, notes, timestamps). Every id in the
+> monthly system is monthly by construction, so the view infers `'monthly'` from
+> the presence of a monthly-definition row — mirroring the sentinel's
+> `resolve_cadence` fallback. Do NOT reference `dm.cadence`; it doesn't exist
+> and the CREATE VIEW would fail.
+
 ```sql
 create or replace view v_metric_freshness as
 with per_table as (
@@ -541,7 +549,8 @@ agg as (
 select a.metric_id,
        a.latest_as_of,
        a.latest_ingested_at,
-       coalesce(d.cadence,    dm.cadence)    as cadence,
+       coalesce(d.cadence,
+                case when dm.metric_id is not null then 'monthly' end) as cadence,
        coalesce(d.grace_days, dm.grace_days) as grace_days,
        (current_date - a.latest_as_of)       as age_days,
        (a.latest_as_of >= current_date - coalesce(d.grace_days, dm.grace_days)) as is_fresh
@@ -579,11 +588,35 @@ where d.metric_id = v.metric_id;
 Consumers then filter `where not deprecated`.
 
 **Block 4 — drop the duplicate anon policies** (each table carries two identical
-anon SELECT policies; keep the canonically-named one):
+anon SELECT policies; keep the canonically-named one).
+
+> **MANDATORY pre-check — run this immediately before Block 4, at execution
+> time.** The policy names below are a 2026-07-09 snapshot. If a policy has been
+> renamed or one duplicate already removed since, dropping the wrong name could
+> silently remove the ONLY working anon-read path and break every consumer read.
+> Re-verify, and only drop a policy you can see is one of TWO anon SELECT
+> policies on the same table:
+
+```sql
+-- Pre-check: expect exactly two anon SELECT policies per history table.
+select tablename, policyname, roles::text, cmd
+  from pg_policies
+ where tablename in ('metric_history','metric_history_monthly')
+ order by tablename, policyname;
+```
 
 ```sql
 drop policy if exists "anon read history"                  on metric_history;
 drop policy if exists "anon read metric_history_monthly"   on metric_history_monthly;
+```
+
+```sql
+-- Post-check: each table must STILL have one anon SELECT policy.
+select tablename, count(*) as anon_select_policies
+  from pg_policies
+ where tablename in ('metric_history','metric_history_monthly')
+   and roles::text like '%anon%' and cmd = 'SELECT'
+ group by tablename;   -- expect 1 and 1
 ```
 
 **Block 5 (optional) — split the IMF projections off `debt_gdp_ratio`** so no
