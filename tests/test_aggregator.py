@@ -502,3 +502,51 @@ def test_the_brief_read_paths_still_work(
     # Since no MVP snapshots exist either, all sources should be missing — but the structure is intact
     for status in bundle["sources_status"].values():
         assert "status" in status  # The Brief reads s.get("status")
+
+
+# ---------------------------------------------------------------------------
+# E1.6 — a swallowed Supabase write failure must alert (not just log)
+# ---------------------------------------------------------------------------
+
+
+def test_main_alerts_on_swallowed_supabase_write_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When the metric_history upsert raises SupabaseWriteError, main() correctly
+    continues on the local archive (returns 0) — but it must ALSO fire a Discord
+    error alert. A silent swallow means consumers serve yesterday's data with no
+    signal (rotated key / PostgREST outage). E1.6."""
+    data_dir, cfg_path = _build_data_tree(tmp_path)
+    latest_path = data_dir / "latest.json"
+
+    monkeypatch.setattr(agg, "DATA_DIR", data_dir)
+    monkeypatch.setattr(agg, "LATEST_PATH", latest_path)
+    monkeypatch.setattr(agg, "CONFIG_PATH", cfg_path)
+    monkeypatch.setenv("ECONDELTA_DRY_RUN", "1")
+    # Exercise the real write branch (conftest skips it by default).
+    monkeypatch.setenv("ECONDELTA_SKIP_SUPABASE", "0")
+
+    import utils.supabase_writer as sw
+
+    def _raise_write(**kwargs):
+        raise sw.SupabaseWriteError("simulated PostgREST outage")
+
+    # metric_history upsert fails; definitions seed is a no-op so it doesn't try
+    # a real network call under SKIP_SUPABASE=0.
+    monkeypatch.setattr(sw, "upsert_metric_history", _raise_write)
+    monkeypatch.setattr(sw, "upsert_metric_definitions_seed", lambda *a, **k: 0)
+
+    notify_calls: list[tuple] = []
+
+    def _fake_notify(level, title, message, fields=None):
+        notify_calls.append((level, title, message))
+        return True
+
+    monkeypatch.setattr(agg, "notify", _fake_notify)
+
+    exit_code = agg.main()
+
+    assert exit_code == 0  # swallow-and-continue is correct; local archive is the fallback
+    error_calls = [c for c in notify_calls if c[0] == "error"]
+    assert error_calls, "expected an error notify on swallowed Supabase write failure"
+    assert any("Supabase write failed" in c[1] for c in error_calls)

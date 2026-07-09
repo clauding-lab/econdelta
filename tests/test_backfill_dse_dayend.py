@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 
+import scripts.backfill_dse_dayend as bd
 from scripts.backfill_dse_dayend import (
     BackfillError,
     CloseRow,
@@ -23,6 +24,8 @@ from scripts.backfill_dse_dayend import (
     parse_ds30_codes,
     rows_to_supabase_payload,
 )
+from utils.http_client import HttpClient
+from utils.supabase_writer import SupabaseWriteError
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
@@ -160,3 +163,114 @@ def test_parse_gp_archive_fixture_distinct_from_bracbank():
     assert len(rows) >= 20
     assert all(r.code == "GP" for r in rows)
     assert all(r.metric_id == "dse_close_GP" for r in rows)
+
+
+# --------------------------------------------------------------------------- #
+# E1.6 — failure alerting on the daily production path (notify_on_failure)
+#
+# dse_dayend was the ONLY scraper without a notifier import, which is how the
+# DSE feed froze unnoticed for 24 days. run_backfill(notify_on_failure=True)
+# (set by scrapers.dse_dayend) must fire a Discord error alert on total fetch
+# failure, a below-floor partial, or a Supabase write error — while manual
+# backfills (the default, notify_on_failure=False) stay quiet.
+# --------------------------------------------------------------------------- #
+
+
+def _close_row(code: str, closep: float = 100.0) -> CloseRow:
+    return CloseRow(code=code, as_of=date(2026, 7, 1), closep=closep)
+
+
+@pytest.fixture(autouse=False)
+def _no_sleep(monkeypatch):
+    monkeypatch.setattr(bd.time, "sleep", lambda *a, **k: None)
+
+
+def test_all_fetch_fail_alerts_error_and_returns_1(monkeypatch, _no_sleep):
+    """Every ticker fetch failing must BOTH return exit 1 AND fire an error alert
+    (the missing signal behind the 24-day silent DSE freeze — E1.6)."""
+    calls: list[tuple[str, str]] = []
+    monkeypatch.setattr(bd, "notify", lambda level, title, msg, *a, **k: calls.append((level, title)))
+
+    def _boom(client, code, start, end):
+        raise HttpClient.FetchError("https://dsebd.org", None, "TLS chain broken")
+
+    monkeypatch.setattr(bd, "fetch_scrip_closes", _boom)
+
+    rc = bd.run_backfill(
+        start=date(2026, 6, 11), end=date(2026, 7, 9),
+        dry_run=False, sample_only=False,
+        codes_override=["BRACBANK", "GP"], notify_on_failure=True,
+    )
+    assert rc == 1
+    assert any(level == "error" for level, _ in calls), "expected an error notify on total fetch failure"
+
+
+def test_all_fetch_fail_stays_quiet_when_notify_disabled(monkeypatch, _no_sleep):
+    """Manual backfills / dry-runs (notify_on_failure=False default) must NOT
+    alert — only the daily production path opts in."""
+    calls: list = []
+    monkeypatch.setattr(bd, "notify", lambda *a, **k: calls.append(a))
+
+    def _boom(client, code, start, end):
+        raise HttpClient.FetchError("x", None, "y")
+
+    monkeypatch.setattr(bd, "fetch_scrip_closes", _boom)
+
+    rc = bd.run_backfill(
+        start=date(2026, 6, 11), end=date(2026, 7, 9),
+        dry_run=False, sample_only=False, codes_override=["BRACBANK"],
+    )
+    assert rc == 1
+    assert calls == []  # a manual run must not page anyone
+
+
+def test_supabase_write_error_alerts_and_reraises(monkeypatch, _no_sleep):
+    """A write failure mid-upsert must alert AND propagate (systemd records a
+    fail), never be swallowed."""
+    calls: list[tuple[str, str]] = []
+    monkeypatch.setattr(bd, "notify", lambda level, title, msg, *a, **k: calls.append((level, title)))
+    monkeypatch.setattr(bd, "fetch_scrip_closes", lambda client, code, s, e: [_close_row(code)])
+
+    import utils.supabase_writer as sw
+
+    def _raise(**kwargs):
+        raise SupabaseWriteError("PostgREST 500")
+
+    monkeypatch.setattr(sw, "upsert_metric_history", _raise)
+
+    with pytest.raises(SupabaseWriteError):
+        bd.run_backfill(
+            start=date(2026, 7, 1), end=date(2026, 7, 1),
+            dry_run=False, sample_only=False,
+            codes_override=["BRACBANK"], notify_on_failure=True,
+        )
+    assert any(level == "error" for level, _ in calls), "expected an error notify before re-raise"
+
+
+def test_below_floor_full_run_alerts_but_still_writes(monkeypatch, _no_sleep):
+    """A full DS30 run that lands fewer than the ticker floor must alert but still
+    write the partial set (return 0) — partial data beats no data."""
+    calls: list[tuple[str, str]] = []
+    monkeypatch.setattr(bd, "notify", lambda level, title, msg, *a, **k: calls.append((level, title)))
+
+    codes = [f"T{i:02d}" for i in range(30)]
+    monkeypatch.setattr(bd, "fetch_ds30_codes", lambda client: codes)
+
+    ok = set(codes[:10])  # only 10/30 succeed -> below the 25 floor
+
+    def _fetch(client, code, s, e):
+        if code in ok:
+            return [_close_row(code)]
+        raise HttpClient.FetchError("x", None, "miss")
+
+    monkeypatch.setattr(bd, "fetch_scrip_closes", _fetch)
+
+    import utils.supabase_writer as sw
+    monkeypatch.setattr(sw, "upsert_metric_history", lambda **kw: len(kw["data"]))
+
+    rc = bd.run_backfill(
+        start=date(2026, 7, 1), end=date(2026, 7, 1),
+        dry_run=False, sample_only=False, notify_on_failure=True,
+    )
+    assert rc == 0  # partial set still written
+    assert any(level == "error" and "floor" in title for level, title in calls)

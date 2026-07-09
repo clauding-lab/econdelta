@@ -48,6 +48,7 @@ def test_main_delegates_real_full_set_write_over_self_healing_window(monkeypatch
     assert captured.get("codes_override") is None  # => run_backfill fetches DS30 live
     assert captured["end"] == date.today()         # window ends today
     assert (captured["end"] - captured["start"]).days == 5  # self-healing 5-day look-back
+    assert captured["notify_on_failure"] is True   # E1.6: production path alerts on failure
 
 
 def test_main_propagates_run_backfill_failure_exit_code(monkeypatch):

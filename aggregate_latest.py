@@ -1122,6 +1122,16 @@ def main() -> int:
             logger.warning(
                 "Supabase write failed: %s — continuing with local archive only", e,
             )
+            # Alert loudly: a swallowed write failure means consumers silently
+            # serve yesterday's data (rotated key, PostgREST outage) with no
+            # signal. Keep continuing — the local archive is the right fallback;
+            # the silence was the bug (E1.6).
+            notify(
+                "error",
+                "aggregate — Supabase write failed",
+                "metric_history upsert failed; consumers will serve the previous "
+                f"snapshot until the next successful run. {type(e).__name__}: {e}",
+            )
 
     summary = " ".join(
         f"{k}={s.status}({s.age_hours}h)" if s.age_hours is not None else f"{k}={s.status}"
