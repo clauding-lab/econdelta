@@ -176,6 +176,8 @@ body.sidebar-collapsed .app{
   background: var(--ok-2);
   box-shadow: 0 0 0 3px rgba(63,107,58,.15);
 }
+.sidebar.collapsed .foot-mini .dot.warn{ background: var(--warn); box-shadow: 0 0 0 3px rgba(201,140,26,.15); }
+.sidebar.collapsed .foot-mini .dot.fail{ background: var(--fail); box-shadow: 0 0 0 3px rgba(209,42,42,.15); }
 .sidebar .brand{
   padding: 0 22px 24px;
   border-bottom: 1px solid var(--rule-soft);
@@ -247,6 +249,8 @@ body.sidebar-collapsed .app{
   background: var(--ok-2); vertical-align:1px; margin-right:6px;
   box-shadow: 0 0 0 3px rgba(63,107,58,.15);
 }
+.sidebar .foot .dot.warn{ background: var(--warn); box-shadow: 0 0 0 3px rgba(201,140,26,.15); }
+.sidebar .foot .dot.fail{ background: var(--fail); box-shadow: 0 0 0 3px rgba(209,42,42,.15); }
 
 /* Main column */
 .main{padding: 0 0 80px; max-width: 1280px; min-width: 0;}
@@ -581,6 +585,12 @@ body.sidebar-collapsed .app{
 .ticker .delta.down{color: var(--accent);}
 .ticker .delta.flat{color: var(--ink-3);}
 .ticker .spark{margin-top: 10px;}
+.ticker .vintage{
+  font-family:"IBM Plex Mono",monospace;
+  font-size: 10px; color: var(--ink-3);
+  margin-top: 6px;
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+}
 
 /* Section heads inside pages */
 h2.sec{

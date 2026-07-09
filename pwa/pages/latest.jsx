@@ -151,6 +151,7 @@ function PageLatest(){
                       />
                     </div>
                   )}
+                  <VintagePill asOf={t.asOf} cadenceLabel={t.cadence}/>
                 </div>
               ))}
             </div>
