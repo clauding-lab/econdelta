@@ -11,10 +11,14 @@
 //   bundle.data          — flat metric_id → scalar map
 //   bundle.sources_status — {source: {status, last_success, ...}}
 //   bundle.updated_at    — ISO timestamp
-//   tickers              — [{key, group, label, unit, val, delta, spark, fmt}, ...]
+//   tickers              — [{key, group, label, unit, val, delta, spark, fmt, asOf, cadence}, ...]
+//                           asOf/cadence feed the vintage pill (VintagePill in
+//                           components.jsx) — cadence may be null when
+//                           unresolvable (data-mock.js doesn't set either).
 //   series               — {metric_id: [v0, v1, ..., v(N-1)]} N-day arrays (null gaps)
 //   days                 — [{date, dt, trading}, ...] N-day calendar
-//   history              — raw metric_history rows (N-day window)
+//   history              — raw metric_history rows (N-day window), incl. `source`
+//   metricSource         — {metric_id: source} latest metric_history.source per metric
 //   runs                 — {source: [{date, startedAt, finishedAt, durationMs, status, error}]}
 //
 // N = RUN_WINDOW_DAYS (currently 60). Adjust here and the dashboard label in
@@ -122,6 +126,20 @@ const RUN_WINDOW_DAYS = 60;
     },
   ];
 
+  // Fallback cadence label (matches metric_definitions.cadence's vocabulary)
+  // for groups whose metric_ids predate the metric_definitions catalog and so
+  // have no `def.cadence` of their own — confirmed live 2026-07-09: usd_bdt_mid,
+  // dsex, brent_crude_usd_barrel etc. all resolve to no metric_definitions row
+  // at all. Their scrapers (bb_forex/dse_market/commodity_prices) are known
+  // daily jobs (see deploy/econdelta-{forex,dse,commodity}.timer), so this is
+  // a grounded fallback, not a guess. Every other group already has real
+  // per-metric cadence data and gets no synthetic fallback (E3.2 fix 1).
+  const GROUP_DEFAULT_CADENCE = {
+    Forex: 'daily',
+    DSE: 'daily',
+    Commodities: 'daily',
+  };
+
   function pctChange(today, prev){
     if (today == null || prev == null || prev === 0) return null;
     return (today - prev) / prev;
@@ -186,10 +204,14 @@ const RUN_WINDOW_DAYS = 60;
     if(!dashRes.ok) throw new Error(`RPC ${dashRes.status}: ${await dashRes.text()}`);
     const dashboard = await dashRes.json();
 
-    // Direct REST: N-day metric_history.
+    // Direct REST: N-day metric_history. `source` is metric_history's real
+    // provenance column (e.g. "EconDelta", "DSE Day End Archive", "IMF
+    // DataMapper") — pulled in for the Runs page's Stale metrics table
+    // "writing source" column (E3.2 fix 5/6). It's free-text attribution, not
+    // the run_logs.source scraper key, so don't conflate the two.
     const since = new Date(Date.now() - RUN_WINDOW_DAYS*24*3600*1000).toISOString().slice(0,10);
     const histRes = await fetch(
-      `${cfg.url}/rest/v1/metric_history?as_of=gte.${since}&select=metric_id,value,as_of&order=as_of.asc&limit=20000`,
+      `${cfg.url}/rest/v1/metric_history?as_of=gte.${since}&select=metric_id,value,as_of,source&order=as_of.asc&limit=20000`,
       { headers: HEADERS }
     );
     const history = histRes.ok ? await histRes.json() : [];
@@ -216,10 +238,15 @@ const RUN_WINDOW_DAYS = 60;
     const dayKeys = days.map(d => d.date);
 
     // Index history by metric_id then date for series construction.
+    // Also track each metric's most recent `source` value — history is
+    // ordered as_of.asc, so the last write per metric_id wins and lands on
+    // the latest row (E3.2 fix 5).
     const histByMetric = {};
+    const metricSourceLatest = {};
     history.forEach(r => {
       if (!histByMetric[r.metric_id]) histByMetric[r.metric_id] = {};
       histByMetric[r.metric_id][r.as_of] = r.value;
+      if (r.source) metricSourceLatest[r.metric_id] = r.source;
     });
 
     // Build per-metric N-day series (null where missing).
@@ -239,14 +266,24 @@ const RUN_WINDOW_DAYS = 60;
     });
 
     // Build tickers — one per metric_id in the curated groups.
-    // Drop tickers whose metric_id has no value AND no definition (avoid empty cards).
+    // Drop tickers with no value — a card with a definition but no data ever
+    // written (e.g. nbr_customs/vat/it_collected_cr) used to render as a bare
+    // "—" with no indication it was dead rather than just quiet (E3.2 fix 6).
     const tickers = [];
     TICKER_GROUPS.forEach(group => {
       group.metrics.forEach(metric_id => {
         const def = defsById[metric_id];
         const val = flatValues[metric_id];
-        // Skip if neither value nor definition — nothing to render.
-        if (val == null && !def) return;
+        if (val == null) return;
+
+        // as_of + cadence feed the per-ticker vintage pill (E3.2 fix 1).
+        // Cadence prefers metric_definitions.cadence; falls back to a
+        // group-level default only where that's independently grounded (see
+        // GROUP_DEFAULT_CADENCE above) — otherwise stays unresolved so the
+        // UI shows no pill rather than guessing.
+        const rpcValue = (dashboard.values || {})[metric_id];
+        const asOf = (rpcValue && rpcValue.as_of) || null;
+        const cadence = (def && def.cadence) || GROUP_DEFAULT_CADENCE[group.key] || null;
 
         // Compute delta from history: today / prior non-null value - 1.
         const arr = series[metric_id];
@@ -286,6 +323,8 @@ const RUN_WINDOW_DAYS = 60;
           delta,
           spark,
           fmt,
+          asOf,
+          cadence,
         });
       });
     });
@@ -310,6 +349,7 @@ const RUN_WINDOW_DAYS = 60;
       stats: null,   // populated post-paint by fetchRepoStats() below; hero shows fallbacks until then
       dashboard,
       history,
+      metricSource: metricSourceLatest,  // metric_id -> metric_history.source, for the Stale metrics table (E3.2 fix 5)
       runs: runsBySource,
       days,
       series,

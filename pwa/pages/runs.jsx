@@ -12,6 +12,16 @@ const CADENCES = {
   dse_market:       '05:11 BDT trading days',
   parse:            '10:30 BDT daily (+ 11:55 retry)',
   aggregate:        '13:00 BDT daily (+ 14:00 retry)',
+  // Backfilled 2026-07 (E3.2) — read from deploy/econdelta-*.timer
+  // OnCalendar values (UTC) and converted to BDT (UTC+6). No retry units
+  // exist for these 7 yet.
+  bb_auction:            '05:14 BDT daily',
+  dse_dayend:            '05:20 BDT daily',
+  world_bank_pink_sheet: '05:17 BDT daily',
+  media_screen:          '21:30 BDT daily',
+  imf_eff:               '05:20 BDT Monday (weekly)',
+  imf_debt_gdp:          '05:23 BDT Monday (weekly)',
+  briefing:              '07:00 BDT Monday (weekly)',
 };
 
 function PageRuns(){
@@ -41,6 +51,45 @@ function PageRuns(){
   const failures = allSources
     .flatMap(k => (data.runs[k] || []).filter(r=>r.status==='fail' || r.status==='stale').map(r=>({...r,src:k})))
     .sort((a,b)=> a.date < b.date ? 1 : -1);
+
+  // Stale metrics — data-freshness, not run-health (E3.2 fix 5). A run can
+  // fire green every day (source's job succeeded) while the value it writes
+  // hasn't actually changed in months — run_logs alone can't catch that.
+  // Cross-references every catalogued metric's last as_of against its
+  // cadence, using the same CADENCE_DAYS thresholds as the Latest page's
+  // per-ticker vintage pill (components.jsx).
+  const metricDefs = (data.dashboard && data.dashboard.definitions) || [];
+  const metricValues = (data.dashboard && data.dashboard.values) || {};
+  const metricSource = data.metricSource || {};
+  const staleMetrics = metricDefs
+    .map(def => {
+      const v = metricValues[def.metric_id];
+      const asOf = (v && v.as_of) || null;
+      const ageDays = asOf
+        ? Math.floor((Date.now() - new Date(asOf + 'T00:00:00Z').getTime()) / 86400000)
+        : null;
+      const status = vintageStatus(asOf, def.cadence);
+      return {
+        metric_id: def.metric_id,
+        label: def.short_label || def.label || def.metric_id,
+        asOf,
+        ageDays,
+        cadenceLabel: def.cadence || null,
+        source: metricSource[def.metric_id] || '—',
+        level: !asOf ? 'no-data' : status ? status.level : 'fresh',
+      };
+    })
+    // Only surface what's actually worth a look — never-written metrics and
+    // anything past its amber/red threshold. Fresh metrics and metrics whose
+    // cadence can't be resolved (level stays 'fresh' with no pill) stay off
+    // this table rather than padding it with noise.
+    .filter(r => r.level === 'no-data' || r.level === 'amber' || r.level === 'red')
+    .sort((a,b) => {
+      if (a.ageDays == null && b.ageDays == null) return 0;
+      if (a.ageDays == null) return -1;
+      if (b.ageDays == null) return 1;
+      return b.ageDays - a.ageDays;
+    });
 
   return (
     <React.Fragment>
@@ -111,6 +160,38 @@ function PageRuns(){
                 <td><StatusPill status={r.status}/></td>
                 <td className="num muted">{r.durationMs != null ? (r.durationMs/1000).toFixed(1) + 's' : '—'}</td>
                 <td className="muted">{r.error}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+
+      <h2 className="sec">Stale metrics</h2>
+      <p className="sec-lede">
+        Run-health above answers "did the job fire?" — this answers "did the value it wrote actually change?"
+        A source can run green every day while quietly writing the same stale number. Metrics past their
+        expected cadence (amber &gt;1×, red &gt;2×) or never written at all, worst first.
+        {' '}{metricDefs.length} catalogued metrics checked; metrics with no <span className="mono">metric_definitions.cadence</span> value can't be judged and are left out rather than guessed at.
+      </p>
+      {staleMetrics.length === 0 ? (
+        <p style={{fontFamily:'IBM Plex Serif, serif',fontStyle:'italic',color:'var(--ink-3)',marginLeft:44}}>No catalogued metric is overdue for its cadence. Data is fresh.</p>
+      ) : (
+        <table className="tbl">
+          <thead>
+            <tr><th>Metric</th><th>Last as of</th><th>Days since change</th><th>Expected cadence</th><th>Writing source</th></tr>
+          </thead>
+          <tbody>
+            {staleMetrics.map(r => (
+              <tr key={r.metric_id}>
+                <td>{r.label} <span className="muted">{r.metric_id}</span></td>
+                <td className="num">{r.asOf || '—'}</td>
+                <td className="num">
+                  {r.ageDays == null
+                    ? <span className="pill pill-fail">no data</span>
+                    : <span className={`pill ${r.level === 'red' ? 'pill-fail' : 'pill-stale'}`}>{r.ageDays}d</span>}
+                </td>
+                <td className="muted">{r.cadenceLabel || '—'}</td>
+                <td className="muted">{r.source}</td>
               </tr>
             ))}
           </tbody>
