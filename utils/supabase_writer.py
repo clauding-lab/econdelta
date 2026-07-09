@@ -87,6 +87,7 @@ def _rows_from_data(
     as_of: date,
     source: str,
     source_as_of_map: Mapping[str, date] | None = None,
+    ingested_at: datetime | None = None,
 ) -> list[dict]:
     """Build PostgREST row dicts from ``data``.
 
@@ -99,9 +100,24 @@ def _rows_from_data(
             of the global fallback. This is the key fix for the as_of bug: quarterly
             BB FSAR metrics (banking_npl_pct, banking_car_pct) supply the quarter-end
             date (e.g. 2025-09-30) rather than today's run date.
+        ingested_at: The write timestamp posted on EVERY row so a merge-upsert
+            (ON CONFLICT DO UPDATE) BUMPS ``metric_history.ingested_at``. Defaults
+            to now (UTC). See below for why this matters.
+
+    ``ingested_at`` is posted explicitly (not left to the column's ``default now()``)
+    because that default only fires on INSERT, never on the UPDATE half of the
+    merge-upsert. A slow-cadence metric whose ``as_of`` is legitimately pinned to a
+    recovered reporting vintage (e.g. ``debt_domestic_stock_cr`` → 2025-12-31) is
+    re-written to the SAME (metric_id, as_of) row every run: its ``value`` updates
+    in place but, without posting ``ingested_at``, its write timestamp froze at the
+    row's first insert. Result: a pipeline that is writing daily reads as "last seen
+    weeks ago" to any freshness check keyed on ``ingested_at`` — the E1.1 freeze.
+    Posting a fresh ``ingested_at`` each run makes write-liveness observable even
+    when ``as_of`` correctly stalls. (E1.1)
     """
     rows: list[dict] = []
     overrides = source_as_of_map or {}
+    stamp = (ingested_at or datetime.now(timezone.utc)).isoformat()
     for metric_id, value in data.items():
         if metric_id in _KNOWN_NON_HISTORY_KEYS:
             # By-design metadata key — never a numeric history row.
@@ -117,6 +133,7 @@ def _rows_from_data(
                 "as_of": effective_as_of.isoformat(),
                 "value": value,
                 "source": source,
+                "ingested_at": stamp,
             })
         else:
             # Genuinely unexpected non-scalar shape (dict, list, str, None, ...)
