@@ -45,11 +45,11 @@ When something ships broken, when a methodology gap is exposed, or when a smoke 
 
 **Lesson:** "Works in a browser, fails in requests" for TLS almost always means the server sends an incomplete chain and the client isn't AIA-chasing. The fix is to supply the missing intermediate — NEVER `verify=False` (that trades a fetch bug for a MITM hole). certifi having the *root* is not enough; the *intermediate* must chain.
 
-**Prevention:** Bundled the intermediate at `certs/dse_sectigo_r36.pem` and merge it with certifi into one additive CA bundle (`utils/ca_bundle.combined_ca_bundle`) that `HttpClient` points `session.verify` at — additive so it's safe for every host and degrades to certifi-only on any failure. Tests pin the merge is additive, loadable, and wired in. Immediate hotfix appended the same intermediate to the venv's `certifi/cacert.pem` on ExonVPS + the Mac so the feed recovered ahead of the merge; that append is fragile to a certifi upgrade, which is why the repo bundle is the durable path.
+**Prevention:** Vendored the intermediate at `fetchers/ca/sectigo_r36.pem` (the single canonical cert location, shared with `fetchers/tls.py`'s pre-existing host-scoped mof.gov.bd path — one file, one rotation point; the review caught that a first draft duplicated it under `certs/`) and merge it with certifi into one additive CA bundle (`utils/ca_bundle.combined_ca_bundle`) that `HttpClient` points `session.verify` at — additive so it's safe for every host and degrades to certifi-only on any failure. Tests pin the merge is additive, loadable, and wired in. Immediate hotfix appended the same intermediate to the venv's `certifi/cacert.pem` on ExonVPS + the Mac so the feed recovered ahead of the merge; that append is fragile to a certifi upgrade, which is why the repo bundle is the durable path.
 
 **Hotfix:** PR (E1.2) `fix(http-client): bundle DSE's Sectigo intermediate`. Verified on ExonVPS BD egress: default certifi → SSLError on all 3 DSE hosts; combined bundle → HTTP 200 on all 3. `scrapers.dse_market` then ran clean (DSEX 5804.06, was 5516.82).
 
-**Cross-references:** AGENTS.md landmine 33 (TLS incomplete chains); `utils/ca_bundle.py`; `certs/dse_sectigo_r36.pem`; the E1.6 entry below (dse_dayend had no alerting, which is why this stayed dark 24 days).
+**Cross-references:** AGENTS.md landmine 33 (TLS incomplete chains); `utils/ca_bundle.py`; `fetchers/ca/sectigo_r36.pem` (+ `fetchers/tls.py`, the other consumer); the E1.6 entry below (dse_dayend had no alerting, which is why this stayed dark 24 days).
 
 ## 2026-07-09 — 22 indicators "frozen" for 34 days: a merge-upsert never bumped ingested_at
 
