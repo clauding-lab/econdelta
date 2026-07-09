@@ -27,6 +27,8 @@ import parsers.pdf_table_row  # noqa: F401
 import parsers.pdf_table_total  # noqa: F401
 from fetchers.base import FetchResult
 from parsers.hybrid import parse_one
+from utils.floor import assess_parse_floor
+from utils.notifier import notify
 
 REPO_ROOT = Path(__file__).resolve().parent
 DEFAULT_CONFIG = REPO_ROOT / "config" / "sources-v3.json"
@@ -223,6 +225,16 @@ def main() -> int:
     for s in snapshots:
         by_prov[s.get("_provenance", "unknown")] = by_prov.get(s.get("_provenance", "unknown"), 0) + 1
     print(f"Parsed: {len(snapshots)} ({', '.join(f'{k}:{v}' for k, v in by_prov.items())})")
+
+    # E2.5 deterministic floor — fires when parse produced almost nothing
+    # (systemic parse break, or a fetch outage that left no artifacts), BEFORE
+    # and independent of the LLM review. Skipped for --only (targeted debug).
+    if not args.only:
+        cfg = json.loads(args.config.read_text())
+        verdict = assess_parse_floor(due=len(cfg.get("indicators", [])), produced=len(snapshots))
+        if verdict.breached:
+            logger.error("parse floor breached: %s", verdict.reason)
+            notify("error", "parse floor breached", verdict.reason)
     return 0
 
 

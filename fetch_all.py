@@ -21,6 +21,8 @@ from fetchers.pdf_discovery import discover_latest_pdf_link
 from fetchers.pdf_fetcher import fetch_pdf
 from fetchers.pdf_fetcher_stealth import fetch_pdf_stealth
 from fetchers.tls import ssl_context_for
+from utils.floor import assess_fetch_floor
+from utils.notifier import notify
 
 REPO_ROOT = Path(__file__).resolve().parent
 DEFAULT_CONFIG = REPO_ROOT / "config" / "sources-v3.json"
@@ -130,6 +132,16 @@ def main() -> int:
     results = run(config_path=args.config, data_root=args.data_root, only=args.only, dry_run=args.dry_run)
     cache_hits = sum(1 for r in results if r.cache_hit)
     print(f"Fetched: {len(results)} · Cache hits: {cache_hits} · Failed: see log")
+
+    # E2.5 deterministic floor — fires on a systemic fetch outage BEFORE and
+    # independent of the downstream LLM review. Skipped for --only (targeted
+    # debug) and --dry-run (no fetch happened).
+    if not args.dry_run and not args.only:
+        cfg = json.loads(args.config.read_text())
+        verdict = assess_fetch_floor(due=len(cfg.get("indicators", [])), fetched=len(results))
+        if verdict.breached:
+            logger.error("fetch floor breached: %s", verdict.reason)
+            notify("error", "fetch floor breached", verdict.reason)
     return 0
 
 
