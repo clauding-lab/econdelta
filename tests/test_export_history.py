@@ -55,6 +55,35 @@ def test_is_rescrapable_daily_predicate():
     assert is_rescrapable_daily("cpi_headline_monthly", daily_cfg) is False
 
 
+def test_mid_write_crash_preserves_prior_good_backup(tmp_path, monkeypatch):
+    """Review fix (#86 HIGH): the filename is date-based, so a same-day re-run
+    targets the SAME path. A crash mid-write must NOT destroy the previous good
+    backup — the atomic .tmp -> os.replace pattern guarantees the good file is
+    only ever swapped for a fully-written one."""
+    from datetime import datetime, timezone
+
+    import scripts.export_history as eh
+
+    stamp = datetime(2026, 7, 9, 7, 15, tzinfo=timezone.utc)
+    good_path = tmp_path / "econdelta_history_export_2026-07-09.json"
+    good_payload = {"exported_at": "earlier", "tables": {"metric_history": []}}
+    good_path.write_text(json.dumps(good_payload))
+
+    # Crash while producing the re-run's bytes (the mid-write class: the .tmp
+    # is partially/never written; out_path must not be touched).
+    def _boom(*a, **k):
+        raise RuntimeError("simulated mid-write crash")
+    monkeypatch.setattr(eh.json, "dumps", _boom)
+
+    with pytest.raises(RuntimeError):
+        eh.export_history(tmp_path, fetcher=_fetcher, now=stamp)
+
+    # The prior good backup survives, byte-identical and parseable...
+    assert json.loads(good_path.read_text()) == good_payload
+    # ...and no partial .tmp is left behind.
+    assert not (tmp_path / "econdelta_history_export_2026-07-09.json.tmp").exists()
+
+
 def test_paginate_raises_without_credentials(monkeypatch):
     for var in ("SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY", "SUPABASE_SERVICE_KEY", "SUPABASE_ANON_KEY"):
         monkeypatch.delenv(var, raising=False)

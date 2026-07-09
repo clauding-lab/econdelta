@@ -159,7 +159,19 @@ def export_history(
         "manifest": {t: len(rows) for t, rows in tables.items()},
         "tables": tables,
     }
-    out_path.write_text(json.dumps(payload, indent=2, default=str))
+    # Atomic write (.tmp → os.replace, the aggregate_latest.write_latest
+    # pattern). The filename is DATE-based, so a same-day re-run targets the
+    # SAME path — a direct write_text that crashes mid-write (disk full, OOM,
+    # SIGKILL) would leave truncated invalid JSON where a good backup used to
+    # be, destroying the very copy this job exists to protect. Writing to a
+    # sibling .tmp and os.replace-ing means the prior good file survives any
+    # crash; the .tmp leftover is removed on the way out.
+    tmp_path = out_path.with_suffix(".json.tmp")
+    try:
+        tmp_path.write_text(json.dumps(payload, indent=2, default=str))
+        os.replace(tmp_path, out_path)
+    finally:
+        tmp_path.unlink(missing_ok=True)
     logger.info("wrote %s (%s)", out_path, payload["manifest"])
     return out_path
 
