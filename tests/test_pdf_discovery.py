@@ -1,6 +1,6 @@
 import pytest
 
-from fetchers.pdf_discovery import discover_latest_pdf_link
+from fetchers.pdf_discovery import discover_latest_pdf, discover_latest_pdf_link
 
 _FIXTURE_HTML = """
 <html><body>
@@ -17,6 +17,16 @@ def test_discover_latest_pdf_picks_most_recent_month():
     base = "https://www.bb.org.bd"
     link = discover_latest_pdf_link(html=_FIXTURE_HTML, base_url=base)
     assert link == f"{base}/files/pub/3-11/april-2026.pdf"
+
+
+def test_discover_latest_pdf_returns_url_and_period():
+    """discover_latest_pdf surfaces the chosen issue's (year, month) so the
+    fetcher can record it in the sidecar (E1 MEI leftover) — the URL matches the
+    back-compat wrapper, and the period is the newest issue's."""
+    base = "https://www.bb.org.bd"
+    url, period = discover_latest_pdf(html=_FIXTURE_HTML, base_url=base)
+    assert url == f"{base}/files/pub/3-11/april-2026.pdf"
+    assert period == (2026, 4)
 
 
 def test_discover_latest_pdf_raises_on_empty():

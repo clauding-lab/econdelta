@@ -17,7 +17,7 @@ from urllib.request import Request, urlopen
 from fetchers.base import FetchError, FetchResult
 from fetchers.html_fetcher import fetch_html
 from fetchers.news_article_discovery import discover_latest_article_link
-from fetchers.pdf_discovery import discover_latest_pdf_link
+from fetchers.pdf_discovery import discover_latest_pdf
 from fetchers.pdf_fetcher import fetch_pdf
 from fetchers.pdf_fetcher_stealth import fetch_pdf_stealth
 from fetchers.tls import ssl_context_for
@@ -72,6 +72,10 @@ def _fetch_one(indicator: dict, data_root: Path) -> FetchResult | None:
         )
     if fetch_block["type"] == "pdf":
         url = fetch_block["url"]
+        # The discovered issue period (year, month), persisted into the artifact
+        # sidecar so parse selects the newest ISSUE by recorded period, not mtime
+        # (E1 MEI leftover). None for fixed-URL PDFs (no discovery) → mtime fallback.
+        period: tuple[int, int] | None = None
         if fetch_block.get("discover") == "latest_pdf_link":
             # Contain a per-indicator index-fetch failure (e.g. a moved page → 404,
             # or a TLS error) as a FetchError so run() skips just this indicator
@@ -81,7 +85,7 @@ def _fetch_one(indicator: dict, data_root: Path) -> FetchResult | None:
                 html = _download_index_html(url)
             except Exception as e:
                 raise FetchError(f"index fetch failed for {url}: {e}") from e
-            url = discover_latest_pdf_link(html=html, base_url=url)
+            url, period = discover_latest_pdf(html=html, base_url=url)
         as_of_month = datetime.now(timezone.utc).strftime("%Y-%m")
         if fetch_block.get("stealth"):
             return fetch_pdf_stealth(
@@ -90,12 +94,14 @@ def _fetch_one(indicator: dict, data_root: Path) -> FetchResult | None:
                 snapshot_dir=data_root,
                 as_of_month=as_of_month,
                 prime_url=fetch_block.get("prime_url", "https://www.bb.org.bd/"),
+                period=period,
             )
         return fetch_pdf(
             url=url,
             indicator_id=indicator_id,
             snapshot_dir=data_root,
             as_of_month=as_of_month,
+            period=period,
         )
     logger.warning("unsupported fetch.type=%s for %s", fetch_block.get("type"), indicator_id)
     return None
