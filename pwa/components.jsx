@@ -22,12 +22,15 @@ const SOURCE_LABELS = {
 
 // Expected data-refresh cadence, in days, keyed by metric_definitions.cadence
 // (daily | weekly | monthly | quarterly | fiscal_year — the values actually
-// seen in the live catalog). `daily` carries a +2 day buffer to absorb
-// Bangladesh's Fri-Sat weekend (most daily series only publish on business
-// days, so a metric last written on Thursday reads "2 days old" on Saturday
-// without anything actually being broken).
+// seen in the live catalog). `daily` carries a 4-day grace window, matching the
+// canonical v_metric_freshness grace_days=4 (E3.1). A Thursday public holiday
+// butting against Bangladesh's Fri-Sat weekend is a real 4-day publishing gap
+// (e.g. 2026-01-01 New Year's Day and 2026-03-26 Independence Day both fall on
+// a Thursday), so a daily series last published the preceding Wednesday is
+// legitimately 4 days old on Sunday without anything being broken. The prior
+// 3-day window false-ambered every daily ticker on those dates.
 const CADENCE_DAYS = {
-  daily: 3,
+  daily: 4,
   weekly: 9,
   monthly: 35,
   quarterly: 97,
