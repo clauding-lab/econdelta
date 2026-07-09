@@ -274,3 +274,41 @@ def test_below_floor_full_run_alerts_but_still_writes(monkeypatch, _no_sleep):
     )
     assert rc == 0  # partial set still written
     assert any(level == "error" and "floor" in title for level, title in calls)
+
+
+def test_ds30_list_fetch_failure_alerts_and_propagates(monkeypatch, _no_sleep):
+    """The DS30 constituent-list fetch runs BEFORE the per-scrip loop — a failure
+    there (TLS break, block, page reshape) must fire the error alert too, not
+    escape the alerting entirely (review HIGH on PR #75)."""
+    calls: list[tuple[str, str]] = []
+    monkeypatch.setattr(bd, "notify", lambda level, title, msg, *a, **k: calls.append((level, title)))
+
+    def _boom(client):
+        raise HttpClient.FetchError(bd.DS30_URL, None, "TLS chain broken")
+
+    monkeypatch.setattr(bd, "fetch_ds30_codes", _boom)
+
+    with pytest.raises(HttpClient.FetchError):
+        bd.run_backfill(
+            start=date(2026, 6, 11), end=date(2026, 7, 9),
+            dry_run=False, sample_only=False, notify_on_failure=True,
+        )
+    assert any(level == "error" and "DS30 list" in title for level, title in calls), (
+        "expected an error notify when the DS30 list fetch fails"
+    )
+
+
+def test_ds30_list_fetch_failure_stays_quiet_when_notify_disabled(monkeypatch, _no_sleep):
+    """Manual backfills (default) must not page on a list-fetch failure either —
+    the exception still propagates for the CLI user to see."""
+    calls: list = []
+    monkeypatch.setattr(bd, "notify", lambda *a, **k: calls.append(a))
+    monkeypatch.setattr(bd, "fetch_ds30_codes",
+                        lambda client: (_ for _ in ()).throw(bd.BackfillError("no table")))
+
+    with pytest.raises(BackfillError):
+        bd.run_backfill(
+            start=date(2026, 6, 11), end=date(2026, 7, 9),
+            dry_run=False, sample_only=False,
+        )
+    assert calls == []

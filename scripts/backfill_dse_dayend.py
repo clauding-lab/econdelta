@@ -362,7 +362,22 @@ def run_backfill(
         print(f"Using {len(codes)} override code(s): {codes}")
     else:
         print(f"Fetching DS30 constituent list from {DS30_URL} ...")
-        codes = fetch_ds30_codes(client)
+        try:
+            codes = fetch_ds30_codes(client)
+        except (HttpClient.FetchError, BackfillError) as e:
+            # The list fetch runs BEFORE the per-scrip loop — without this guard
+            # a TLS break / host block / page reshape here escapes the alerting
+            # below entirely (run_logs says fail, nobody pinged): the exact E1.6
+            # silent-failure class this module's alerting exists to kill.
+            if notify_on_failure:
+                notify(
+                    "error",
+                    "dse_dayend — DS30 list fetch failed",
+                    f"Could not fetch/parse the DS30 constituent list from {DS30_URL}; "
+                    f"no tickers scraped for window {start.isoformat()}..{end.isoformat()}. "
+                    f"{type(e).__name__}: {e}",
+                )
+            raise
         print(f"DS30 list: {len(codes)} codes -> {codes}")
 
     if sample_only:
