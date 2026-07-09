@@ -49,7 +49,24 @@ def main() -> int:
         logger.warning("holidays load failed (%s); daily staleness uses weekends only", e)
         holidays = None
 
-    cadence_map = load_cadence_map()
+    try:
+        cadence_map = load_cadence_map()
+    except Exception as e:  # noqa: BLE001
+        # load_cadence_map reads sources-v3.json AND lazily imports aggregate_latest
+        # — a malformed config, a KeyError on a bad indicator entry, or a broken
+        # aggregate_latest import would otherwise crash the sentinel here with
+        # run_logs=fail but NO Discord alert (the exact silent-freeze class this
+        # sentinel exists to kill). Mirror the read-failure guard below: alert
+        # loudly and fail so the off-box heartbeat notices — a sentinel that can't
+        # build its cadence map cannot judge freshness and must not look healthy.
+        logger.error("sentinel cadence-map load failed: %s", e)
+        notify(
+            "error",
+            "Freshness sentinel — cadence map failed",
+            f"Could not build the metric→cadence map (sources-v3.json / "
+            f"aggregate_latest); freshness UNKNOWN this run. {type(e).__name__}: {e}",
+        )
+        return 1
 
     try:
         rows_daily = fetch_all_freshness_rows("metric_history")
