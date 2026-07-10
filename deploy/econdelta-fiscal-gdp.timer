@@ -1,0 +1,11 @@
+[Unit]
+Description=Run EconDelta fiscal revenue/GDP scraper weekly (Sun 23:26 UTC / Mon 05:26 BDT). IMF DataMapper + World Bank figures update at most annually; weekly is ample.
+Requires=econdelta-fiscal-gdp.service
+
+[Timer]
+OnCalendar=Sun *-*-* 23:26:00 UTC
+Persistent=true
+RandomizedDelaySec=120
+
+[Install]
+WantedBy=timers.target

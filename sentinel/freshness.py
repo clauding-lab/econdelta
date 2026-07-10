@@ -18,6 +18,22 @@ from .cadence import GRACE_DAYS_BY_CADENCE, resolve_cadence
 # Daily cadence tolerates this many DSE trading sessions of lag before breach.
 _DAILY_TRADING_DAY_GRACE = GRACE_DAYS_BY_CADENCE["daily"]
 
+# Metrics whose SOURCE publishes with a structural lag longer than any sane
+# cadence grace — their staleness is CORRECT, not a pipeline fault, so they must
+# never fire the daily breach alert (that would be unactionable alert-fatigue,
+# poisoning the very channel the run_logs dead-man's-switch relies on). A genuine
+# scraper failure is still caught by the scraper's own error path + run_logs, not
+# by data-freshness here; and both ids below are unconsumed parity metrics
+# (fetched, not yet displayed on any surface):
+#   - tax_gdp_ratio: World Bank GC.TAX.TOTL.GD.ZS for BD stops at 2021 (~4-5y lag).
+#   - rev_gdp_ratio: IMF DataMapper "rev" for BD carries no forward projection, so
+#     its latest actual (currently 2024) breaches the fiscal_year grace for a
+#     ~4-month window each year until the next annual vintage lands.
+# See scrapers/fiscal_gdp_ratios.py and sentinel/cadence.py.
+ACCEPTED_STALE_METRIC_IDS: frozenset[str] = frozenset(
+    {"tax_gdp_ratio", "rev_gdp_ratio"}
+)
+
 
 @dataclass(frozen=True)
 class MetricFreshness:
@@ -39,11 +55,17 @@ class FreshnessReport:
     breaches: list[MetricFreshness] = field(default_factory=list)
     fresh: list[MetricFreshness] = field(default_factory=list)
     unmapped: list[MetricFreshness] = field(default_factory=list)
+    accepted_stale: list[MetricFreshness] = field(default_factory=list)
     checked_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
     @property
     def total(self) -> int:
-        return len(self.breaches) + len(self.fresh) + len(self.unmapped)
+        return (
+            len(self.breaches)
+            + len(self.fresh)
+            + len(self.unmapped)
+            + len(self.accepted_stale)
+        )
 
 
 def _nth_previous_trading_day(d: date, n: int, holidays: set[date] | None) -> date:
@@ -141,6 +163,8 @@ def assess(
     A metric is:
       * unmapped — cadence can't be resolved, OR it has no non-future as_of to
         judge (both are actionable dedupe/retire/projection-split signals);
+      * accepted_stale — in ``ACCEPTED_STALE_METRIC_IDS``: its source lags by
+        design, so a breach here is not actionable and must never alert;
       * breach   — latest_as_of is older than its cadence grace allows;
       * fresh    — otherwise.
     """
@@ -153,6 +177,7 @@ def assess(
     breaches: list[MetricFreshness] = []
     fresh: list[MetricFreshness] = []
     unmapped: list[MetricFreshness] = []
+    accepted_stale: list[MetricFreshness] = []
 
     for mid, entry in acc.items():
         tables = tuple(sorted(entry["tables"]))
@@ -175,6 +200,24 @@ def assess(
             )
             continue
 
+        # Source-lag metrics: their staleness is by design, so never let them
+        # reach `breaches` (which would fire an unactionable daily alert). They
+        # DO have a cadence + a real vintage — a scraper that stopped writing
+        # entirely falls to `unmapped` above, so this can't mask a dead scraper.
+        if mid in ACCEPTED_STALE_METRIC_IDS:
+            accepted_stale.append(
+                MetricFreshness(
+                    metric_id=mid,
+                    cadence=cadence,
+                    latest_as_of=latest_as_of,
+                    latest_ingested_at=latest_ing,
+                    age_days=(today - latest_as_of).days,
+                    breach=False,
+                    tables=tables,
+                )
+            )
+            continue
+
         age = (today - latest_as_of).days
         breached = is_breach(latest_as_of, cadence, today, holidays)
         mf = MetricFreshness(
@@ -191,9 +234,11 @@ def assess(
     breaches.sort(key=lambda m: (m.age_days is None, -(m.age_days or 0)))
     fresh.sort(key=lambda m: m.metric_id)
     unmapped.sort(key=lambda m: m.metric_id)
+    accepted_stale.sort(key=lambda m: m.metric_id)
     return FreshnessReport(
         breaches=breaches,
         fresh=fresh,
         unmapped=unmapped,
+        accepted_stale=accepted_stale,
         checked_at=now or datetime.now(timezone.utc),
     )

@@ -1,0 +1,1068 @@
+[
+  {
+    "page": 1,
+    "pages": 1,
+    "per_page": 100,
+    "total": 66,
+    "sourceid": "2",
+    "lastupdated": "2026-07-01"
+  },
+  [
+    {
+      "indicator": {
+        "id": "GC.TAX.TOTL.GD.ZS",
+        "value": "Tax revenue (% of GDP)"
+      },
+      "country": {
+        "id": "BD",
+        "value": "Bangladesh"
+      },
+      "countryiso3code": "BGD",
+      "date": "2025",
+      "value": null,
+      "unit": "",
+      "obs_status": "",
+      "decimal": 1
+    },
+    {
+      "indicator": {
+        "id": "GC.TAX.TOTL.GD.ZS",
+        "value": "Tax revenue (% of GDP)"
+      },
+      "country": {
+        "id": "BD",
+        "value": "Bangladesh"
+      },
+      "countryiso3code": "BGD",
+      "date": "2024",
+      "value": null,
+      "unit": "",
+      "obs_status": "",
+      "decimal": 1
+    },
+    {
+      "indicator": {
+        "id": "GC.TAX.TOTL.GD.ZS",
+        "value": "Tax revenue (% of GDP)"
+      },
+      "country": {
+        "id": "BD",
+        "value": "Bangladesh"
+      },
+      "countryiso3code": "BGD",
+      "date": "2023",
+      "value": null,
+      "unit": "",
+      "obs_status": "",
+      "decimal": 1
+    },
+    {
+      "indicator": {
+        "id": "GC.TAX.TOTL.GD.ZS",
+        "value": "Tax revenue (% of GDP)"
+      },
+      "country": {
+        "id": "BD",
+        "value": "Bangladesh"
+      },
+      "countryiso3code": "BGD",
+      "date": "2022",
+      "value": null,
+      "unit": "",
+      "obs_status": "",
+      "decimal": 1
+    },
+    {
+      "indicator": {
+        "id": "GC.TAX.TOTL.GD.ZS",
+        "value": "Tax revenue (% of GDP)"
+      },
+      "country": {
+        "id": "BD",
+        "value": "Bangladesh"
+      },
+      "countryiso3code": "BGD",
+      "date": "2021",
+      "value": 7.64236301017901,
+      "unit": "",
+      "obs_status": "",
+      "decimal": 1
+    },
+    {
+      "indicator": {
+        "id": "GC.TAX.TOTL.GD.ZS",
+        "value": "Tax revenue (% of GDP)"
+      },
+      "country": {
+        "id": "BD",
+        "value": "Bangladesh"
+      },
+      "countryiso3code": "BGD",
+      "date": "2020",
+      "value": 7.00153674405437,
+      "unit": "",
+      "obs_status": "",
+      "decimal": 1
+    },
+    {
+      "indicator": {
+        "id": "GC.TAX.TOTL.GD.ZS",
+        "value": "Tax revenue (% of GDP)"
+      },
+      "country": {
+        "id": "BD",
+        "value": "Bangladesh"
+      },
+      "countryiso3code": "BGD",
+      "date": "2019",
+      "value": 7.63863895493657,
+      "unit": "",
+      "obs_status": "",
+      "decimal": 1
+    },
+    {
+      "indicator": {
+        "id": "GC.TAX.TOTL.GD.ZS",
+        "value": "Tax revenue (% of GDP)"
+      },
+      "country": {
+        "id": "BD",
+        "value": "Bangladesh"
+      },
+      "countryiso3code": "BGD",
+      "date": "2018",
+      "value": 7.73177216647423,
+      "unit": "",
+      "obs_status": "",
+      "decimal": 1
+    },
+    {
+      "indicator": {
+        "id": "GC.TAX.TOTL.GD.ZS",
+        "value": "Tax revenue (% of GDP)"
+      },
+      "country": {
+        "id": "BD",
+        "value": "Bangladesh"
+      },
+      "countryiso3code": "BGD",
+      "date": "2017",
+      "value": 6.99714263243688,
+      "unit": "",
+      "obs_status": "",
+      "decimal": 1
+    },
+    {
+      "indicator": {
+        "id": "GC.TAX.TOTL.GD.ZS",
+        "value": "Tax revenue (% of GDP)"
+      },
+      "country": {
+        "id": "BD",
+        "value": "Bangladesh"
+      },
+      "countryiso3code": "BGD",
+      "date": "2016",
+      "value": 7.31691184755758,
+      "unit": "",
+      "obs_status": "",
+      "decimal": 1
+    },
+    {
+      "indicator": {
+        "id": "GC.TAX.TOTL.GD.ZS",
+        "value": "Tax revenue (% of GDP)"
+      },
+      "country": {
+        "id": "BD",
+        "value": "Bangladesh"
+      },
+      "countryiso3code": "BGD",
+      "date": "2015",
+      "value": 8.49834882820801,
+      "unit": "",
+      "obs_status": "",
+      "decimal": 1
+    },
+    {
+      "indicator": {
+        "id": "GC.TAX.TOTL.GD.ZS",
+        "value": "Tax revenue (% of GDP)"
+      },
+      "country": {
+        "id": "BD",
+        "value": "Bangladesh"
+      },
+      "countryiso3code": "BGD",
+      "date": "2014",
+      "value": 8.6353777373447,
+      "unit": "",
+      "obs_status": "",
+      "decimal": 1
+    },
+    {
+      "indicator": {
+        "id": "GC.TAX.TOTL.GD.ZS",
+        "value": "Tax revenue (% of GDP)"
+      },
+      "country": {
+        "id": "BD",
+        "value": "Bangladesh"
+      },
+      "countryiso3code": "BGD",
+      "date": "2013",
+      "value": 8.96241331541821,
+      "unit": "",
+      "obs_status": "",
+      "decimal": 1
+    },
+    {
+      "indicator": {
+        "id": "GC.TAX.TOTL.GD.ZS",
+        "value": "Tax revenue (% of GDP)"
+      },
+      "country": {
+        "id": "BD",
+        "value": "Bangladesh"
+      },
+      "countryiso3code": "BGD",
+      "date": "2012",
+      "value": 9.02456269019499,
+      "unit": "",
+      "obs_status": "",
+      "decimal": 1
+    },
+    {
+      "indicator": {
+        "id": "GC.TAX.TOTL.GD.ZS",
+        "value": "Tax revenue (% of GDP)"
+      },
+      "country": {
+        "id": "BD",
+        "value": "Bangladesh"
+      },
+      "countryiso3code": "BGD",
+      "date": "2011",
+      "value": 8.68592470557816,
+      "unit": "",
+      "obs_status": "",
+      "decimal": 1
+    },
+    {
+      "indicator": {
+        "id": "GC.TAX.TOTL.GD.ZS",
+        "value": "Tax revenue (% of GDP)"
+      },
+      "country": {
+        "id": "BD",
+        "value": "Bangladesh"
+      },
+      "countryiso3code": "BGD",
+      "date": "2010",
+      "value": 7.83468474946733,
+      "unit": "",
+      "obs_status": "",
+      "decimal": 1
+    },
+    {
+      "indicator": {
+        "id": "GC.TAX.TOTL.GD.ZS",
+        "value": "Tax revenue (% of GDP)"
+      },
+      "country": {
+        "id": "BD",
+        "value": "Bangladesh"
+      },
+      "countryiso3code": "BGD",
+      "date": "2009",
+      "value": 7.49811626276927,
+      "unit": "",
+      "obs_status": "",
+      "decimal": 1
+    },
+    {
+      "indicator": {
+        "id": "GC.TAX.TOTL.GD.ZS",
+        "value": "Tax revenue (% of GDP)"
+      },
+      "country": {
+        "id": "BD",
+        "value": "Bangladesh"
+      },
+      "countryiso3code": "BGD",
+      "date": "2008",
+      "value": 7.65602988282474,
+      "unit": "",
+      "obs_status": "",
+      "decimal": 1
+    },
+    {
+      "indicator": {
+        "id": "GC.TAX.TOTL.GD.ZS",
+        "value": "Tax revenue (% of GDP)"
+      },
+      "country": {
+        "id": "BD",
+        "value": "Bangladesh"
+      },
+      "countryiso3code": "BGD",
+      "date": "2007",
+      "value": 6.91726266856821,
+      "unit": "",
+      "obs_status": "",
+      "decimal": 1
+    },
+    {
+      "indicator": {
+        "id": "GC.TAX.TOTL.GD.ZS",
+        "value": "Tax revenue (% of GDP)"
+      },
+      "country": {
+        "id": "BD",
+        "value": "Bangladesh"
+      },
+      "countryiso3code": "BGD",
+      "date": "2006",
+      "value": 7.04330405780911,
+      "unit": "",
+      "obs_status": "",
+      "decimal": 1
+    },
+    {
+      "indicator": {
+        "id": "GC.TAX.TOTL.GD.ZS",
+        "value": "Tax revenue (% of GDP)"
+      },
+      "country": {
+        "id": "BD",
+        "value": "Bangladesh"
+      },
+      "countryiso3code": "BGD",
+      "date": "2005",
+      "value": 7.13567003946154,
+      "unit": "",
+      "obs_status": "",
+      "decimal": 1
+    },
+    {
+      "indicator": {
+        "id": "GC.TAX.TOTL.GD.ZS",
+        "value": "Tax revenue (% of GDP)"
+      },
+      "country": {
+        "id": "BD",
+        "value": "Bangladesh"
+      },
+      "countryiso3code": "BGD",
+      "date": "2004",
+      "value": 7.04644841818552,
+      "unit": "",
+      "obs_status": "",
+      "decimal": 1
+    },
+    {
+      "indicator": {
+        "id": "GC.TAX.TOTL.GD.ZS",
+        "value": "Tax revenue (% of GDP)"
+      },
+      "country": {
+        "id": "BD",
+        "value": "Bangladesh"
+      },
+      "countryiso3code": "BGD",
+      "date": "2003",
+      "value": 6.96521390375867,
+      "unit": "",
+      "obs_status": "",
+      "decimal": 1
+    },
+    {
+      "indicator": {
+        "id": "GC.TAX.TOTL.GD.ZS",
+        "value": "Tax revenue (% of GDP)"
+      },
+      "country": {
+        "id": "BD",
+        "value": "Bangladesh"
+      },
+      "countryiso3code": "BGD",
+      "date": "2002",
+      "value": 6.69138419067813,
+      "unit": "",
+      "obs_status": "",
+      "decimal": 1
+    },
+    {
+      "indicator": {
+        "id": "GC.TAX.TOTL.GD.ZS",
+        "value": "Tax revenue (% of GDP)"
+      },
+      "country": {
+        "id": "BD",
+        "value": "Bangladesh"
+      },
+      "countryiso3code": "BGD",
+      "date": "2001",
+      "value": 6.61116027143823,
+      "unit": "",
+      "obs_status": "",
+      "decimal": 1
+    },
+    {
+      "indicator": {
+        "id": "GC.TAX.TOTL.GD.ZS",
+        "value": "Tax revenue (% of GDP)"
+      },
+      "country": {
+        "id": "BD",
+        "value": "Bangladesh"
+      },
+      "countryiso3code": "BGD",
+      "date": "2000",
+      "value": null,
+      "unit": "",
+      "obs_status": "",
+      "decimal": 1
+    },
+    {
+      "indicator": {
+        "id": "GC.TAX.TOTL.GD.ZS",
+        "value": "Tax revenue (% of GDP)"
+      },
+      "country": {
+        "id": "BD",
+        "value": "Bangladesh"
+      },
+      "countryiso3code": "BGD",
+      "date": "1999",
+      "value": null,
+      "unit": "",
+      "obs_status": "",
+      "decimal": 1
+    },
+    {
+      "indicator": {
+        "id": "GC.TAX.TOTL.GD.ZS",
+        "value": "Tax revenue (% of GDP)"
+      },
+      "country": {
+        "id": "BD",
+        "value": "Bangladesh"
+      },
+      "countryiso3code": "BGD",
+      "date": "1998",
+      "value": null,
+      "unit": "",
+      "obs_status": "",
+      "decimal": 1
+    },
+    {
+      "indicator": {
+        "id": "GC.TAX.TOTL.GD.ZS",
+        "value": "Tax revenue (% of GDP)"
+      },
+      "country": {
+        "id": "BD",
+        "value": "Bangladesh"
+      },
+      "countryiso3code": "BGD",
+      "date": "1997",
+      "value": null,
+      "unit": "",
+      "obs_status": "",
+      "decimal": 1
+    },
+    {
+      "indicator": {
+        "id": "GC.TAX.TOTL.GD.ZS",
+        "value": "Tax revenue (% of GDP)"
+      },
+      "country": {
+        "id": "BD",
+        "value": "Bangladesh"
+      },
+      "countryiso3code": "BGD",
+      "date": "1996",
+      "value": null,
+      "unit": "",
+      "obs_status": "",
+      "decimal": 1
+    },
+    {
+      "indicator": {
+        "id": "GC.TAX.TOTL.GD.ZS",
+        "value": "Tax revenue (% of GDP)"
+      },
+      "country": {
+        "id": "BD",
+        "value": "Bangladesh"
+      },
+      "countryiso3code": "BGD",
+      "date": "1995",
+      "value": null,
+      "unit": "",
+      "obs_status": "",
+      "decimal": 1
+    },
+    {
+      "indicator": {
+        "id": "GC.TAX.TOTL.GD.ZS",
+        "value": "Tax revenue (% of GDP)"
+      },
+      "country": {
+        "id": "BD",
+        "value": "Bangladesh"
+      },
+      "countryiso3code": "BGD",
+      "date": "1994",
+      "value": null,
+      "unit": "",
+      "obs_status": "",
+      "decimal": 1
+    },
+    {
+      "indicator": {
+        "id": "GC.TAX.TOTL.GD.ZS",
+        "value": "Tax revenue (% of GDP)"
+      },
+      "country": {
+        "id": "BD",
+        "value": "Bangladesh"
+      },
+      "countryiso3code": "BGD",
+      "date": "1993",
+      "value": null,
+      "unit": "",
+      "obs_status": "",
+      "decimal": 1
+    },
+    {
+      "indicator": {
+        "id": "GC.TAX.TOTL.GD.ZS",
+        "value": "Tax revenue (% of GDP)"
+      },
+      "country": {
+        "id": "BD",
+        "value": "Bangladesh"
+      },
+      "countryiso3code": "BGD",
+      "date": "1992",
+      "value": null,
+      "unit": "",
+      "obs_status": "",
+      "decimal": 1
+    },
+    {
+      "indicator": {
+        "id": "GC.TAX.TOTL.GD.ZS",
+        "value": "Tax revenue (% of GDP)"
+      },
+      "country": {
+        "id": "BD",
+        "value": "Bangladesh"
+      },
+      "countryiso3code": "BGD",
+      "date": "1991",
+      "value": null,
+      "unit": "",
+      "obs_status": "",
+      "decimal": 1
+    },
+    {
+      "indicator": {
+        "id": "GC.TAX.TOTL.GD.ZS",
+        "value": "Tax revenue (% of GDP)"
+      },
+      "country": {
+        "id": "BD",
+        "value": "Bangladesh"
+      },
+      "countryiso3code": "BGD",
+      "date": "1990",
+      "value": null,
+      "unit": "",
+      "obs_status": "",
+      "decimal": 1
+    },
+    {
+      "indicator": {
+        "id": "GC.TAX.TOTL.GD.ZS",
+        "value": "Tax revenue (% of GDP)"
+      },
+      "country": {
+        "id": "BD",
+        "value": "Bangladesh"
+      },
+      "countryiso3code": "BGD",
+      "date": "1989",
+      "value": null,
+      "unit": "",
+      "obs_status": "",
+      "decimal": 1
+    },
+    {
+      "indicator": {
+        "id": "GC.TAX.TOTL.GD.ZS",
+        "value": "Tax revenue (% of GDP)"
+      },
+      "country": {
+        "id": "BD",
+        "value": "Bangladesh"
+      },
+      "countryiso3code": "BGD",
+      "date": "1988",
+      "value": null,
+      "unit": "",
+      "obs_status": "",
+      "decimal": 1
+    },
+    {
+      "indicator": {
+        "id": "GC.TAX.TOTL.GD.ZS",
+        "value": "Tax revenue (% of GDP)"
+      },
+      "country": {
+        "id": "BD",
+        "value": "Bangladesh"
+      },
+      "countryiso3code": "BGD",
+      "date": "1987",
+      "value": null,
+      "unit": "",
+      "obs_status": "",
+      "decimal": 1
+    },
+    {
+      "indicator": {
+        "id": "GC.TAX.TOTL.GD.ZS",
+        "value": "Tax revenue (% of GDP)"
+      },
+      "country": {
+        "id": "BD",
+        "value": "Bangladesh"
+      },
+      "countryiso3code": "BGD",
+      "date": "1986",
+      "value": null,
+      "unit": "",
+      "obs_status": "",
+      "decimal": 1
+    },
+    {
+      "indicator": {
+        "id": "GC.TAX.TOTL.GD.ZS",
+        "value": "Tax revenue (% of GDP)"
+      },
+      "country": {
+        "id": "BD",
+        "value": "Bangladesh"
+      },
+      "countryiso3code": "BGD",
+      "date": "1985",
+      "value": null,
+      "unit": "",
+      "obs_status": "",
+      "decimal": 1
+    },
+    {
+      "indicator": {
+        "id": "GC.TAX.TOTL.GD.ZS",
+        "value": "Tax revenue (% of GDP)"
+      },
+      "country": {
+        "id": "BD",
+        "value": "Bangladesh"
+      },
+      "countryiso3code": "BGD",
+      "date": "1984",
+      "value": null,
+      "unit": "",
+      "obs_status": "",
+      "decimal": 1
+    },
+    {
+      "indicator": {
+        "id": "GC.TAX.TOTL.GD.ZS",
+        "value": "Tax revenue (% of GDP)"
+      },
+      "country": {
+        "id": "BD",
+        "value": "Bangladesh"
+      },
+      "countryiso3code": "BGD",
+      "date": "1983",
+      "value": null,
+      "unit": "",
+      "obs_status": "",
+      "decimal": 1
+    },
+    {
+      "indicator": {
+        "id": "GC.TAX.TOTL.GD.ZS",
+        "value": "Tax revenue (% of GDP)"
+      },
+      "country": {
+        "id": "BD",
+        "value": "Bangladesh"
+      },
+      "countryiso3code": "BGD",
+      "date": "1982",
+      "value": null,
+      "unit": "",
+      "obs_status": "",
+      "decimal": 1
+    },
+    {
+      "indicator": {
+        "id": "GC.TAX.TOTL.GD.ZS",
+        "value": "Tax revenue (% of GDP)"
+      },
+      "country": {
+        "id": "BD",
+        "value": "Bangladesh"
+      },
+      "countryiso3code": "BGD",
+      "date": "1981",
+      "value": null,
+      "unit": "",
+      "obs_status": "",
+      "decimal": 1
+    },
+    {
+      "indicator": {
+        "id": "GC.TAX.TOTL.GD.ZS",
+        "value": "Tax revenue (% of GDP)"
+      },
+      "country": {
+        "id": "BD",
+        "value": "Bangladesh"
+      },
+      "countryiso3code": "BGD",
+      "date": "1980",
+      "value": null,
+      "unit": "",
+      "obs_status": "",
+      "decimal": 1
+    },
+    {
+      "indicator": {
+        "id": "GC.TAX.TOTL.GD.ZS",
+        "value": "Tax revenue (% of GDP)"
+      },
+      "country": {
+        "id": "BD",
+        "value": "Bangladesh"
+      },
+      "countryiso3code": "BGD",
+      "date": "1979",
+      "value": null,
+      "unit": "",
+      "obs_status": "",
+      "decimal": 1
+    },
+    {
+      "indicator": {
+        "id": "GC.TAX.TOTL.GD.ZS",
+        "value": "Tax revenue (% of GDP)"
+      },
+      "country": {
+        "id": "BD",
+        "value": "Bangladesh"
+      },
+      "countryiso3code": "BGD",
+      "date": "1978",
+      "value": null,
+      "unit": "",
+      "obs_status": "",
+      "decimal": 1
+    },
+    {
+      "indicator": {
+        "id": "GC.TAX.TOTL.GD.ZS",
+        "value": "Tax revenue (% of GDP)"
+      },
+      "country": {
+        "id": "BD",
+        "value": "Bangladesh"
+      },
+      "countryiso3code": "BGD",
+      "date": "1977",
+      "value": null,
+      "unit": "",
+      "obs_status": "",
+      "decimal": 1
+    },
+    {
+      "indicator": {
+        "id": "GC.TAX.TOTL.GD.ZS",
+        "value": "Tax revenue (% of GDP)"
+      },
+      "country": {
+        "id": "BD",
+        "value": "Bangladesh"
+      },
+      "countryiso3code": "BGD",
+      "date": "1976",
+      "value": null,
+      "unit": "",
+      "obs_status": "",
+      "decimal": 1
+    },
+    {
+      "indicator": {
+        "id": "GC.TAX.TOTL.GD.ZS",
+        "value": "Tax revenue (% of GDP)"
+      },
+      "country": {
+        "id": "BD",
+        "value": "Bangladesh"
+      },
+      "countryiso3code": "BGD",
+      "date": "1975",
+      "value": null,
+      "unit": "",
+      "obs_status": "",
+      "decimal": 1
+    },
+    {
+      "indicator": {
+        "id": "GC.TAX.TOTL.GD.ZS",
+        "value": "Tax revenue (% of GDP)"
+      },
+      "country": {
+        "id": "BD",
+        "value": "Bangladesh"
+      },
+      "countryiso3code": "BGD",
+      "date": "1974",
+      "value": null,
+      "unit": "",
+      "obs_status": "",
+      "decimal": 1
+    },
+    {
+      "indicator": {
+        "id": "GC.TAX.TOTL.GD.ZS",
+        "value": "Tax revenue (% of GDP)"
+      },
+      "country": {
+        "id": "BD",
+        "value": "Bangladesh"
+      },
+      "countryiso3code": "BGD",
+      "date": "1973",
+      "value": null,
+      "unit": "",
+      "obs_status": "",
+      "decimal": 1
+    },
+    {
+      "indicator": {
+        "id": "GC.TAX.TOTL.GD.ZS",
+        "value": "Tax revenue (% of GDP)"
+      },
+      "country": {
+        "id": "BD",
+        "value": "Bangladesh"
+      },
+      "countryiso3code": "BGD",
+      "date": "1972",
+      "value": null,
+      "unit": "",
+      "obs_status": "",
+      "decimal": 1
+    },
+    {
+      "indicator": {
+        "id": "GC.TAX.TOTL.GD.ZS",
+        "value": "Tax revenue (% of GDP)"
+      },
+      "country": {
+        "id": "BD",
+        "value": "Bangladesh"
+      },
+      "countryiso3code": "BGD",
+      "date": "1971",
+      "value": null,
+      "unit": "",
+      "obs_status": "",
+      "decimal": 1
+    },
+    {
+      "indicator": {
+        "id": "GC.TAX.TOTL.GD.ZS",
+        "value": "Tax revenue (% of GDP)"
+      },
+      "country": {
+        "id": "BD",
+        "value": "Bangladesh"
+      },
+      "countryiso3code": "BGD",
+      "date": "1970",
+      "value": null,
+      "unit": "",
+      "obs_status": "",
+      "decimal": 1
+    },
+    {
+      "indicator": {
+        "id": "GC.TAX.TOTL.GD.ZS",
+        "value": "Tax revenue (% of GDP)"
+      },
+      "country": {
+        "id": "BD",
+        "value": "Bangladesh"
+      },
+      "countryiso3code": "BGD",
+      "date": "1969",
+      "value": null,
+      "unit": "",
+      "obs_status": "",
+      "decimal": 1
+    },
+    {
+      "indicator": {
+        "id": "GC.TAX.TOTL.GD.ZS",
+        "value": "Tax revenue (% of GDP)"
+      },
+      "country": {
+        "id": "BD",
+        "value": "Bangladesh"
+      },
+      "countryiso3code": "BGD",
+      "date": "1968",
+      "value": null,
+      "unit": "",
+      "obs_status": "",
+      "decimal": 1
+    },
+    {
+      "indicator": {
+        "id": "GC.TAX.TOTL.GD.ZS",
+        "value": "Tax revenue (% of GDP)"
+      },
+      "country": {
+        "id": "BD",
+        "value": "Bangladesh"
+      },
+      "countryiso3code": "BGD",
+      "date": "1967",
+      "value": null,
+      "unit": "",
+      "obs_status": "",
+      "decimal": 1
+    },
+    {
+      "indicator": {
+        "id": "GC.TAX.TOTL.GD.ZS",
+        "value": "Tax revenue (% of GDP)"
+      },
+      "country": {
+        "id": "BD",
+        "value": "Bangladesh"
+      },
+      "countryiso3code": "BGD",
+      "date": "1966",
+      "value": null,
+      "unit": "",
+      "obs_status": "",
+      "decimal": 1
+    },
+    {
+      "indicator": {
+        "id": "GC.TAX.TOTL.GD.ZS",
+        "value": "Tax revenue (% of GDP)"
+      },
+      "country": {
+        "id": "BD",
+        "value": "Bangladesh"
+      },
+      "countryiso3code": "BGD",
+      "date": "1965",
+      "value": null,
+      "unit": "",
+      "obs_status": "",
+      "decimal": 1
+    },
+    {
+      "indicator": {
+        "id": "GC.TAX.TOTL.GD.ZS",
+        "value": "Tax revenue (% of GDP)"
+      },
+      "country": {
+        "id": "BD",
+        "value": "Bangladesh"
+      },
+      "countryiso3code": "BGD",
+      "date": "1964",
+      "value": null,
+      "unit": "",
+      "obs_status": "",
+      "decimal": 1
+    },
+    {
+      "indicator": {
+        "id": "GC.TAX.TOTL.GD.ZS",
+        "value": "Tax revenue (% of GDP)"
+      },
+      "country": {
+        "id": "BD",
+        "value": "Bangladesh"
+      },
+      "countryiso3code": "BGD",
+      "date": "1963",
+      "value": null,
+      "unit": "",
+      "obs_status": "",
+      "decimal": 1
+    },
+    {
+      "indicator": {
+        "id": "GC.TAX.TOTL.GD.ZS",
+        "value": "Tax revenue (% of GDP)"
+      },
+      "country": {
+        "id": "BD",
+        "value": "Bangladesh"
+      },
+      "countryiso3code": "BGD",
+      "date": "1962",
+      "value": null,
+      "unit": "",
+      "obs_status": "",
+      "decimal": 1
+    },
+    {
+      "indicator": {
+        "id": "GC.TAX.TOTL.GD.ZS",
+        "value": "Tax revenue (% of GDP)"
+      },
+      "country": {
+        "id": "BD",
+        "value": "Bangladesh"
+      },
+      "countryiso3code": "BGD",
+      "date": "1961",
+      "value": null,
+      "unit": "",
+      "obs_status": "",
+      "decimal": 1
+    },
+    {
+      "indicator": {
+        "id": "GC.TAX.TOTL.GD.ZS",
+        "value": "Tax revenue (% of GDP)"
+      },
+      "country": {
+        "id": "BD",
+        "value": "Bangladesh"
+      },
+      "countryiso3code": "BGD",
+      "date": "1960",
+      "value": null,
+      "unit": "",
+      "obs_status": "",
+      "decimal": 1
+    }
+  ]
+]
