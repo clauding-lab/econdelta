@@ -6,7 +6,7 @@
 python3 scripts/build_catalog.py > docs/indicator-catalog.md
 ```
 
-**78** scraped indicators × **36** brief aliases × **12** unit conversions × **8** derived = **134** total entries.
+**69** scraped indicators × **36** brief aliases × **12** unit conversions × **8** derived = **125** total entries.
 
 Read the data contract for column semantics and query examples: [`data-contract.md`](data-contract.md).
 
@@ -14,8 +14,6 @@ Read the data contract for column semantics and query examples: [`data-contract.
 
 | Section | metric_id | Unit | Cadence | Source | Valid range | Description |
 |---------|-----------|------|---------|--------|-------------|-------------|
-| banking | `deposits_by_ownership` | `amount_bdt_crore` | quarterly | BB | [0.0, 30000000.0] | Bank deposits by ownership (SOCB / PCB / FCB / Specialised), BDT crore LEVELS (NOT shares). 4-row ownership cluster from the BB Financial Stability Report (FSR) body. Parser returns a dict {socb,pcb,fcb,specialised}; aggregate_latest._flatten_ownership_cluster fans it out into the 4 scalar metrics deposits_socb_cr / deposits_pcb_cr / deposits_fcb_cr / deposits_specialised_cr (the call-money fan-out precedent — no schema change). Stores LEVELS in BDT crore, not pre-computed shares: the YieldScope donut computes shares from the levels (null-safe) so they sum to 100% and stay consistent with deposits_of_the_system. |
-| banking | `npl_by_ownership` | `percent` | quarterly | BB | [0.0, 100.0] | Gross NPL ratio by bank ownership (SOCB / PCB / FCB / Specialised), percent. 4-row ownership cluster from the BB Financial Stability Report (FSR) body. Parser returns a dict {socb,pcb,fcb,specialised}; aggregate_latest._flatten_ownership_cluster fans it out into the 4 scalar metrics npl_socb_pct / npl_pcb_pct / npl_fcb_pct / npl_specialised_pct (the call-money fan-out precedent — no schema change). NPL is inherently a ratio (bad loans / that segment's loans) published as a %, so the segment value IS a percent; there is no level to store. SOCB is normally the highest. |
 | commodities | `food_atta_packet` | `rate` | daily | DAM | [20.0, 200.0] | Retail price — Atta packaged (BDT/kg) |
 | commodities | `food_chicken_farm` | `rate` | daily | DAM | [80.0, 400.0] | Retail price — Farm chicken (BDT/kg) |
 | commodities | `food_egg_red` | `rate` | daily | DAM | [20.0, 150.0] | Retail price — Red farm egg (BDT/4 pcs) |
@@ -63,12 +61,9 @@ Read the data contract for column semantics and query examples: [`data-contract.
 | external_sector | `remittance_by_country` | `amount_usd_bn` | monthly | BB | [0.0, 10.0] | Remittance by country |
 | external_sector (brief conversion) | `remit_fy_mn` | `amount_usd_bn` | fiscal_year | BB | — | Conversion of `fy_remittance` × 1000.0 — FY Remittance |
 | external_sector (brief conversion) | `remit_monthly_mn` | `amount_usd_bn` | monthly | BB | — | Conversion of `monthly_remittance` × 1000.0 — Monthly Remittance |
-| forex_and_reserves | `fx_buy_sale_from_market` | `amount_usd_bn` | monthly |  | [0.0, 5.0] | FX Buy/Sale from Market |
 | forex_and_reserves | `fx_reserve_gross_and_bpm6` | `amount_usd_bn` | weekly | BB | [0.0, 100.0] | FX Reserve Gross and BPM6 |
 | forex_and_reserves | `usd_bdt_exchange_rate` | `rate` | daily | BB | [80.0, 200.0] | USD/BDT Exchange Rate |
 | government_finance | `bank_borrowing_for_deficit_financing` | `amount_bdt_crore` | monthly | BB | [0.0, 400000.0] | Bank Borrowing for Deficit Financing |
-| government_finance | `budget_adpex_of_the_fy_vs_utilization` | `amount_bdt_crore` | fiscal_year |  | [0.0, 500000.0] | Budget ADPEx of the FY vs Utilization |
-| government_finance | `budget_opex_of_the_fy_vs_utilization` | `amount_bdt_crore` | fiscal_year |  | [0.0, 1000000.0] | Budget OpEx of the FY vs Utilization |
 | government_finance | `debt_domestic_stock_cr` | `amount_bdt_crore` | quarterly | mof.gov.bd | [500000.0, 3000000.0] | Domestic Debt Outstanding Stock (MoF Debt Bulletin; FY25 ~Tk11.95tn). Stock level, NOT the deficit-financing flow domestic_borrowing_for_budget_deficit. |
 | government_finance | `debt_external_stock_cr` | `amount_bdt_crore` | quarterly | mof.gov.bd | [300000.0, 3000000.0] | External Debt Outstanding Stock (MoF Debt Bulletin; FY25 ~Tk9.49tn). Stock level, NOT the deficit-financing flow foreign_borrowing_for_budget_deficit. |
 | government_finance | `debt_gdp_ratio` | `percent` | quarterly | mof.gov.bd | [10.0, 100.0] | Debt-to-GDP Ratio (MoF Debt Bulletin latest print; IMF DataMapper supplies back-history via scrapers/imf_debt_gdp.py) |
@@ -83,8 +78,6 @@ Read the data contract for column semantics and query examples: [`data-contract.
 | government_finance | `rev_gdp_ratio` | `percent` | quarterly |  | [0.0, 40.0] | Rev-GDP Ratio |
 | government_finance | `tax_gdp_ratio` | `percent` | quarterly |  | [0.0, 30.0] | Tax-GDP Ratio |
 | government_finance | `tax_revenue` | `amount_bdt_crore` | monthly | BB | [0.0, 500000.0] | Tax Revenue |
-| government_finance | `total_revenue_budget_vs_actual` | `amount_bdt_crore` | monthly |  | [0.0, 600000.0] | Total Revenue Budget vs Actual |
-| government_finance | `ways_means_usage_cr` | `amount_bdt_crore` | monthly | BB | [0.0, 500000.0] | Ways & Means Advances Usage (BB overdraft to government; usage LEVEL only — there is NO published monthly limit/ceiling cell, so this is intentionally usage-only with NO 'vs limit' denominator. CEIC sources Tk120,000cr Nov-2025 vs Tk90,924cr Oct-2025.) |
 | government_finance (brief alias) | `nbr_fytd_collected_cr` | `amount_bdt_crore` | monthly | BB | [0.0, 500000.0] | Alias of `tax_revenue` — Tax Revenue |
 | government_finance (brief conversion) | `fiscal_bank_borrow_trn` | `amount_bdt_crore` | monthly | BB | — | Conversion of `bank_borrowing_for_deficit_financing` × 1e-05 — Bank Borrowing for Deficit Financing |
 | government_finance (brief conversion) | `fiscal_foreign_borrow_trn` | `amount_bdt_crore` | monthly | BB | — | Conversion of `foreign_borrowing_for_budget_deficit` × 1e-05 — Foreign Borrowing for Budget Deficit |
@@ -120,7 +113,6 @@ Read the data contract for column semantics and query examples: [`data-contract.
 | monetary_aggregates (brief alias) | `macro_credit_growth` | `percent` | monthly | BB | [-30.0, 50.0] | Alias of `private_sector_credit_yoy_pct` — Private Sector Credit Growth YoY |
 | monetary_aggregates (brief conversion) | `fiscal_nsc_outstanding` | `amount_bdt_crore` | monthly | BB | — | Conversion of `nsc_outstanding` × 1e-05 — NSC outstanding |
 | money_market | `banking_sector_crar` | `percent` | quarterly | BB | [-50.0, 30.0] | Banking Sector CAR (Capital Adequacy Ratio) |
-| money_market | `bb_repo_usage_cr` | `amount_bdt_crore` | daily | BB | [0.0, 200000.0] | BB Central-Bank Repo Usage (Repo accepted amount from BB auction press release, BDT crore; usage LEVEL only). DISTINCT from interbank_repo_data (bank-to-bank) — this is central-bank repo (BB lending to banks). BB has largely STOPPED routine daily repo lending (shifting to SLF/ALS), so on many days the Repo line is ABSENT: a null is returned and NO new row is written that day — never a stale carry-forward and never a fabricated measured 0. YieldScope MUST apply an as_of-freshness guard (it returns the most-recent EXISTING row, which on a no-repo day is weeks old). |
 | money_market | `bill_bond_rates` | `percent` | daily | BB | [0.0, 25.0] | 91-Day T-Bill Cut-Off Yield |
 | money_market | `call_money_rate` | `percent` | daily | BB | [0.0, 25.0] | Call money rate |
 | money_market | `gross_npl_ratio` | `percent` | quarterly | BB | [0.0, 50.0] | Gross NPL Ratio (Banking Sector) |
@@ -129,7 +121,6 @@ Read the data contract for column semantics and query examples: [`data-contract.
 | money_market | `policy_rate_repo` | `percent` | monthly | BB | [3.0, 15.0] | Policy Rate (Repo) |
 | money_market | `policy_rate_sdf` | `percent` | monthly | BB | [3.0, 12.0] | Policy Rate Corridor — SDF (floor) |
 | money_market | `policy_rate_slf` | `percent` | monthly | BB | [4.0, 16.0] | Policy Rate Corridor — SLF (ceiling) |
-| money_market | `slf_draw_cr` | `amount_bdt_crore` | daily | BB | [0.0, 200000.0] | SLF Drawdown (Standing Lending Facility accepted amount, BDT crore; usage/DRAW LEVEL only — SLF is uncapped-on-demand, BB publishes NO 'limit', so this is intentionally draw-only with NO 'vs limit' denominator. DAILY: one BB auction-result press release per business day; no new row is written on a day with no SLF print.) |
 | money_market | `tbill_182d_yield` | `percent` | daily | BB | [0.0, 25.0] | 182-Day T-Bill Cut-Off Yield |
 | money_market | `tbill_364d_yield` | `percent` | daily | BB | [0.0, 25.0] | 364-Day T-Bill Cut-Off Yield |
 | money_market | `tbond_10y_yield` | `percent` | weekly | BB | [0.0, 25.0] | 10-Year BGTB Cut-Off Yield |

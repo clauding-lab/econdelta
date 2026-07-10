@@ -673,14 +673,20 @@ sign-off item (VISION.md) — this is the **decision table, presented not acted*
 | `non_tax_revenue` | fiscal | **SOURCE** | MoF MFR Table-4 row; same anchor pattern as the working fiscal metrics |
 | `tax_gdp_ratio` | fiscal | **DERIVE** | = `tax_revenue` / GDP; mint in aggregate like crr/slr utilisation rather than scrape |
 | `rev_gdp_ratio` | fiscal | **DERIVE** | = total revenue / GDP; same |
-| `total_revenue_budget_vs_actual` | fiscal | **RETIRE or SOURCE** | no clean single-cell source; budget-vs-actual needs two figures |
-| `budget_opex_of_the_fy_vs_utilization` | fiscal | **RETIRE** | no accessible source found; utilisation-vs-budget is not a single scrape |
-| `budget_adpex_of_the_fy_vs_utilization` | fiscal | **RETIRE** | same |
-| `fx_buy_sale_from_market` | monetary | **SOURCE or RETIRE** | BB FX-intervention figure; confirm a stable BB source cell exists before keeping |
+| `total_revenue_budget_vs_actual` | fiscal | **RETIRED (2026-07-10, owner sign-off)** | no clean single-cell source; budget-vs-actual needs two figures |
+| `budget_opex_of_the_fy_vs_utilization` | fiscal | **RETIRED (2026-07-10, owner sign-off)** | no accessible source found; utilisation-vs-budget is not a single scrape |
+| `budget_adpex_of_the_fy_vs_utilization` | fiscal | **RETIRED (2026-07-10, owner sign-off)** | same |
+| `fx_buy_sale_from_market` | monetary | **RETIRED (2026-07-10, owner sign-off)** | BB FX-intervention figure; confirm a stable BB source cell exists before keeping |
 | `nbr_vat_collected_cr` | fiscal | **SOURCE** | brief `nbr_vat_bn` conversion already targets it; wire the NBR component source (media-screen or MFR) or retire the conversion too |
 | `nbr_it_collected_cr` | fiscal | **SOURCE** | same |
 | `nbr_customs_collected_cr` | fiscal | **SOURCE** | same |
-| `ways_means_usage_cr` | monetary | **RETIRE** | BB ways-and-means advances live behind the same walled OMO PDF as the retired `slf_draw_cr` (landmine 24) — likely no HTML route-around |
+| `ways_means_usage_cr` | monetary | **RETIRED (2026-07-10, owner sign-off)** | BB ways-and-means advances live behind the same walled OMO PDF as the retired `slf_draw_cr` (landmine 24) — likely no HTML route-around |
+
+The 5 rows above are retired and removed from `config/sources-v3.json`. The
+remaining 7 (`tax_gdp_ratio`, `rev_gdp_ratio`, `non_tax_revenue`,
+`non_nbr_tax_revenue`, `nbr_vat_collected_cr`, `nbr_it_collected_cr`,
+`nbr_customs_collected_cr`) are DEFERRED as separate follow-up tasks — 2 DERIVE
++ 5 SOURCE, unchanged in config pending that work.
 
 ### 10.6 Legacy-id dedupe decision table (Block 3 targets)
 
