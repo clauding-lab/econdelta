@@ -2,21 +2,21 @@
 --
 -- Gives all three consumers (The Brief, YieldScope, EconDelta PWA) ONE surface to
 -- read staleness from — `v_metric_freshness` — instead of each hand-rolling its
--- own cadence math. Unblocks The Brief B3.13. Canonical rules live in
+-- own cadence math (unblocks The Brief B3.13). Canonical rules live in
 -- docs/data-contract.md §10; this file is the DDL for those rules.
 --
--- APPLY (shared DB — NEVER `supabase db push`):
+-- ✅ STATUS: ALREADY APPLIED to the shared prod DB (verified live 2026-07-10 via
+--    pg_get_viewdef, pg_policies, and the grace_days seeding — all match this file
+--    exactly). This file is committed as the TRACKED RECORD of that DDL; the DB
+--    had it before the repo did. Every block is IDEMPOTENT, so re-running is a
+--    safe no-op — but nothing here needs to be applied again.
+--
+-- If ever reconstructing from scratch (shared DB — NEVER `supabase db push`):
 --   supabase db query --linked -f supabase/migrations/0012_freshness_contract_e31.sql
---
--- Every block below is IDEMPOTENT and purely ADDITIVE (new columns, a new view,
--- deprecation flags) — zero risk to existing reads. Safe to run via -f.
---
--- ⚠️  Blocks 4 (drop duplicate anon policies) and 5 (split IMF projections) are
---     DELIBERATELY EXCLUDED from this -f-applied file. Block 4 needs a human
---     pg_policies pre-check at execution time (dropping the wrong policy could
---     remove the only anon-read path); Block 5 mutates data and is optional
---     cleanliness. Both are documented as interactive snippets in the appendix
---     comment at the bottom — paste them into the SQL editor by hand, not via -f.
+-- then apply the appendix Blocks 4 & 5 interactively (see bottom). Blocks 1–3 are
+-- purely additive (new columns, a new view, deprecation flags); Blocks 4 (anon
+-- policy dedupe) and 5 (IMF projection split) live in the appendix because Block 4
+-- needs a live pg_policies pre-check before any DROP.
 
 -- ---------------------------------------------------------------------------
 -- Block 1 — grace_days columns + cadence-seeded defaults.
@@ -110,8 +110,11 @@ where d.metric_id = v.metric_id;
 --   select metric_id, alias_of from metric_definitions where deprecated;  -- marked
 --
 -- ===========================================================================
--- APPENDIX — INTERACTIVE-ONLY snippets. DO NOT run these via `-f`; paste into the
--- Supabase SQL editor by hand and read the pre-check output before proceeding.
+-- APPENDIX — INTERACTIVE-ONLY snippets. ✅ Both already applied (verified live
+-- 2026-07-10: each history table now has exactly one anon SELECT policy, and the
+-- 6 debt_gdp_ratio projection rows already moved to debt_gdp_ratio_proj). Retained
+-- here as the record. If ever re-running: DO NOT run via `-f`; paste into the SQL
+-- editor by hand and read the Block-4 pre-check output before any DROP.
 --
 -- Block 4 — drop the duplicate anon SELECT policies (each history table carries
 -- two identical ones; keep the canonically-named one). MANDATORY pre-check first:

@@ -492,11 +492,18 @@ All three consumers (The Brief, YieldScope, EconDelta PWA) should read freshness
 from this **one view** instead of hand-rolling staleness. The freshness sentinel
 (E2.1) enforces the same contract on the write side and pages when it breaks.
 
-### 10.3 SQL package — PREPARED, NOT APPLIED
+### 10.3 SQL package — APPLIED (verified live 2026-07-10)
 
-> **These are DDL/data changes for Adnan's SQL editor only** (no programmatic
-> path — the DB is shared with The Brief; `db push` can't reconcile it). Apply in
-> order; each block is idempotent. Nothing here has been executed.
+> **✅ APPLIED to the shared prod DB — verified live 2026-07-10** via
+> `pg_get_viewdef` (the `v_metric_freshness` definition is byte-identical to Block
+> 2), the `grace_days` seeding (Block 1 tiers all present), the deprecation flags
+> (Block 3, on every legacy id that has a definition row), the anon-policy set
+> (Block 4 — one anon SELECT policy per history table, duplicates gone), and the
+> projection split (Block 5 — `debt_gdp_ratio` has 0 future rows,
+> `debt_gdp_ratio_proj` holds the 6). Tracked in `supabase/migrations/0012_freshness_contract_e31.sql`.
+> These are DDL/data changes for Adnan's SQL editor only (no programmatic path —
+> the DB is shared with The Brief; `db push` can't reconcile it). Each block is
+> idempotent, so re-running is a safe no-op — but nothing here needs re-applying.
 
 **Block 1 — `grace_days` columns + cadence-seeded defaults:**
 
