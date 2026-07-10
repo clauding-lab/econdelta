@@ -65,6 +65,14 @@ _SCRAPER_CADENCE: dict[str, str] = {
     "wheat_price_usd_mt": "monthly",
     # imf tier-2 — monthly (conservative; imf publishes on a slow cadence)
     "imf_eff_outstanding_sdr_mn": "monthly",
+    # fiscal_gdp_ratios — annual figures (IMF DataMapper rev / World Bank tax),
+    # one row per year. Their sources publish with a structural multi-year lag
+    # (WB tax stops at 2021; IMF rev carries no forward projection), so both would
+    # breach the fiscal_year grace by design. They are ENFORCED as non-alerting via
+    # freshness.ACCEPTED_STALE_METRIC_IDS (routed to the silent `accepted_stale`
+    # bucket, never `breaches`) — the cadence here is only for catalog/labeling.
+    "rev_gdp_ratio": "fiscal_year",
+    "tax_gdp_ratio": "fiscal_year",
 }
 
 

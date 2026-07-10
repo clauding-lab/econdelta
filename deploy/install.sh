@@ -99,7 +99,7 @@ systemctl daemon-reload
 TIMERS=(
   econdelta-forex econdelta-commodity econdelta-aggregate econdelta-dse econdelta-dse-dayend econdelta-fetch econdelta-parse
   econdelta-forex-retry econdelta-aggregate-retry econdelta-parse-retry econdelta-briefing
-  econdelta-auction econdelta-pink-sheet econdelta-imf-eff econdelta-imf-debt
+  econdelta-auction econdelta-pink-sheet econdelta-imf-eff econdelta-imf-debt econdelta-fiscal-gdp
   econdelta-media-screen
   econdelta-sentinel
   econdelta-gitpull

@@ -197,56 +197,6 @@
       "anomaly_threshold": 0.10
     },
     {
-      "id": "tax_gdp_ratio",
-      "name": "Tax-GDP Ratio",
-      "domain": "government_finance",
-      "cadence": "quarterly",
-      "fetch": {
-        "type": "news",
-        "url": ""
-      },
-      "parse": {
-        "deterministic": "pdf_table_row",
-        "llm_prompt": "pdf_table_row.txt",
-        "value_type": "percent",
-        "valid_range": [
-          0.0,
-          30.0
-        ]
-      },
-      "anomaly_threshold": 0.5,
-      "alternate": {
-        "url": "https://mof.gov.bd/pages/static-pages/6940329635ce18e1c055ef1a",
-        "type": "pdf",
-        "task": "Page 9 of doc, table 4"
-      }
-    },
-    {
-      "id": "rev_gdp_ratio",
-      "name": "Rev-GDP Ratio",
-      "domain": "government_finance",
-      "cadence": "quarterly",
-      "fetch": {
-        "type": "news",
-        "url": ""
-      },
-      "parse": {
-        "deterministic": "pdf_table_row",
-        "llm_prompt": "pdf_table_row.txt",
-        "value_type": "percent",
-        "valid_range": [
-          0.0,
-          40.0
-        ]
-      },
-      "anomaly_threshold": 0.5,
-      "alternate": {
-        "url": "https://mof.gov.bd/pages/static-pages/6940329635ce18e1c055ef1a",
-        "type": "pdf",
-        "task": "Page 9 of doc, table 4"
-      }
-    },
-    {
       "id": "foreign_borrowing_for_budget_deficit",
       "name": "Foreign Borrowing for Budget Deficit",
       "domain": "government_finance",

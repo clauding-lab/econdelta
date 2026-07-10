@@ -187,3 +187,44 @@ def test_max_across_both_tables_wins():
     entry = {f.metric_id: f for f in report.fresh}["private_sector_credit_yoy_pct"]
     assert entry.latest_as_of == date(2026, 6, 1)
     assert set(entry.tables) == {"metric_history", "metric_history_monthly"}
+
+
+# --- assess: accepted-stale (source-lag) metrics never alert -----------------
+
+def test_accepted_stale_metrics_route_to_accepted_stale_not_breaches():
+    """tax_gdp_ratio (WB, stuck at 2021) and rev_gdp_ratio (IMF, latest 2024) lag
+    by DESIGN. Both have a real fiscal_year cadence + vintage, so absent a carve-out
+    they'd breach the 400d grace and fire an unactionable DAILY alert. They must
+    route to the silent ``accepted_stale`` bucket, never ``breaches``/``fresh``."""
+    m = load_cadence_map()
+    report = assess(
+        rows_daily=[_row("tax_gdp_ratio", "2021-12-31"),   # ~1653d old on today below
+                    _row("rev_gdp_ratio", "2024-12-31")],   # ~557d old (> 400d grace)
+        rows_monthly=[],
+        cadence_map=m,
+        today=date(2026, 7, 11),
+    )
+    assert {s.metric_id for s in report.accepted_stale} == {"tax_gdp_ratio", "rev_gdp_ratio"}
+    assert report.breaches == []
+    assert report.fresh == []
+    # The vintage is still reported honestly (not hidden, just not alerted).
+    tax = {s.metric_id: s for s in report.accepted_stale}["tax_gdp_ratio"]
+    assert tax.latest_as_of == date(2021, 12, 31)
+    assert tax.breach is False
+
+
+def test_should_send_stays_silent_on_accepted_stale_only_non_heartbeat():
+    """The whole point: a day with only source-lag metrics stale → the sentinel
+    says NOTHING on a non-heartbeat day (no daily alert-fatigue nag)."""
+    from sentinel.report import should_send
+
+    m = load_cadence_map()
+    report = assess(
+        rows_daily=[_row("tax_gdp_ratio", "2021-12-31")],
+        rows_monthly=[],
+        cadence_map=m,
+        today=date(2026, 7, 11),
+    )
+    assert report.breaches == []
+    assert should_send(report, is_heartbeat_day=False) is False   # silent, no nag
+    assert should_send(report, is_heartbeat_day=True) is True     # weekly health ping still fires

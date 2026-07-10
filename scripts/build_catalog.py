@@ -92,6 +92,27 @@ DERIVED_KEYS: list[tuple[str, str, str, str]] = [
         "id; as_of = the IMF month-end position date.",
     ),
     (
+        "rev_gdp_ratio",
+        "percent",
+        "fiscal_year",
+        "Scraper-only: General government revenue as % of GDP for Bangladesh, "
+        "from the IMF DataMapper 'rev' indicator, pulled directly by "
+        "scrapers/fiscal_gdp_ratios.py (NO BD egress; no config indicator — the "
+        "dead 'news'-stub config entry was removed). One row per year stamped "
+        "<year>-12-31; latest ~8.3% (2024). Lands in metric_history under its own id.",
+    ),
+    (
+        "tax_gdp_ratio",
+        "percent",
+        "fiscal_year",
+        "Scraper-only: Tax revenue as % of GDP for Bangladesh, from the World "
+        "Bank API indicator GC.TAX.TOTL.GD.ZS, pulled directly by "
+        "scrapers/fiscal_gdp_ratios.py (NO BD egress; no config indicator — the "
+        "dead 'news'-stub config entry was removed). One row per year stamped "
+        "<year>-12-31. The World Bank series is intentionally stale (stops at "
+        "2021 = 7.64%); the true vintage is stamped, NOT the run date.",
+    ),
+    (
         "lng_price_usd_mmbtu",
         "amount_usd_mmbtu",
         "monthly",

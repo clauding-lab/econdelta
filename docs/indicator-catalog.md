@@ -6,7 +6,7 @@
 python3 scripts/build_catalog.py > docs/indicator-catalog.md
 ```
 
-**69** scraped indicators × **36** brief aliases × **12** unit conversions × **8** derived = **125** total entries.
+**67** scraped indicators × **36** brief aliases × **12** unit conversions × **10** derived = **125** total entries.
 
 Read the data contract for column semantics and query examples: [`data-contract.md`](data-contract.md).
 
@@ -44,7 +44,9 @@ Read the data contract for column semantics and query examples: [`data-contract.
 | derived (cross-source) | `nbr_fytd_collected_cr` | `amount_bdt_crore` | monthly | — | — | NBR fiscal-year-to-date collection — sourced canonically from tax_revenue (BB PDF, deterministic parse, 5% anomaly threshold). News corroborators (TBS, Daily Star) retired 2026-05-25. |
 | derived (cross-source) | `nbr_fytd_cross_check` | `string` | monthly | — | — | Cross-check status for nbr_fytd_collected_cr — now always 'single_source_tax_revenue' since the news corroborator path was retired 2026-05-25. Strings only land in latest.json — NOT in metric_history (writer filters strings). |
 | derived (cross-source) | `palm_oil_price_usd_mt` | `amount_usd_mt` | monthly | — | — | Scraper-only (S11): Palm oil benchmark from the World Bank 'Pink Sheet' Monthly Prices sheet, in USD per metric ton — the sheet's native unit (carried in the id). Pulled by scrapers/world_bank_pink_sheet.py via stdlib zip/XML (NO BD egress, no new dependency, no config indicator). as_of = the latest reporting month's end. |
+| derived (cross-source) | `rev_gdp_ratio` | `percent` | fiscal_year | — | — | Scraper-only: General government revenue as % of GDP for Bangladesh, from the IMF DataMapper 'rev' indicator, pulled directly by scrapers/fiscal_gdp_ratios.py (NO BD egress; no config indicator — the dead 'news'-stub config entry was removed). One row per year stamped <year>-12-31; latest ~8.3% (2024). Lands in metric_history under its own id. |
 | derived (cross-source) | `slr_utilisation_pct` | `percent` | monthly | — | — | Derived (S2): excess_liquid_asset_total_minimum / deposits_of_the_system × 100 — excess liquid assets over the statutory SLR minimum as a % of total system deposits (NOT the regulated maintenance ratio). Computed in aggregate_latest._compute_reserve_utilisation, null/zero-denominator safe. |
+| derived (cross-source) | `tax_gdp_ratio` | `percent` | fiscal_year | — | — | Scraper-only: Tax revenue as % of GDP for Bangladesh, from the World Bank API indicator GC.TAX.TOTL.GD.ZS, pulled directly by scrapers/fiscal_gdp_ratios.py (NO BD egress; no config indicator — the dead 'news'-stub config entry was removed). One row per year stamped <year>-12-31. The World Bank series is intentionally stale (stops at 2021 = 7.64%); the true vintage is stamped, NOT the run date. |
 | derived (cross-source) | `wheat_price_usd_mt` | `amount_usd_mt` | monthly | — | — | Scraper-only (S11): Wheat (US SRW) benchmark from the World Bank 'Pink Sheet' Monthly Prices sheet, in USD per metric ton — the sheet's native unit (carried in the id). Pulled by scrapers/world_bank_pink_sheet.py via stdlib zip/XML (NO BD egress, no new dependency, no config indicator). as_of = the latest reporting month's end. |
 | equities | `dse_sector_heat` | `sector_dict` | daily | DSE | [-50.0, 50.0] | DSE Sector Heat (8 sectors, % avg) |
 | external_sector | `bop_summary` | `amount_usd_bn` | monthly | BB | [-20.0, 20.0] | BOP Summary |
@@ -75,8 +77,6 @@ Read the data contract for column semantics and query examples: [`data-contract.
 | government_finance | `non_bank_borrowing_for_deficit_financing` | `amount_bdt_crore` | monthly | BB | [0.0, 200000.0] | Non-bank borrowing for Deficit Financing |
 | government_finance | `non_nbr_tax_revenue` | `amount_bdt_crore` | monthly | mof.gov.bd | [0.0, 60000.0] | Non-NBR Tax Revenue (MoF MFR, FYTD) |
 | government_finance | `non_tax_revenue` | `amount_bdt_crore` | monthly | mof.gov.bd | [0.0, 100000.0] | Non-Tax Revenue |
-| government_finance | `rev_gdp_ratio` | `percent` | quarterly |  | [0.0, 40.0] | Rev-GDP Ratio |
-| government_finance | `tax_gdp_ratio` | `percent` | quarterly |  | [0.0, 30.0] | Tax-GDP Ratio |
 | government_finance | `tax_revenue` | `amount_bdt_crore` | monthly | BB | [0.0, 500000.0] | Tax Revenue |
 | government_finance (brief alias) | `nbr_fytd_collected_cr` | `amount_bdt_crore` | monthly | BB | [0.0, 500000.0] | Alias of `tax_revenue` — Tax Revenue |
 | government_finance (brief conversion) | `fiscal_bank_borrow_trn` | `amount_bdt_crore` | monthly | BB | — | Conversion of `bank_borrowing_for_deficit_financing` × 1e-05 — Bank Borrowing for Deficit Financing |
