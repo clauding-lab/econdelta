@@ -13,6 +13,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from utils.anomaly import check_corridor_coherence
 from utils.calendar import last_trading_close, load_holidays
 from utils.notifier import notify
 from utils.opus_review import archive_latest, load_history, review_data
@@ -1004,6 +1005,14 @@ def main() -> int:
             data["fx_reserve_gross_and_bpm6"] = forex.reserves.gross_reserves_usd_bn
 
     _apply_brief_aliases(data)
+
+    # Cross-metric health check (E1.4): the BB policy corridor's three legs
+    # (SDF floor / repo / SLF ceiling) are each parsed independently, so no
+    # single parser ever sees all three. Now that the flat `data` dict holds
+    # every latest value in one place, verify SDF <= repo <= SLF and alert
+    # loudly on a violation. Detect-only — the legs already landed at parse
+    # time, so this never rejects the run.
+    check_corridor_coherence(data)
 
     try:
         bundle = LatestBundle(

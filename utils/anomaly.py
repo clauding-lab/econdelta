@@ -4,9 +4,68 @@ import json
 import logging
 from pathlib import Path
 
+from utils.notifier import notify
+
 logger = logging.getLogger(__name__)
 
 _DEFAULT_THRESHOLD = 0.10  # 10% default if metric not in thresholds.json
+
+# Bangladesh Bank policy corridor. The Standing Deposit Facility (SDF) is the
+# floor, the policy repo rate sits in the middle, and the Standing Lending
+# Facility (SLF) is the ceiling. A healthy corridor always satisfies
+# SDF <= repo <= SLF. The three legs are parsed independently (one
+# ``pdf_table_column_latest`` sources-v3 entry each), so no single parser ever
+# sees all three — the coherence check below runs at aggregate time instead.
+CORRIDOR_SDF_ID = "policy_rate_sdf"
+CORRIDOR_REPO_ID = "policy_rate_repo"
+CORRIDOR_SLF_ID = "policy_rate_slf"
+
+
+def check_corridor_coherence(data: dict) -> bool:
+    """Verify the BB policy corridor invariant SDF <= repo <= SLF.
+
+    Detect-and-alert only. On a genuine ordering violation among three present
+    numeric legs it fires a loud ``notify("error", ...)`` and returns False.
+    It does NOT reject the run: the three values already landed in
+    metric_history at parse time, so there is nothing to reject — this is a
+    cross-metric health check that surfaces a mis-ordered corridor loudly
+    instead of letting it pass silently.
+
+    Args:
+        data: The assembled flat latest-values dict (metric_id -> value) that
+            aggregate_latest builds; the corridor legs are read by their ids.
+
+    Returns:
+        True when the corridor is coherent OR when any leg is missing/
+        non-numeric (absent data must never false-alarm). False only on a
+        real ordering violation among three present numeric legs.
+    """
+    sdf = data.get(CORRIDOR_SDF_ID)
+    repo = data.get(CORRIDOR_REPO_ID)
+    slf = data.get(CORRIDOR_SLF_ID)
+
+    if not all(isinstance(v, (int, float)) for v in (sdf, repo, slf)):
+        # A missing or non-numeric leg — skip silently, never false-alarm.
+        return True
+
+    if sdf <= repo <= slf:
+        return True
+
+    logger.error(
+        "policy corridor incoherent: %s=%s, %s=%s, %s=%s (expected SDF <= repo <= SLF)",
+        CORRIDOR_SDF_ID, sdf, CORRIDOR_REPO_ID, repo, CORRIDOR_SLF_ID, slf,
+    )
+    notify(
+        "error",
+        "policy corridor incoherent",
+        (
+            f"Bangladesh Bank policy corridor violates SDF <= repo <= SLF: "
+            f"{CORRIDOR_SDF_ID}={sdf}, {CORRIDOR_REPO_ID}={repo}, "
+            f"{CORRIDOR_SLF_ID}={slf}. A leg is likely mis-parsed — verify "
+            f"against BB's current MPS before trusting these rates."
+        ),
+    )
+    return False
 
 
 def check_threshold(
