@@ -3,10 +3,18 @@
 import json
 import tempfile
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
-from utils.anomaly import check_threshold, load_thresholds
+from utils.anomaly import (
+    CORRIDOR_REPO_ID,
+    CORRIDOR_SDF_ID,
+    CORRIDOR_SLF_ID,
+    check_corridor_coherence,
+    check_threshold,
+    load_thresholds,
+)
 
 
 class TestCheckThreshold:
@@ -58,6 +66,86 @@ class TestCheckThreshold:
         ok, _ = check_threshold("usd_bdt_mid", 112.5, 110.0, thresholds)
         # 2.5/110 ~ 2.27% > 2% threshold -> anomalous
         assert ok is False
+
+
+class TestCheckCorridorCoherence:
+    """The BB policy corridor invariant SDF <= repo <= SLF (E1.4).
+
+    The three legs are parsed independently, so this cross-metric check runs at
+    aggregate time on the assembled `data` dict. It detects-and-alerts: a
+    mis-ordered corridor fires one loud notify; it never rejects the run.
+    """
+
+    def test_misordered_corridor_fires_one_error_notify(self):
+        # SDF above repo violates SDF <= repo <= SLF -> loud alert.
+        data = {
+            CORRIDOR_SDF_ID: 8.5,
+            CORRIDOR_REPO_ID: 8.0,
+            CORRIDOR_SLF_ID: 11.5,
+        }
+        with patch("utils.anomaly.notify") as mock_notify:
+            ok = check_corridor_coherence(data)
+
+        assert ok is False
+        assert mock_notify.call_count == 1
+        args, _kwargs = mock_notify.call_args
+        # level is the first positional arg; message body the third.
+        assert args[0] == "error"
+        message = args[2]
+        assert "8.5" in message
+        assert "8.0" in message
+        assert "11.5" in message
+        assert CORRIDOR_SDF_ID in message
+        assert CORRIDOR_REPO_ID in message
+        assert CORRIDOR_SLF_ID in message
+
+    def test_correct_real_corridor_is_silent(self):
+        # Live corridor confirmed 2026-07-10: SDF 7.50 < repo 10.00 < SLF 11.50.
+        data = {
+            CORRIDOR_SDF_ID: 7.5,
+            CORRIDOR_REPO_ID: 10.0,
+            CORRIDOR_SLF_ID: 11.5,
+        }
+        with patch("utils.anomaly.notify") as mock_notify:
+            ok = check_corridor_coherence(data)
+
+        assert ok is True
+        mock_notify.assert_not_called()
+
+    def test_missing_leg_is_silent(self):
+        # A None leg is absent data, not a violation — never false-alarm.
+        data = {
+            CORRIDOR_SDF_ID: 7.5,
+            CORRIDOR_REPO_ID: None,
+            CORRIDOR_SLF_ID: 11.5,
+        }
+        with patch("utils.anomaly.notify") as mock_notify:
+            ok = check_corridor_coherence(data)
+
+        assert ok is True
+        mock_notify.assert_not_called()
+
+    def test_absent_key_is_silent(self):
+        # An entirely missing leg (key not in data) is also silent.
+        data = {CORRIDOR_SDF_ID: 7.5, CORRIDOR_SLF_ID: 11.5}
+        with patch("utils.anomaly.notify") as mock_notify:
+            ok = check_corridor_coherence(data)
+
+        assert ok is True
+        mock_notify.assert_not_called()
+
+    def test_equal_legs_are_coherent(self):
+        # SDF == repo == SLF satisfies the <= boundary — no alert.
+        data = {
+            CORRIDOR_SDF_ID: 10.0,
+            CORRIDOR_REPO_ID: 10.0,
+            CORRIDOR_SLF_ID: 10.0,
+        }
+        with patch("utils.anomaly.notify") as mock_notify:
+            ok = check_corridor_coherence(data)
+
+        assert ok is True
+        mock_notify.assert_not_called()
 
 
 class TestLoadThresholds:

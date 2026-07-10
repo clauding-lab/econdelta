@@ -37,6 +37,20 @@ When something ships broken, when a methodology gap is exposed, or when a smoke 
 
 ## Entries (most recent first)
 
+## 2026-07-10 — "policy_rate_sdf 7.50 vs a 'real' 8.50 floor" was inverted: 7.50 was real, 8.50 was the stale prior
+
+**Trigger:** Ecosystem-review handoff (E1.4) — the one P0/P1 item flagged INVESTIGATE-ONLY (no adversarial verification, no root-cause trace). It read: "policy_rate_sdf writes 7.50 daily while the real SDF floor is 8.50."
+
+**What went wrong (in the review, not the pipeline):** The premise was inverted. Verified cross-repo, on the live YieldScope/The Brief surface, and against the owner's records: SDF = 7.50 is REAL — Bangladesh Bank cut the Standing Deposit Facility floor; the review's 8.50 was a stale prior it even flagged as "strong prior, not gospel." The pipeline value (7.50) was correct all along, and the live corridor SDF 7.50 < repo 10.00 < SLF 11.50 satisfies the invariant. Had E1.4 been "fixed" toward 8.50, a correct value would have been overwritten with a stale one — the mirror image of the E1.3 CRAR near-miss the same review produced.
+
+**Lesson:** A "suspect value" a review flags must be verified against the live source BEFORE treating the flagged direction as truth. A flag names a direction ("7.50 is wrong, 8.50 is right"); the direction is a hypothesis, not a finding. Same shape as CLAUDE.md rule 10 — the review collapsed an observation ("7.50 differs from my 8.50 memory") into an inference ("7.50 is wrong").
+
+**Prevention:** Added a corridor coherence guard, `utils/anomaly.check_corridor_coherence`, called at aggregate time once all three legs are assembled in `data`. It verifies SDF ≤ repo ≤ SLF and fires a loud `notify("error", …)` on a genuine ordering violation among three present numeric legs; it skips silently on any missing/non-numeric leg (absent data never false-alarms) and never rejects the run (the legs already landed at parse time — this is detect-and-alert). This is the guard E1.4 asked for: it catches a genuinely mis-parsed leg without depending on anyone's memory of the "right" number.
+
+**Hotfix:** No value change — the number was already correct; the safe action was to change nothing and add the cross-metric guard. `fix(aggregate): add BB policy-corridor coherence guard (SDF ≤ repo ≤ SLF)`.
+
+**Cross-references:** `utils/anomaly.check_corridor_coherence` + the `aggregate_latest` call site; the three legs are parsed independently via `pdf_table_column_latest` (AGENTS.md landmine 16, the corridor registry gap); the 2026-07-09 E1.3 CRAR entry below (same review, same "a flagged number, verified against the primary source, held" shape); CLAUDE.md rules 9 (convergence isn't proof) + 10 (observation before inference).
+
 ## 2026-07-09 — "MEI held April while BB published May" was a parse-side glob bug, not discovery staleness
 
 **Trigger:** E1.1 handoff flagged, as a follow-up, that "the underlying MEI issue the pipeline holds is April 2026 while BB has published May 2026 (a separate fetch/discover staleness)". Executed as the E2/E3 session's E1 leftover.
