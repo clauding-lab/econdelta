@@ -148,6 +148,112 @@ class TestCheckCorridorCoherence:
         mock_notify.assert_not_called()
 
 
+class TestCorridorCoherenceRealAssembly:
+    """Contract test: the guard must fire when fed a `data` dict built by the
+    PRODUCTION assembly path, not a hand-authored one.
+
+    The five unit tests above feed idealized ``{id: float}`` dicts, so they
+    would keep passing even if a future change made a corridor leg dict-shaped
+    (like ``call_money_rate`` already is) or moved its value off the bare id —
+    ``check_corridor_coherence`` would silently revert to a permanent no-op and
+    CI would stay green. These tests pin the guard to the real shape contract:
+    each leg must land under its BARE id as a scalar number after the real
+    ``_build_v3_blocks`` -> merge -> ``_apply_brief_aliases`` chain (mirroring
+    aggregate_latest.main ~989-1006). A dict-shape or key regression makes the
+    guard skip -> notify never fires -> THIS test fails.
+    """
+
+    @staticmethod
+    def _write_corridor_snapshot(data_dir: Path, indicator_id: str, value: float) -> None:
+        import json
+        from datetime import datetime, timezone
+
+        snap_dir = data_dir / indicator_id
+        snap_dir.mkdir(parents=True)
+        snap = {
+            "indicator_id": indicator_id,
+            "domain": "money_market",
+            "cadence": "monthly",
+            "scraped_at": datetime.now(timezone.utc).isoformat(),
+            "source_url": "https://www.bb.org.bd/x",
+            "value": value,  # a bare scalar float, as pdf_table_column_latest writes it
+            "value_type": "percent",
+            "previous_value": None,
+            "change_pct": None,
+            "_provenance": "deterministic",
+            "_parse_strategy": "pdf_table_column_latest",
+        }
+        (snap_dir / "2026-07-10.json").write_text(json.dumps(snap))
+
+    def test_misordered_corridor_from_production_assembly_fires_notify(
+        self, tmp_path: Path, monkeypatch
+    ):
+        import json
+        from datetime import datetime, timezone
+
+        import aggregate_latest as agg
+
+        # Synthetic registry: exactly the three corridor legs, keyed by the
+        # guard's own ids so the test exercises the real assembly, not a mock.
+        registry = {
+            "indicators": [
+                {"id": CORRIDOR_SDF_ID, "domain": "money_market", "cadence": "monthly"},
+                {"id": CORRIDOR_REPO_ID, "domain": "money_market", "cadence": "monthly"},
+                {"id": CORRIDOR_SLF_ID, "domain": "money_market", "cadence": "monthly"},
+            ]
+        }
+        reg_path = tmp_path / "sources-v3.json"
+        reg_path.write_text(json.dumps(registry))
+
+        data_dir = tmp_path / "data"
+        # Mis-ordered on purpose: SDF 8.5 > repo 8.0 violates SDF <= repo <= SLF.
+        self._write_corridor_snapshot(data_dir, CORRIDOR_SDF_ID, 8.5)
+        self._write_corridor_snapshot(data_dir, CORRIDOR_REPO_ID, 8.0)
+        self._write_corridor_snapshot(data_dir, CORRIDOR_SLF_ID, 11.5)
+
+        monkeypatch.setattr(agg, "SOURCES_V3_PATH", reg_path)
+        monkeypatch.setattr(agg, "DATA_DIR", data_dir)
+
+        # Reproduce main()'s data-assembly chain (aggregate_latest.py ~989-1006).
+        now = datetime.now(timezone.utc)
+        data_additions, _domains, _freshness, _alerts = agg._build_v3_blocks(now)
+        data: dict = {}
+        data.update(data_additions)
+        agg._apply_brief_aliases(data)
+
+        # Pin the shape contract the guard depends on: each leg is present under
+        # its bare id as a scalar number (not a dict, not moved to another key).
+        # This assertion fails first, with a clear message, on a shape/alias
+        # regression — before the behavioural check below.
+        for leg in (CORRIDOR_SDF_ID, CORRIDOR_REPO_ID, CORRIDOR_SLF_ID):
+            got = data.get(leg)
+            assert isinstance(got, (int, float)) and not isinstance(got, bool), (
+                f"{leg} must land under its bare id as a scalar number; got "
+                f"{type(got).__name__} — a dict-shape or key-alias regression "
+                f"would silently turn the corridor guard into a no-op"
+            )
+
+        # The guard, fed the production-built data, must detect the mis-order.
+        with patch("utils.anomaly.notify") as mock_notify:
+            ok = check_corridor_coherence(data)
+
+        assert ok is False
+        mock_notify.assert_called_once()
+        assert mock_notify.call_args.args[0] == "error"
+
+    def test_guard_ids_exist_in_real_sources_v3_config(self):
+        # A config-side rename of a corridor id would silently break the guard
+        # while every constant-driven test above stays green. Pin the guard's
+        # ids to the real registry so such a rename fails CI here.
+        import json
+
+        cfg_path = Path(__file__).parent.parent / "config" / "sources-v3.json"
+        ids = {ind["id"] for ind in json.loads(cfg_path.read_text())["indicators"]}
+        assert CORRIDOR_SDF_ID in ids
+        assert CORRIDOR_REPO_ID in ids
+        assert CORRIDOR_SLF_ID in ids
+
+
 class TestLoadThresholds:
     def test_loads_valid_json(self):
         data = {
