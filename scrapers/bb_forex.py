@@ -29,15 +29,12 @@ THRESHOLDS_PATH = REPO_ROOT / "config" / "thresholds.json"
 # Fiscal-year header row on BB's reserves table, e.g. "2025-2026".
 _FISCAL_YEAR_RE = re.compile(r"^\s*(\d{4})\s*-\s*(\d{4})\s*$")
 
-# The month-advance path in main() accepts any magnitude step by design
-# (reserves genuinely move in month-sized jumps -- BB's real May->June 2026
-# step was +8.77%). But a wrong-VALUE-column read (e.g. BPM6 instead of
-# gross, which reads ~13-15% lower for the SAME period on live BB data) can
-# land on a fresh month too, since the month label lives in a different
-# table cell than the value -- the date alone can't catch it. This band
-# doesn't block the advance (still accepted, still written); it only decides
-# whether a human gets a heads-up.
-RESERVES_ADVANCE_SANITY_BAND = 0.10
+# Fallback bounds for the month-advance sanity check (see main()) when
+# config/thresholds.json is missing the gross_reserves_usd_bn_advance_drop /
+# _jump keys -- normally those keys drive the check; these are a belt-and-
+# suspenders default only.
+_RESERVES_ADVANCE_DROP_DEFAULT = 0.10
+_RESERVES_ADVANCE_JUMP_DEFAULT = 0.25
 
 logger = logging.getLogger("bb_forex")
 
@@ -501,25 +498,46 @@ def main() -> int:
         #                        signature (e.g. reading the BPM6 column)
         if prev_res is not None:
             if reserves.reserves_date > prev_res.reserves_date:
-                # Accepted regardless of magnitude -- but a step outside the
-                # wide sanity band still gets a notify so a human can check
-                # for a wrong-column read (the date alone can't catch that;
-                # the month label and the value live in different cells).
-                advance_ok, advance_pct = check_threshold(
-                    "gross_reserves_usd_bn",
-                    reserves.gross_reserves_usd_bn,
-                    prev_res.gross_reserves_usd_bn,
-                    {"gross_reserves_usd_bn": RESERVES_ADVANCE_SANITY_BAND},
+                # Accepted regardless of magnitude -- reserves genuinely move
+                # in month-sized jumps, including large POSITIVE ones: BD's
+                # fiscal year ends in June, and June reserves spike hard
+                # (this repo's own fixture history: May->June 2025 = +23.16%,
+                # May->June 2024 = +10.40%, both entirely legitimate). A
+                # wrong-VALUE-column read (e.g. landing on BPM6 instead of
+                # gross, which reads noticeably lower for the same period --
+                # observed at -12.4% / -15.3%) can land on a fresh month too,
+                # since the month label and the value live in different table
+                # cells -- the date alone can't catch it.
+                #
+                # The split between the two is DIRECTIONAL, not a shared
+                # magnitude cutoff: legitimate large steps are positive
+                # (June spikes), wrong-column reads are negative. The
+                # largest legitimate NEGATIVE step observed (a fiscal
+                # year-end June -> July rollover) is only -6.21%. Because a
+                # June spike and a column swap can overlap in raw magnitude,
+                # this check stays warn-only -- it must never HOLD an
+                # advance, only flag one for a human to check.
+                drop_limit = thresholds.get(
+                    "gross_reserves_usd_bn_advance_drop", _RESERVES_ADVANCE_DROP_DEFAULT
                 )
+                jump_limit = thresholds.get(
+                    "gross_reserves_usd_bn_advance_jump", _RESERVES_ADVANCE_JUMP_DEFAULT
+                )
+                if prev_res.gross_reserves_usd_bn:
+                    signed_pct = (
+                        reserves.gross_reserves_usd_bn - prev_res.gross_reserves_usd_bn
+                    ) / prev_res.gross_reserves_usd_bn
+                else:
+                    signed_pct = 0.0
                 logger.info(
-                    "reserves month advanced %s -> %s (%.4fbn -> %.4fbn, %.2f%% step)",
+                    "reserves month advanced %s -> %s (%.4fbn -> %.4fbn, %+.2f%% step)",
                     prev_res.reserves_date,
                     reserves.reserves_date,
                     prev_res.gross_reserves_usd_bn,
                     reserves.gross_reserves_usd_bn,
-                    advance_pct * 100,
+                    signed_pct * 100,
                 )
-                if not advance_ok:
+                if signed_pct < -drop_limit or signed_pct > jump_limit:
                     notify(
                         "warning",
                         "bb_forex reserves month-advance step unusually large",
@@ -527,8 +545,8 @@ def main() -> int:
                             f"gross_reserves {prev_res.reserves_date.isoformat()} -> "
                             f"{reserves.reserves_date.isoformat()}: "
                             f"{prev_res.gross_reserves_usd_bn:.2f}bn -> "
-                            f"{reserves.gross_reserves_usd_bn:.2f}bn ({advance_pct:.2%}) "
-                            f"exceeds the {RESERVES_ADVANCE_SANITY_BAND:.0%} sanity band "
+                            f"{reserves.gross_reserves_usd_bn:.2f}bn ({signed_pct:+.2%}) "
+                            f"is outside [-{drop_limit:.0%}, +{jump_limit:.0%}] "
                             "— verify this isn't a wrong-column read (e.g. BPM6 vs gross)"
                         ),
                     )

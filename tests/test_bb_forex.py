@@ -584,17 +584,105 @@ class TestMain:
         assert written.reserves.reserves_date == date(2026, 6, 1)
         mock_notify.assert_not_called()
 
-    def test_exit_0_on_reserves_month_advance_alerts_when_outside_sanity_band(
+    def test_exit_0_on_reserves_month_advance_june_spike_silent(self, mock_fetch, tmp_path):
+        """BD's fiscal year ends in June, and June reserves genuinely spike --
+        this repo's own fixture history shows May->June 2025 at +23.16%
+        (25.7982bn -> 31.7720bn), entirely legitimate. This is the case a
+        SYMMETRIC band would have gotten wrong: a naive +/-10% band fires a
+        false-positive warning on this exact real step every June. Under the
+        signed, asymmetric band (gross_reserves_usd_bn_advance_jump=0.25),
+        a +23.16% advance stays silent."""
+        prev_snapshot = _make_snapshot(
+            snapshot_date=date(2025, 6, 5),
+            usd_mid=122.7,
+            usd_buy=122.7,
+            usd_sell=122.7,
+            eur_bdt=144.34,
+            gbp_bdt=165.85,
+            gross_reserves=25.7982,
+            reserves_date=date(2025, 5, 1),
+        )
+        june_spike_reserves = ForexReserves(
+            gross_reserves_usd_bn=31.7720,  # +23.16% -- real May->June 2025 fixture step
+            import_cover_months=None,
+            reserves_date=date(2025, 6, 1),
+            source_url="https://example.com/reserves",
+        )
+
+        with (
+            patch("scrapers.bb_forex.DATA_DIR", tmp_path),
+            patch("scrapers.bb_forex.load_previous_snapshot", return_value=prev_snapshot),
+            patch("scrapers.bb_forex.parse_reserves", return_value=june_spike_reserves),
+            patch("scrapers.bb_forex.notify") as mock_notify,
+        ):
+            from scrapers.bb_forex import main
+
+            result = main()
+
+        assert result == 0
+        snapshots = list(tmp_path.glob("*.json"))
+        assert len(snapshots) == 1
+        raw = json.loads(snapshots[0].read_text(encoding="utf-8"))
+        written = ForexSnapshot.model_validate(raw)
+        assert written.reserves.gross_reserves_usd_bn == pytest.approx(31.7720)
+        assert written.reserves.reserves_date == date(2025, 6, 1)
+        mock_notify.assert_not_called()
+
+    def test_exit_0_on_reserves_month_advance_fiscal_boundary_drop_silent(
         self, mock_fetch, tmp_path
     ):
-        """A month advance whose step exceeds RESERVES_ADVANCE_SANITY_BAND
-        (10%) -- e.g. a silent gross->BPM6 column swap, which reads roughly
-        -15% lower for the SAME date since the month label and the value
-        live in different table cells -- must still be ACCEPTED and written
-        (the date-based gate never holds an advance), but must notify a
-        warning so a human can catch the wrong-column read. BB's real
-        May->June 2026 step (+8.77%) stays under this band and passes
-        silently -- see test_exit_0_on_reserves_month_advance_accepts_any_magnitude."""
+        """The fiscal year-end rollover (June -> July) genuinely DROPS --
+        this repo's own fixture history shows June->July 2025 at -6.21%
+        (31.7720bn -> 29.7998bn), the largest legitimate negative step
+        observed. Under the drop limit (gross_reserves_usd_bn_advance_drop
+        =0.10), -6.21% stays silent."""
+        prev_snapshot = _make_snapshot(
+            snapshot_date=date(2025, 7, 5),
+            usd_mid=122.7,
+            usd_buy=122.7,
+            usd_sell=122.7,
+            eur_bdt=144.34,
+            gbp_bdt=165.85,
+            gross_reserves=31.7720,
+            reserves_date=date(2025, 6, 1),
+        )
+        july_reserves = ForexReserves(
+            gross_reserves_usd_bn=29.7998,  # -6.21% -- real June->July 2025 fixture step
+            import_cover_months=None,
+            reserves_date=date(2025, 7, 1),
+            source_url="https://example.com/reserves",
+        )
+
+        with (
+            patch("scrapers.bb_forex.DATA_DIR", tmp_path),
+            patch("scrapers.bb_forex.load_previous_snapshot", return_value=prev_snapshot),
+            patch("scrapers.bb_forex.parse_reserves", return_value=july_reserves),
+            patch("scrapers.bb_forex.notify") as mock_notify,
+        ):
+            from scrapers.bb_forex import main
+
+            result = main()
+
+        assert result == 0
+        snapshots = list(tmp_path.glob("*.json"))
+        assert len(snapshots) == 1
+        raw = json.loads(snapshots[0].read_text(encoding="utf-8"))
+        written = ForexSnapshot.model_validate(raw)
+        assert written.reserves.gross_reserves_usd_bn == pytest.approx(29.7998)
+        assert written.reserves.reserves_date == date(2025, 7, 1)
+        mock_notify.assert_not_called()
+
+    def test_exit_0_on_reserves_month_advance_alerts_when_drop_exceeds_band(
+        self, mock_fetch, tmp_path
+    ):
+        """A month advance whose DROP exceeds
+        gross_reserves_usd_bn_advance_drop (0.10) -- e.g. a silent
+        gross->BPM6 column swap, which reads roughly -15% lower for the SAME
+        date since the month label and the value live in different table
+        cells -- must still be ACCEPTED and written (the date-based gate
+        never holds an advance), but must notify a warning so a human can
+        catch the wrong-column read. This is well past the -6.21% largest
+        legitimate drop observed, so it's unambiguously a signal, not noise."""
         prev_snapshot = _make_snapshot(
             snapshot_date=date(2026, 6, 5),
             usd_mid=122.7,
