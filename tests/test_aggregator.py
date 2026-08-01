@@ -35,9 +35,14 @@ from utils.schema import (  # noqa: E402
 _NOW = datetime.now(timezone.utc)
 
 
-def _forex_snapshot(scraped_at: datetime = _NOW) -> ForexSnapshot:
+def _forex_snapshot(
+    scraped_at: datetime = _NOW, snapshot_date: date | None = None
+) -> ForexSnapshot:
+    """`date` defaults to `scraped_at.date()` -- realistic pairing, matching
+    the real scraper (scrapers/bb_forex.py sets both at the same moment).
+    Pass `snapshot_date` to decouple them explicitly."""
     return ForexSnapshot(
-        date=date(2026, 4, 20),
+        date=snapshot_date if snapshot_date is not None else scraped_at.date(),
         scraped_at=scraped_at,
         rates=ForexRates(
             usd_bdt_mid=122.7,
@@ -466,7 +471,19 @@ def test_alias_date_follows_gated_value_not_stale_bb_forex_date(
     override was gated. A fresh value wearing a stale date is exactly the
     forgery this PR set out to kill, just relocated. The fix: the Tier-1 map
     must only date usd_bdt_exchange_rate/fx_reserve_gross_and_bpm6 from
-    bb_forex when bb_forex's own status is "ok" -- same gate as the value."""
+    bb_forex when bb_forex's own status is "ok" -- same gate as the value.
+
+    Review round 2 note: the original version of this test asserted
+    `got != stale_date` where `stale_date = stale.date()` (a scraped_at-
+    derived reference) -- vacuous once _build_tier1_source_as_of_map moved to
+    reading `forex.date` (review round 1, item 2) instead of
+    `forex.scraped_at.date()`, because this file's `_forex_snapshot` helper
+    hardcoded `date=date(2026, 4, 20)` regardless of `scraped_at`, so the
+    produced date was NEVER equal to `stale_date` even with both bb_forex_ok
+    gates sabotaged to `if True:`. Fixed two ways: `_forex_snapshot` now
+    pairs `date`/`scraped_at` realistically (like the real scraper), and the
+    assertion tests the actual contract -- absence of the key, not a date
+    comparison that can pass by construction."""
     data_dir = _setup_v3_with_usd_bdt_exchange_rate_indicator(tmp_path, monkeypatch, v3_value=999.9)
     stale = datetime.now(timezone.utc) - timedelta(hours=48)
     _write_snapshot(data_dir / "bb_forex" / "2026-04-20.json", _forex_snapshot(scraped_at=stale))
@@ -491,14 +508,10 @@ def test_alias_date_follows_gated_value_not_stale_bb_forex_date(
     # The value is the fresh v3 one (999.9), confirmed by the sibling test above.
     assert captured["data"]["usd_bdt_exchange_rate"] == 999.9
     source_as_of_map = captured.get("source_as_of_map") or {}
-    stale_date = stale.date()
-    got = source_as_of_map.get("usd_bdt_exchange_rate")
-    assert got != stale_date, (
-        f"usd_bdt_exchange_rate carries bb_forex's stale date ({got}) on a fresh "
-        f"v3 value (999.9) -- the date must follow the (gated) value, not bb_forex "
-        f"unconditionally. Either no override (falls back to today, honest for an "
-        f"undated fresh v3 value) or the v3 registry's own recovered date is "
-        f"acceptable -- bb_forex's stale date ({stale_date}) is not."
+    assert "usd_bdt_exchange_rate" not in source_as_of_map, (
+        f"usd_bdt_exchange_rate must get NO Tier-1 date when bb_forex is stale "
+        f"-- found {source_as_of_map.get('usd_bdt_exchange_rate')!r} instead. "
+        f"The date must follow the (gated) value, not bb_forex unconditionally."
     )
 
 

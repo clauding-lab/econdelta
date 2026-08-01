@@ -670,7 +670,7 @@ def _build_source_as_of_map(domains: dict[str, dict[str, Any]]) -> dict[str, dat
 
 
 def _build_tier1_source_as_of_map(
-    snapshots: dict[str, Any], *, bb_forex_ok: bool = False
+    snapshots: dict[str, Any], *, bb_forex_ok: bool
 ) -> dict[str, date]:
     """Per-metric publication dates for the 3 Tier-1 SCRAPER_SPEC sources.
 
@@ -700,6 +700,9 @@ def _build_tier1_source_as_of_map(
             ``bb_forex_ok`` — everything else in this function (the raw
             rates/reserves/dse/commodity keys, always sourced straight from
             their own snapshot regardless of freshness) is unaffected.
+            Required (no default, review round 2, item 3): a future caller
+            that forgets to pass it should get a TypeError at the call site,
+            not a silently-wrong "no alias date" fallback.
     """
     result: dict[str, date] = {}
 
@@ -763,7 +766,15 @@ def _build_tier1_source_as_of_map(
 
     commodities = snapshots.get("commodity_prices")
     if commodities is not None:
-        commodity_date = commodities.scraped_at.date()
+        # `commodities.date` (the scraper's own calendar-day field), not
+        # `commodities.scraped_at.date()` (a UTC timestamp) -- the same
+        # pre-midnight off-by-one risk that justified the forex change above:
+        # scrapers/commodity_prices.py sets both at the same moment
+        # (`date=date.today(), scraped_at=datetime.now(timezone.utc)`), and
+        # the commodity timer fires ~23:08 UTC, close enough to the UTC day
+        # boundary that scraped_at's UTC calendar date can land a day behind
+        # the intended local reporting day.
+        commodity_date = commodities.date
         for key, cp in commodities.prices.items():
             unit_suffix = f"{cp.currency.lower()}_{cp.unit.replace(' ', '_')}"
             result[f"{key}_{unit_suffix}"] = commodity_date

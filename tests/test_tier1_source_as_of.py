@@ -9,11 +9,16 @@ write a fresh file) read as a fresh trading print.
 
 This file covers:
   1. ``aggregate_latest._build_tier1_source_as_of_map`` unit tests (reserves
-     month-end mapping, rates scraped_at date, DSE trading day, commodity
-     scraped_at date, None-reserves skip, alias propagation).
+     month-end mapping, rates/commodity snapshot-date field, DSE trading day,
+     None-reserves skip, alias propagation, the bb_forex_ok gate).
   2. The load-bearing integration test — a frozen bb_forex snapshot run
      through the real ``main()`` write path must NOT have its Supabase rows
      stamped with today's date.
+
+Review round 2 note: `bb_forex_ok` is a REQUIRED keyword-only argument on
+`_build_tier1_source_as_of_map` (no default) — every call below passes it
+explicitly, even in tests where its value doesn't affect the assertion, so a
+future signature regression (e.g. someone re-adding a default) can't hide.
 """
 from __future__ import annotations
 
@@ -89,9 +94,15 @@ def _dse_snapshot(scraped_at: datetime = _NOW, trading_day_date: date = date(202
     )
 
 
-def _commodity_snapshot(scraped_at: datetime = _NOW) -> CommoditySnapshot:
+def _commodity_snapshot(
+    scraped_at: datetime = _NOW, snapshot_date: date | None = None
+) -> CommoditySnapshot:
+    """`date` defaults to `scraped_at.date()` -- realistic pairing, mirroring
+    `_forex_snapshot` (scrapers/commodity_prices.py sets both fields at the
+    same moment: ``date=date.today(), scraped_at=datetime.now(timezone.utc)``).
+    Pass `snapshot_date` explicitly to decouple them."""
     return CommoditySnapshot(
-        date=date(2026, 4, 20),
+        date=snapshot_date if snapshot_date is not None else scraped_at.date(),
         scraped_at=scraped_at,
         prices={
             "brent_crude": CommodityPrice(
@@ -115,17 +126,17 @@ def _write_snapshot(path: Path, snapshot) -> None:
 class TestReservesMonthEnd:
     def test_31_day_month_maps_to_last_day(self):
         forex = _forex_snapshot(reserves_date=date(2026, 5, 1))
-        m = agg._build_tier1_source_as_of_map({"bb_forex": forex})
+        m = agg._build_tier1_source_as_of_map({"bb_forex": forex}, bb_forex_ok=False)
         assert m["gross_reserves_usd_bn"] == date(2026, 5, 31)
 
     def test_leap_february_maps_to_29(self):
         forex = _forex_snapshot(reserves_date=date(2024, 2, 1))
-        m = agg._build_tier1_source_as_of_map({"bb_forex": forex})
+        m = agg._build_tier1_source_as_of_map({"bb_forex": forex}, bb_forex_ok=False)
         assert m["gross_reserves_usd_bn"] == date(2024, 2, 29)
 
     def test_non_leap_february_maps_to_28(self):
         forex = _forex_snapshot(reserves_date=date(2026, 2, 1))
-        m = agg._build_tier1_source_as_of_map({"bb_forex": forex})
+        m = agg._build_tier1_source_as_of_map({"bb_forex": forex}, bb_forex_ok=False)
         assert m["gross_reserves_usd_bn"] == date(2026, 2, 28)
 
     def test_none_reserves_skips_the_key(self):
@@ -147,7 +158,7 @@ class TestImportCoverMonths:
 
     def test_import_cover_months_maps_to_reserves_month_end(self):
         forex = _forex_snapshot(reserves_date=date(2026, 5, 1))
-        m = agg._build_tier1_source_as_of_map({"bb_forex": forex})
+        m = agg._build_tier1_source_as_of_map({"bb_forex": forex}, bb_forex_ok=False)
         assert m["import_cover_months"] == date(2026, 5, 31) == m["gross_reserves_usd_bn"]
 
     def test_import_cover_months_not_gated_on_bb_forex_ok(self):
@@ -170,7 +181,7 @@ class TestForexRatesSnapshotDate:
 
     def test_rates_use_the_date_field(self):
         forex = _forex_snapshot(snapshot_date=date(2026, 4, 1))
-        m = agg._build_tier1_source_as_of_map({"bb_forex": forex})
+        m = agg._build_tier1_source_as_of_map({"bb_forex": forex}, bb_forex_ok=False)
         for key in ("usd_bdt_mid", "usd_bdt_buy", "usd_bdt_sell", "eur_bdt", "gbp_bdt"):
             assert m[key] == date(2026, 4, 1)
 
@@ -179,7 +190,7 @@ class TestForexRatesSnapshotDate:
         another -- the map must follow `date`."""
         scraped_at_utc = datetime(2026, 4, 1, 23, 5, tzinfo=timezone.utc)
         forex = _forex_snapshot(scraped_at=scraped_at_utc, snapshot_date=date(2026, 4, 2))
-        m = agg._build_tier1_source_as_of_map({"bb_forex": forex})
+        m = agg._build_tier1_source_as_of_map({"bb_forex": forex}, bb_forex_ok=False)
         assert m["usd_bdt_mid"] == date(2026, 4, 2)
         assert m["usd_bdt_mid"] != scraped_at_utc.date()
 
@@ -189,7 +200,7 @@ class TestForexRatesSnapshotDate:
         set together at write time), not today's run date."""
         stale = datetime.now(timezone.utc) - timedelta(days=20)
         forex = _forex_snapshot(scraped_at=stale)  # date defaults to stale.date()
-        m = agg._build_tier1_source_as_of_map({"bb_forex": forex})
+        m = agg._build_tier1_source_as_of_map({"bb_forex": forex}, bb_forex_ok=False)
         assert m["usd_bdt_mid"] == stale.date()
         assert m["usd_bdt_mid"] != date.today()
 
@@ -206,7 +217,7 @@ class TestDseTradingDay:
         the LAST trading day's close via its own `date` field."""
         scraped_today = datetime.now(timezone.utc)
         dse = _dse_snapshot(scraped_at=scraped_today, trading_day_date=date(2026, 7, 16))
-        m = agg._build_tier1_source_as_of_map({"dse_market": dse})
+        m = agg._build_tier1_source_as_of_map({"dse_market": dse}, bb_forex_ok=False)
         for key in (
             "dsex", "dsex_change", "dsex_change_pct", "ds30", "dses",
             "turnover_crore", "total_trades", "advancing", "declining", "unchanged",
@@ -218,17 +229,32 @@ class TestDseTradingDay:
             date=date(2026, 7, 18), scraped_at=_NOW, trading_day=False,
             indices=None, market=None, source_url="https://example.com",
         )
-        m = agg._build_tier1_source_as_of_map({"dse_market": dse})
+        m = agg._build_tier1_source_as_of_map({"dse_market": dse}, bb_forex_ok=False)
         assert "dsex" not in m
         assert "turnover_crore" not in m
 
 
-class TestCommodityScrapedAt:
-    def test_commodity_keys_use_scraped_at_date(self):
-        scraped = datetime(2026, 4, 3, 12, 0, tzinfo=timezone.utc)
-        commodities = _commodity_snapshot(scraped_at=scraped)
-        m = agg._build_tier1_source_as_of_map({"commodity_prices": commodities})
+class TestCommoditySnapshotDate:
+    """Review round 2, item 2: commodities are dated from `commodities.date`
+    (the scraper's own calendar-day field), not `commodities.scraped_at.date()`
+    (a UTC timestamp) -- the commodity timer fires ~23:08 UTC, the same
+    pre-midnight off-by-one risk that justified the forex change (item 2 of
+    review round 1)."""
+
+    def test_commodity_keys_use_the_date_field(self):
+        commodities = _commodity_snapshot(snapshot_date=date(2026, 4, 3))
+        m = agg._build_tier1_source_as_of_map({"commodity_prices": commodities}, bb_forex_ok=False)
         assert m["brent_crude_usd_barrel"] == date(2026, 4, 3)
+
+    def test_uses_date_field_not_scraped_at_when_they_differ(self):
+        """Decoupled fixture: scraped_at 23:08Z day N, date day N+1 (matching
+        the commodity timer's actual near-midnight-UTC fire time) -- `.date`
+        must win, not `.scraped_at.date()`."""
+        scraped_at_utc = datetime(2026, 4, 1, 23, 8, tzinfo=timezone.utc)
+        commodities = _commodity_snapshot(scraped_at=scraped_at_utc, snapshot_date=date(2026, 4, 2))
+        m = agg._build_tier1_source_as_of_map({"commodity_prices": commodities}, bb_forex_ok=False)
+        assert m["brent_crude_usd_barrel"] == date(2026, 4, 2)
+        assert m["brent_crude_usd_barrel"] != scraped_at_utc.date()
 
 
 class TestAliasPropagation:
@@ -260,19 +286,22 @@ class TestAliasPropagation:
         assert "usd_bdt_mid" in m
         assert "gross_reserves_usd_bn" in m
 
-    def test_bb_forex_ok_defaults_to_false(self):
-        """Conservative default: a caller that forgets to pass bb_forex_ok
-        gets no alias date, never a possibly-wrong one."""
+    def test_bb_forex_ok_is_a_required_keyword_argument(self):
+        """Review round 2, item 3: bb_forex_ok has no default -- a caller
+        that forgets to pass it gets a TypeError at the call site, not a
+        silently-wrong "no alias date" fallback (which is what a permissive
+        default would produce, indistinguishable from a correctly-computed
+        False)."""
         forex = _forex_snapshot()
-        m = agg._build_tier1_source_as_of_map({"bb_forex": forex})
-        assert "usd_bdt_exchange_rate" not in m
-        assert "fx_reserve_gross_and_bpm6" not in m
+        with pytest.raises(TypeError):
+            agg._build_tier1_source_as_of_map({"bb_forex": forex})  # missing bb_forex_ok
 
 
 class TestEmptySnapshots:
     def test_all_none_returns_empty_map(self):
         m = agg._build_tier1_source_as_of_map(
-            {"bb_forex": None, "dse_market": None, "commodity_prices": None}
+            {"bb_forex": None, "dse_market": None, "commodity_prices": None},
+            bb_forex_ok=False,
         )
         assert m == {}
 
