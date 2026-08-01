@@ -373,6 +373,88 @@ def test_main_end_to_end_forex_reserves_none_no_crash(
     assert "fx_reserve_gross_and_bpm6" not in payload["data"]
 
 
+def _setup_v3_with_usd_bdt_exchange_rate_indicator(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, v3_value: float
+) -> Path:
+    """v3 registry + snapshot with a `usd_bdt_exchange_rate` indicator (same id
+    the force-overwrite alias block also mints from bb_forex), so tests can
+    check which value wins depending on bb_forex's freshness."""
+    monkeypatch.setattr(agg, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(agg, "DATA_DIR", tmp_path / "data")
+    monkeypatch.setattr(agg, "LATEST_PATH", tmp_path / "data" / "latest.json")
+    monkeypatch.setattr(agg, "CONFIG_PATH", tmp_path / "config" / "sources.json")
+    monkeypatch.setattr(agg, "SOURCES_V3_PATH", tmp_path / "config" / "sources-v3.json")
+
+    (tmp_path / "config").mkdir()
+    (tmp_path / "data").mkdir()
+    (tmp_path / "config" / "sources.json").write_text(json.dumps({"sources": {}}))
+    (tmp_path / "config" / "sources-v3.json").write_text(json.dumps({
+        "version": "3.0",
+        "indicators": [{
+            "id": "usd_bdt_exchange_rate",
+            "name": "USD/BDT Exchange Rate",
+            "domain": "forex_and_reserves",
+            "cadence": "daily",
+            "fetch": {"type": "html", "url": "https://www.bb.org.bd/en/"},
+            "parse": {
+                "deterministic": "html_footer_ticker",
+                "value_type": "amount_bdt",
+                "valid_range": [0, 1000],
+                "llm_prompt": "html_footer_ticker.txt",
+            },
+        }],
+    }))
+    v3_dir = tmp_path / "data" / "usd_bdt_exchange_rate"
+    v3_dir.mkdir(parents=True)
+    (v3_dir / "2026-04-20.json").write_text(json.dumps({
+        "indicator_id": "usd_bdt_exchange_rate",
+        "cadence": "daily",
+        "scraped_at": datetime.now(timezone.utc).isoformat(),
+        "value": v3_value,
+        "_provenance": "deterministic",
+        "_parse_strategy": "html_footer_ticker",
+    }))
+    return tmp_path / "data"
+
+
+def test_force_overwrite_skipped_when_bb_forex_stale(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When bb_forex's own status is stale, the force-overwrite must NOT
+    clobber the v3 registry's own (independently-parsed) value for the same
+    concept -- the stale direct scrape shouldn't win just because it's
+    usually more reliable."""
+    data_dir = _setup_v3_with_usd_bdt_exchange_rate_indicator(tmp_path, monkeypatch, v3_value=999.9)
+    stale = datetime.now(timezone.utc) - timedelta(hours=48)
+    _write_snapshot(data_dir / "bb_forex" / "2026-04-20.json", _forex_snapshot(scraped_at=stale))
+    monkeypatch.setenv("ECONDELTA_DRY_RUN", "1")
+
+    rc = agg.main()
+    assert rc == 0
+
+    payload = json.loads((data_dir / "latest.json").read_text())
+    assert payload["data"]["usd_bdt_exchange_rate"] == 999.9
+
+
+def test_force_overwrite_wins_when_bb_forex_ok(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When bb_forex's own status is ok (current behaviour, unchanged), the
+    direct-scrape rate wins over the v3 registry's independently-parsed
+    value -- the v3 parse-stage path frequently fails (Akamai/PDF drift)."""
+    data_dir = _setup_v3_with_usd_bdt_exchange_rate_indicator(tmp_path, monkeypatch, v3_value=999.9)
+    _write_snapshot(
+        data_dir / "bb_forex" / "2026-04-20.json", _forex_snapshot(scraped_at=_NOW)
+    )
+    monkeypatch.setenv("ECONDELTA_DRY_RUN", "1")
+
+    rc = agg.main()
+    assert rc == 0
+
+    payload = json.loads((data_dir / "latest.json").read_text())
+    assert payload["data"]["usd_bdt_exchange_rate"] == 122.7  # _forex_snapshot's usd_bdt_mid
+
+
 def test_main_fires_warning_on_stale_source(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -63,7 +63,7 @@ Read the data contract for column semantics and query examples: [`data-contract.
 | external_sector | `remittance_by_country` | `amount_usd_bn` | monthly | BB | [0.0, 10.0] | Remittance by country |
 | external_sector (brief conversion) | `remit_fy_mn` | `amount_usd_bn` | fiscal_year | BB | — | Conversion of `fy_remittance` × 1000.0 — FY Remittance |
 | external_sector (brief conversion) | `remit_monthly_mn` | `amount_usd_bn` | monthly | BB | — | Conversion of `monthly_remittance` × 1000.0 — Monthly Remittance |
-| forex_and_reserves | `fx_reserve_gross_and_bpm6` | `amount_usd_bn` | weekly | BB | [0.0, 100.0] | FX Reserve Gross and BPM6 |
+| forex_and_reserves | `fx_reserve_gross_and_bpm6` | `amount_usd_bn` | monthly | BB | [0.0, 100.0] | FX Reserve Gross and BPM6 |
 | forex_and_reserves | `usd_bdt_exchange_rate` | `rate` | daily | BB | [80.0, 200.0] | USD/BDT Exchange Rate |
 | government_finance | `bank_borrowing_for_deficit_financing` | `amount_bdt_crore` | monthly | BB | [0.0, 400000.0] | Bank Borrowing for Deficit Financing |
 | government_finance | `debt_domestic_stock_cr` | `amount_bdt_crore` | quarterly | mof.gov.bd | [500000.0, 3000000.0] | Domestic Debt Outstanding Stock (MoF Debt Bulletin; FY25 ~Tk11.95tn). Stock level, NOT the deficit-financing flow domestic_borrowing_for_budget_deficit. |

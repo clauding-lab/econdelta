@@ -47,6 +47,14 @@ def test_scraper_only_ids_are_mapped():
     assert m["usd_bdt_mid"] == "daily"
 
 
+def test_gross_reserves_is_monthly_not_daily():
+    """Reclassified with the Tier-1 as_of forgery fix: BB's reserves figure is
+    an END-of-month stock, not a daily-moving one. Was 'daily' (2-day grace),
+    which would falsely flag a correctly-dated month-old reading as stale."""
+    m = load_cadence_map()
+    assert m["gross_reserves_usd_bn"] == "monthly"
+
+
 def test_resolve_falls_back_to_prefix_rules():
     m = load_cadence_map()
     # per-ticker DSE close (not in config)

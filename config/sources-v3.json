@@ -949,7 +949,7 @@
       "id": "fx_reserve_gross_and_bpm6",
       "name": "FX Reserve Gross and BPM6",
       "domain": "forex_and_reserves",
-      "cadence": "weekly",
+      "cadence": "monthly",
       "fetch": {
         "type": "pdf",
         "url": "https://www.bb.org.bd/en/index.php/publication/publictn/5/27",

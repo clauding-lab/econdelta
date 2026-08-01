@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import sys
+from calendar import monthrange
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -40,6 +41,24 @@ HOLIDAYS_PATH = REPO_ROOT / "config" / "holidays_2026.json"
 # judged against the last *closed* trading session, not raw age — so a Fri/Sat/holiday
 # gap is NOT flagged stale. Everything else uses the plain age threshold.
 _TRADING_DAY_SOURCES = frozenset({"dse_market"})
+
+# Deterministic parsers that scrape a LIVE page (today's HTML ticker/table)
+# with no publication date printed anywhere to recover -- a missing
+# source_as_of from these is BY DESIGN, not a bug, regardless of the
+# indicator's nominal registry cadence (a few of these back "weekly" entries
+# too, e.g. tbond_5y_yield/10y_yield -- the underlying scrape still has no
+# dated document). `_build_source_as_of_map`'s undated-metric warning exempts
+# this set so extending that warning to every cadence doesn't turn into daily
+# noise for indicators that never had a date to lose (see
+# feedback_observability_allow_list_pattern.md: warn-on-X needs an allow-list
+# of by-design non-X shapes first). Parsers NOT listed here (dam_ticker,
+# html_footer_ticker, every PDF parser) DO attempt source_as_of recovery, so
+# a miss from them is real signal.
+_NEVER_DATED_PARSE_STRATEGIES = frozenset({
+    "html_table_row",
+    "html_call_money",
+    "dse_sector_heat",
+})
 
 STALE_THRESHOLD_HOURS = 24.0
 
@@ -319,6 +338,12 @@ def _fiscal_year(d: date) -> int:
     return d.year if d.month >= FISCAL_YEAR_START_MONTH else d.year - 1
 
 
+def _month_end(d: date) -> date:
+    """Last calendar day of d's month (e.g. 2026-05-01 -> 2026-05-31,
+    2024-02-01 -> 2024-02-29)."""
+    return d.replace(day=monthrange(d.year, d.month)[1])
+
+
 def _is_cumulative_regression(
     today_value: object,
     prior_value: object,
@@ -566,19 +591,44 @@ def _build_source_as_of_map(domains: dict[str, dict[str, Any]]) -> dict[str, dat
         for indicator_id, snapshot in indicators.items():
             raw = snapshot.get("source_as_of")
             if not raw:
-                # Daily metrics legitimately lack source_as_of (today's date is
-                # correct). But a slow-cadence metric with no recovered date will
-                # be stamped with today's run date, which makes a stale value look
-                # fresh on The Brief — surface it loudly instead of silently.
-                # Slow cadences in config/sources-v3.json are "quarterly" and
-                # "fiscal_year" (there is no "annual").
-                if snapshot.get("cadence") in ("quarterly", "fiscal_year"):
-                    logger.warning(
-                        "%s is %s cadence but carries no source_as_of — its "
-                        "metric_history row will be stamped with today's run date "
-                        "(a stale value can read as fresh). Check the parser's "
-                        "date recovery for this source.",
-                        indicator_id, snapshot.get("cadence"),
+                # A metric with no recovered date is stamped with today's run
+                # date, which makes a stale value look fresh on The Brief.
+                # Originally this only warned for "quarterly"/"fiscal_year"
+                # (the slow cadences); extended to ALL cadences below, because
+                # a daily/monthly parser that silently stops recovering its
+                # date is exactly as dangerous. The allow-list guard is what
+                # makes that safe: `_NEVER_DATED_PARSE_STRATEGIES` are parsers
+                # that scrape a live page with no date to recover at all
+                # (source_as_of absent BY DESIGN, not a bug) — without it,
+                # extending to all cadences would warn on ~9 registry
+                # indicators every single run.
+                if snapshot.get("_parse_strategy") in _NEVER_DATED_PARSE_STRATEGIES:
+                    continue
+                cadence = snapshot.get("cadence")
+                logger.warning(
+                    "%s is %s cadence but carries no source_as_of — its "
+                    "metric_history row will be stamped with today's run date "
+                    "(a stale value can read as fresh). Check the parser's "
+                    "date recovery for this source.",
+                    indicator_id, cadence,
+                )
+                # Quarterly/fiscal_year metrics are few (~13 in the registry),
+                # so a per-indicator Discord alert is useful signal — an
+                # undated FSAR/fiscal figure usually means a parser date-
+                # recovery regression worth acting on same-day. Daily/weekly/
+                # monthly can number in the dozens; a single upstream outage
+                # would otherwise fire a Discord message per affected metric,
+                # so those stay log-only (still visible in
+                # logs/econdelta-aggregate-systemd.log) — alert-noise rule.
+                if cadence in ("quarterly", "fiscal_year"):
+                    notify(
+                        "warning",
+                        f"undated {cadence} metric: {indicator_id}",
+                        f"{indicator_id} is {cadence} cadence but carries no "
+                        "source_as_of — its metric_history row will be "
+                        "stamped with today's run date (a stale value can "
+                        "read as fresh). Check the parser's date recovery "
+                        "for this source.",
                     )
                 continue
             try:
@@ -599,6 +649,68 @@ def _build_source_as_of_map(domains: dict[str, dict[str, Any]]) -> dict[str, dat
     for brief_key, (source_key, _mult) in BRIEF_CONVERSIONS.items():
         if source_key in result and brief_key not in result:
             result[brief_key] = result[source_key]
+    return result
+
+
+def _build_tier1_source_as_of_map(snapshots: dict[str, Any]) -> dict[str, date]:
+    """Per-metric publication dates for the 3 Tier-1 SCRAPER_SPEC sources.
+
+    ``_build_source_as_of_map`` above only sees the v3 registry's ``domains``
+    dict. The three Tier-1 snapshots (bb_forex, dse_market, commodity_prices —
+    ``SCRAPER_SPEC``) never enter that dict, so their ``flatten_data`` keys
+    could never receive a publication-date override: every aggregate run
+    stamped them with today's run date regardless of how stale the underlying
+    snapshot file actually was ("as_of forgery" — a frozen BB reserves figure,
+    or a Fri/Sat/failed-scrape DSEX carry-forward, read as fresh on The Brief
+    every single day). This mirrors ``_build_source_as_of_map``'s
+    metric_id -> date shape for those keys.
+    """
+    result: dict[str, date] = {}
+
+    forex = snapshots.get("bb_forex")
+    if forex is not None:
+        rates_date = forex.scraped_at.date()
+        for rate_key in ("usd_bdt_mid", "usd_bdt_buy", "usd_bdt_sell", "eur_bdt", "gbp_bdt"):
+            result[rate_key] = rates_date
+        # The force-overwrite alias (main(), ~1001) mints usd_bdt_exchange_rate
+        # straight from forex.rates.usd_bdt_mid — same date.
+        result["usd_bdt_exchange_rate"] = rates_date
+        if forex.reserves is not None:
+            # BB's headline reserves figure is the END-of-month stock.
+            # reserves_date parses the source's month label to the 1st (e.g.
+            # "May 2026" -> 2026-05-01); stamping the 1st would age the row
+            # ~30 extra days against the sentinel's 45-day monthly grace
+            # (sentinel/cadence.py GRACE_DAYS_BY_CADENCE["monthly"]), so use
+            # the month's last day instead.
+            result["gross_reserves_usd_bn"] = _month_end(forex.reserves.reserves_date)
+            # The other force-overwrite alias mints fx_reserve_gross_and_bpm6
+            # straight from forex.reserves.gross_reserves_usd_bn — same date.
+            result["fx_reserve_gross_and_bpm6"] = result["gross_reserves_usd_bn"]
+
+    dse = snapshots.get("dse_market")
+    if dse is not None:
+        # DseSnapshot.date is the trading day itself (scrapers/dse_market.py
+        # sets it to date.today() only when is_bd_trading_day() is True) —
+        # NOT the `trading_day` field, which is a bool ("did the market trade
+        # today"). Using scraped_at here would be wrong on the Fri/Sat/
+        # holiday carry-forward path, where a snapshot file re-read today
+        # still describes the LAST trading day's close.
+        if dse.indices is not None:
+            for dse_key in ("dsex", "dsex_change", "dsex_change_pct", "ds30", "dses"):
+                result[dse_key] = dse.date
+        if dse.market is not None:
+            for dse_key in (
+                "turnover_crore", "total_trades", "advancing", "declining", "unchanged",
+            ):
+                result[dse_key] = dse.date
+
+    commodities = snapshots.get("commodity_prices")
+    if commodities is not None:
+        commodity_date = commodities.scraped_at.date()
+        for key, cp in commodities.prices.items():
+            unit_suffix = f"{cp.currency.lower()}_{cp.unit.replace(' ', '_')}"
+            result[f"{key}_{unit_suffix}"] = commodity_date
+
     return result
 
 
@@ -998,8 +1110,18 @@ def main() -> int:
     # indicators come from BB PDFs and frequently fail (Akamai TSPD challenge,
     # PDF format drift) — leaving 0.0 in data_additions which would shadow the
     # working bb_forex.py-direct scrape. Apply the alias here so it wins.
+    #
+    # Freshness-gated: only overwrite when bb_forex's OWN status is "ok". A
+    # stale direct scrape shouldn't clobber the v3 registry's own (possibly
+    # fresher) independent parse of the same concept just because the direct
+    # scrape is usually more reliable. When stale, whatever the v3 pipeline
+    # produced is left as-is — and the underlying usd_bdt_mid /
+    # gross_reserves_usd_bn keys (set unconditionally by flatten_data above)
+    # still flow regardless, now honestly dated via
+    # _build_tier1_source_as_of_map, which is the actual point of this guard.
     forex = snapshots.get("bb_forex")
-    if forex is not None:
+    forex_status = sources_status.get("bb_forex")
+    if forex is not None and forex_status is not None and forex_status.status == "ok":
         data["usd_bdt_exchange_rate"] = forex.rates.usd_bdt_mid
         if forex.reserves is not None:
             data["fx_reserve_gross_and_bpm6"] = forex.reserves.gross_reserves_usd_bn
@@ -1119,7 +1241,18 @@ def main() -> int:
             # Slow-cadence metrics (quarterly FSAR, monthly news) carry source_as_of
             # from the parser so metric_history.as_of reflects the true publication
             # date rather than today's run date — fixing the freshness-pill lie.
-            source_as_of_map = _build_source_as_of_map(domains)
+            #
+            # Merged with the Tier-1 map (bb_forex/dse_market/commodity_prices —
+            # SCRAPER_SPEC), which never enters the v3 `domains` dict above and so
+            # could never get an override here otherwise. Tier-1 keys and v3
+            # registry keys should never collide (the two pipelines cover disjoint
+            # indicator ids), but if sources-v3.json ever grows an entry that
+            # shadows a Tier-1 flatten_data key, the v3-recovered date (parsed
+            # from the source document's own text) wins — it merges LAST.
+            source_as_of_map = {
+                **_build_tier1_source_as_of_map(snapshots),
+                **_build_source_as_of_map(domains),
+            }
             # Explicit write timestamp so the E2.2 landed-count read-back counts
             # exactly this upsert's rows.
             write_ts = datetime.now(timezone.utc)

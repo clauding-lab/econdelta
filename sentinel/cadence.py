@@ -44,7 +44,10 @@ _SCRAPER_CADENCE: dict[str, str] = {
     "usd_bdt_sell": "daily",
     "eur_bdt": "daily",
     "gbp_bdt": "daily",
-    "gross_reserves_usd_bn": "daily",
+    # END-of-month stock, not a daily-moving figure -- reclassified with the
+    # Tier-1 as_of forgery fix (aggregate_latest._build_tier1_source_as_of_map
+    # now stamps this with the reserves month-end, not the run date).
+    "gross_reserves_usd_bn": "monthly",
     "import_cover_months": "daily",
     "usd_bdt_exchange_rate": "daily",
     "fx_reserve_gross_and_bpm6": "daily",
