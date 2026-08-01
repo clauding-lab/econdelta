@@ -23,13 +23,29 @@ from datetime import date
 # skipped briefings that should have run. Matches sentinel/cadence.py's
 # GRACE_DAYS_BY_CADENCE, which already used 165 for the same reason.
 #
-# monthly=45 (was 35, owner-approved 2026-08-01, review round 1): BBS CPI —
-# a core-tier metric — was measured publishing at 32-53 day lags per vintage
-# (32/53/36d observed), so the old 35d window would go dark again on the very
-# next slow vintage (July CPI at the median lag lands ~2026-09-01, 4 days past
-# a 2026-08-10 five-week-old check). Matches sentinel/cadence.py's
-# GRACE_DAYS_BY_CADENCE, which already used 45 for the same reason. Do NOT
-# widen further without owner sign-off — a wider window is a separate decision.
+# monthly=45 (was 35, owner-approved 2026-08-01, review round 1, corrected
+# review round 2): BBS CPI — a core-tier metric — was measured publishing at
+# 32/36/53 day lags across three recent vintages, so the old 35d window keeps
+# going dark on the slow tail. Matches sentinel/cadence.py's
+# GRACE_DAYS_BY_CADENCE, which already used 45 for the same reason.
+#
+# Worked timeline under the fix (point_to_point_inflation as_of 2026-06-30):
+# Mondays 08-03 fresh (34d) and 08-10 fresh (41d — this is the Monday the OLD
+# 35d window would have LOST, since 41 > 35) both still generate; 08-17,
+# 08-24, and 08-31 are STILL STALE (48d/55d/62d) — 45d does not cover the
+# whole gap to the next vintage, only the first one. Recovery lands on 09-07
+# ONLY IF July CPI (as_of 2026-07-31) has arrived by then: the three observed
+# BBS lags (32/36/53d) put its real arrival at 09-01, 09-05, and 09-22
+# respectively, so the two faster lags recover the 09-07 briefing but the
+# slowest (53d, arriving 09-22) leaves it dark too — a source-lag gap this
+# window was never meant to close, not a pipeline fault.
+#
+# Trade-off, accepted: widening 35->45 also means the 3 monthly core
+# policy_rate_* ids (repo/sdf/slf) now take 46 days of real silence to trip
+# the gate instead of 36 before a genuine freeze is caught — aligned with the
+# sentinel's own 45d grace, and accepted as the cost of not false-positiving
+# on CPI's normal lag. Do NOT widen further without owner sign-off — a wider
+# window is a separate decision.
 #
 # daily=2 (was 1, owner-approved 2026-08-01): under honest Tier-1 source_as_of
 # dating (as_of comes from the source, never the run date — AGENTS.md
