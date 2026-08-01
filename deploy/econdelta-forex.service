@@ -33,7 +33,14 @@ ReadWritePaths=/home/adnan-local/econdelta/data /home/adnan-local/econdelta/logs
 
 # Timeouts + retry on transient failures
 TimeoutStartSec=300
+# exit 2 = anomaly hold (rate anomaly: write skipped; reserves same-month
+# revision or month regression: snapshot written but the previous reserves
+# value held) — not a transient failure. A restart would hit BB again and
+# reach the identical verdict, wasting a Playwright fetch against BB's
+# CAPTCHA wall and duplicating the Discord alert. Retry only genuine
+# failures (exit 1: fetch/parse/validation).
 Restart=on-failure
+RestartPreventExitStatus=2
 RestartSec=300
 
 # Logging — systemd journal + append to file

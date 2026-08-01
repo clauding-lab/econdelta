@@ -29,6 +29,16 @@ THRESHOLDS_PATH = REPO_ROOT / "config" / "thresholds.json"
 # Fiscal-year header row on BB's reserves table, e.g. "2025-2026".
 _FISCAL_YEAR_RE = re.compile(r"^\s*(\d{4})\s*-\s*(\d{4})\s*$")
 
+# The month-advance path in main() accepts any magnitude step by design
+# (reserves genuinely move in month-sized jumps -- BB's real May->June 2026
+# step was +8.77%). But a wrong-VALUE-column read (e.g. BPM6 instead of
+# gross, which reads ~13-15% lower for the SAME period on live BB data) can
+# land on a fresh month too, since the month label lives in a different
+# table cell than the value -- the date alone can't catch it. This band
+# doesn't block the advance (still accepted, still written); it only decides
+# whether a human gets a heads-up.
+RESERVES_ADVANCE_SANITY_BAND = 0.10
+
 logger = logging.getLogger("bb_forex")
 
 # ParseError re-exported from scrapers.bb_forex_captcha so existing callers
@@ -316,9 +326,17 @@ def _parse_reserves_date(
     row read is "November" with no header in view — that is November 2026,
     not a November that hasn't happened yet).
 
+    An unrecognised period label (e.g. BB relabels "March" to "Mar-2026")
+    raises ParseError rather than fabricating today's month — silently
+    guessing a date here would accept whatever value came with that row with
+    no alert, which is worse than failing loudly.
+
     Args:
         today: Injectable "current date" for deterministic tests. Defaults to
             date.today().
+
+    Raises:
+        ParseError: month_name doesn't match a known English month name.
     """
     today = today or date.today()
 
@@ -331,8 +349,10 @@ def _parse_reserves_date(
 
     month_num = month_map.get(month_name.lower().strip())
     if month_num is None:
-        # Unrecognised month — fall back to first of current month
-        return date(today.year, today.month, 1)
+        raise ParseError(
+            f"unrecognised reserves period label {month_name!r} — "
+            "BB's reserves table layout may have changed"
+        )
 
     if fiscal_year:
         match = _FISCAL_YEAR_RE.match(fiscal_year)
@@ -481,13 +501,39 @@ def main() -> int:
         #                        signature (e.g. reading the BPM6 column)
         if prev_res is not None:
             if reserves.reserves_date > prev_res.reserves_date:
+                # Accepted regardless of magnitude -- but a step outside the
+                # wide sanity band still gets a notify so a human can check
+                # for a wrong-column read (the date alone can't catch that;
+                # the month label and the value live in different cells).
+                advance_ok, advance_pct = check_threshold(
+                    "gross_reserves_usd_bn",
+                    reserves.gross_reserves_usd_bn,
+                    prev_res.gross_reserves_usd_bn,
+                    {"gross_reserves_usd_bn": RESERVES_ADVANCE_SANITY_BAND},
+                )
                 logger.info(
-                    "reserves month advanced %s -> %s (%.4fbn -> %.4fbn)",
+                    "reserves month advanced %s -> %s (%.4fbn -> %.4fbn, %.2f%% step)",
                     prev_res.reserves_date,
                     reserves.reserves_date,
                     prev_res.gross_reserves_usd_bn,
                     reserves.gross_reserves_usd_bn,
+                    advance_pct * 100,
                 )
+                if not advance_ok:
+                    notify(
+                        "warning",
+                        "bb_forex reserves month-advance step unusually large",
+                        (
+                            f"gross_reserves {prev_res.reserves_date.isoformat()} -> "
+                            f"{reserves.reserves_date.isoformat()}: "
+                            f"{prev_res.gross_reserves_usd_bn:.2f}bn -> "
+                            f"{reserves.gross_reserves_usd_bn:.2f}bn ({advance_pct:.2%}) "
+                            f"exceeds the {RESERVES_ADVANCE_SANITY_BAND:.0%} sanity band "
+                            "— verify this isn't a wrong-column read (e.g. BPM6 vs gross)"
+                        ),
+                    )
+                # Still accepted either way -- reserves_for_snapshot stays
+                # the new value, exit_code stays 0.
             elif reserves.reserves_date == prev_res.reserves_date:
                 ok, pct = check_threshold(
                     "gross_reserves_usd_bn",
