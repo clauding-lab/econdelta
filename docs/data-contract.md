@@ -492,7 +492,7 @@ new default.
 |---|---|---|
 | daily | 2 BD **trading** days | weekend/holiday gap is not stale; the sentinel does the trading-day math, the view approximates with 4 calendar days |
 | weekly | 10 days | |
-| monthly | 45 days | |
+| monthly | 45 days | the sentinel and this DB view stay at 45 (unchanged); the briefing's OWN publish gate deliberately uses 60 — see `briefing/freshness.py`'s `_STALE_DAYS_BY_CADENCE` and its worked-timeline comment |
 | quarterly | 165 days | |
 | fiscal_year | 400 days | |
 
