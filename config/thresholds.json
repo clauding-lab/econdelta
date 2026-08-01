@@ -1,6 +1,6 @@
 {
   "_meta": {
-    "description": "Per-metric anomaly thresholds as fractional daily change. >0.10 = 10%. If a scraped value deviates from previous by more than threshold, write is SKIPPED and Discord alert fires.",
+    "description": "Per-metric anomaly thresholds as fractional daily change. >0.10 = 10%. If a scraped value deviates from previous by more than threshold, write is SKIPPED and Discord alert fires. Exception: gross_reserves_usd_bn is a MONTHLY series (bb_forex) — its band only applies to a same-month revision of an already-published figure, never to a normal month-to-month step, which is accepted regardless of magnitude.",
     "tune_after": "2 weeks of live data",
     "schema_version": "1.0"
   },

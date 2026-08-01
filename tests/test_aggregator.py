@@ -231,6 +231,19 @@ def test_flatten_data_handles_missing_scrapers() -> None:
     assert data == {}
 
 
+def test_flatten_data_reserves_none_omits_reserves_keys() -> None:
+    """A bb_forex snapshot whose reserves is None (e.g. the very first run,
+    before any monthly reserves reading has ever landed) must not crash and
+    must not emit any reserves-derived key -- rates still flow through."""
+    snapshot = _forex_snapshot().model_copy(update={"reserves": None})
+    snapshots = {"bb_forex": snapshot, "dse_market": None, "commodity_prices": None}
+    data = agg.flatten_data(snapshots)
+    assert data["usd_bdt_mid"] == 122.7
+    assert "gross_reserves_usd_bn" not in data
+    assert "import_cover_months" not in data
+    assert "reserves_date" not in data
+
+
 def test_flatten_data_commodity_keys_include_unit() -> None:
     snapshots = {
         "bb_forex": None,
@@ -327,6 +340,37 @@ def test_main_end_to_end_with_all_scrapers_fresh(
     assert "usd_bdt_mid" in payload["data"]
     assert "dsex" in payload["data"]
     assert "brent_crude_usd_barrel" in payload["data"]
+
+
+def test_main_end_to_end_forex_reserves_none_no_crash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A bb_forex snapshot with reserves=None must not crash the force-overwrite
+    alias block (~aggregate_latest.py:1001-1005) that sets
+    fx_reserve_gross_and_bpm6 from forex.reserves -- that block must respect
+    the same None guard as flatten_data. The rates-only alias
+    (usd_bdt_exchange_rate) is unaffected."""
+    data_dir, cfg_path = _build_data_tree(tmp_path)
+    latest_path = data_dir / "latest.json"
+
+    forex_no_reserves = _forex_snapshot().model_copy(update={"reserves": None})
+    _write_snapshot(data_dir / "bb_forex" / "2026-04-20.json", forex_no_reserves)
+
+    monkeypatch.setattr(agg, "DATA_DIR", data_dir)
+    monkeypatch.setattr(agg, "LATEST_PATH", latest_path)
+    monkeypatch.setattr(agg, "CONFIG_PATH", cfg_path)
+    monkeypatch.setenv("ECONDELTA_DRY_RUN", "1")
+
+    exit_code = agg.main()
+    assert exit_code == 0
+
+    payload = json.loads(latest_path.read_text())
+    assert "usd_bdt_mid" in payload["data"]
+    assert "usd_bdt_exchange_rate" in payload["data"]
+    assert "gross_reserves_usd_bn" not in payload["data"]
+    assert "reserves_date" not in payload["data"]
+    assert "import_cover_months" not in payload["data"]
+    assert "fx_reserve_gross_and_bpm6" not in payload["data"]
 
 
 def test_main_fires_warning_on_stale_source(
