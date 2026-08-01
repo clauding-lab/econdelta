@@ -35,9 +35,14 @@ from utils.schema import (  # noqa: E402
 _NOW = datetime.now(timezone.utc)
 
 
-def _forex_snapshot(scraped_at: datetime = _NOW) -> ForexSnapshot:
+def _forex_snapshot(
+    scraped_at: datetime = _NOW, snapshot_date: date | None = None
+) -> ForexSnapshot:
+    """`date` defaults to `scraped_at.date()` -- realistic pairing, matching
+    the real scraper (scrapers/bb_forex.py sets both at the same moment).
+    Pass `snapshot_date` to decouple them explicitly."""
     return ForexSnapshot(
-        date=date(2026, 4, 20),
+        date=snapshot_date if snapshot_date is not None else scraped_at.date(),
         scraped_at=scraped_at,
         rates=ForexRates(
             usd_bdt_mid=122.7,
@@ -371,6 +376,143 @@ def test_main_end_to_end_forex_reserves_none_no_crash(
     assert "reserves_date" not in payload["data"]
     assert "import_cover_months" not in payload["data"]
     assert "fx_reserve_gross_and_bpm6" not in payload["data"]
+
+
+def _setup_v3_with_usd_bdt_exchange_rate_indicator(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, v3_value: float
+) -> Path:
+    """v3 registry + snapshot with a `usd_bdt_exchange_rate` indicator (same id
+    the force-overwrite alias block also mints from bb_forex), so tests can
+    check which value wins depending on bb_forex's freshness."""
+    monkeypatch.setattr(agg, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(agg, "DATA_DIR", tmp_path / "data")
+    monkeypatch.setattr(agg, "LATEST_PATH", tmp_path / "data" / "latest.json")
+    monkeypatch.setattr(agg, "CONFIG_PATH", tmp_path / "config" / "sources.json")
+    monkeypatch.setattr(agg, "SOURCES_V3_PATH", tmp_path / "config" / "sources-v3.json")
+
+    (tmp_path / "config").mkdir()
+    (tmp_path / "data").mkdir()
+    (tmp_path / "config" / "sources.json").write_text(json.dumps({"sources": {}}))
+    (tmp_path / "config" / "sources-v3.json").write_text(json.dumps({
+        "version": "3.0",
+        "indicators": [{
+            "id": "usd_bdt_exchange_rate",
+            "name": "USD/BDT Exchange Rate",
+            "domain": "forex_and_reserves",
+            "cadence": "daily",
+            "fetch": {"type": "html", "url": "https://www.bb.org.bd/en/"},
+            "parse": {
+                "deterministic": "html_footer_ticker",
+                "value_type": "amount_bdt",
+                "valid_range": [0, 1000],
+                "llm_prompt": "html_footer_ticker.txt",
+            },
+        }],
+    }))
+    v3_dir = tmp_path / "data" / "usd_bdt_exchange_rate"
+    v3_dir.mkdir(parents=True)
+    (v3_dir / "2026-04-20.json").write_text(json.dumps({
+        "indicator_id": "usd_bdt_exchange_rate",
+        "cadence": "daily",
+        "scraped_at": datetime.now(timezone.utc).isoformat(),
+        "value": v3_value,
+        "_provenance": "deterministic",
+        "_parse_strategy": "html_footer_ticker",
+    }))
+    return tmp_path / "data"
+
+
+def test_force_overwrite_skipped_when_bb_forex_stale(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When bb_forex's own status is stale, the force-overwrite must NOT
+    clobber the v3 registry's own (independently-parsed) value for the same
+    concept -- the stale direct scrape shouldn't win just because it's
+    usually more reliable."""
+    data_dir = _setup_v3_with_usd_bdt_exchange_rate_indicator(tmp_path, monkeypatch, v3_value=999.9)
+    stale = datetime.now(timezone.utc) - timedelta(hours=48)
+    _write_snapshot(data_dir / "bb_forex" / "2026-04-20.json", _forex_snapshot(scraped_at=stale))
+    monkeypatch.setenv("ECONDELTA_DRY_RUN", "1")
+
+    rc = agg.main()
+    assert rc == 0
+
+    payload = json.loads((data_dir / "latest.json").read_text())
+    assert payload["data"]["usd_bdt_exchange_rate"] == 999.9
+
+
+def test_force_overwrite_wins_when_bb_forex_ok(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When bb_forex's own status is ok (current behaviour, unchanged), the
+    direct-scrape rate wins over the v3 registry's independently-parsed
+    value -- the v3 parse-stage path frequently fails (Akamai/PDF drift)."""
+    data_dir = _setup_v3_with_usd_bdt_exchange_rate_indicator(tmp_path, monkeypatch, v3_value=999.9)
+    _write_snapshot(
+        data_dir / "bb_forex" / "2026-04-20.json", _forex_snapshot(scraped_at=_NOW)
+    )
+    monkeypatch.setenv("ECONDELTA_DRY_RUN", "1")
+
+    rc = agg.main()
+    assert rc == 0
+
+    payload = json.loads((data_dir / "latest.json").read_text())
+    assert payload["data"]["usd_bdt_exchange_rate"] == 122.7  # _forex_snapshot's usd_bdt_mid
+
+
+def test_alias_date_follows_gated_value_not_stale_bb_forex_date(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review round 1, item 1 (HIGH): when bb_forex is stale, the alias VALUE
+    correctly falls back to the v3 pipeline's own value (999.9, proven by
+    test_force_overwrite_skipped_when_bb_forex_stale above) -- but pre-fix,
+    the Tier-1 map still stamped that fresh v3 value with bb_forex's OLD
+    stale date, because the date override was unconditional while the value
+    override was gated. A fresh value wearing a stale date is exactly the
+    forgery this PR set out to kill, just relocated. The fix: the Tier-1 map
+    must only date usd_bdt_exchange_rate/fx_reserve_gross_and_bpm6 from
+    bb_forex when bb_forex's own status is "ok" -- same gate as the value.
+
+    Review round 2 note: the original version of this test asserted
+    `got != stale_date` where `stale_date = stale.date()` (a scraped_at-
+    derived reference) -- vacuous once _build_tier1_source_as_of_map moved to
+    reading `forex.date` (review round 1, item 2) instead of
+    `forex.scraped_at.date()`, because this file's `_forex_snapshot` helper
+    hardcoded `date=date(2026, 4, 20)` regardless of `scraped_at`, so the
+    produced date was NEVER equal to `stale_date` even with both bb_forex_ok
+    gates sabotaged to `if True:`. Fixed two ways: `_forex_snapshot` now
+    pairs `date`/`scraped_at` realistically (like the real scraper), and the
+    assertion tests the actual contract -- absence of the key, not a date
+    comparison that can pass by construction."""
+    data_dir = _setup_v3_with_usd_bdt_exchange_rate_indicator(tmp_path, monkeypatch, v3_value=999.9)
+    stale = datetime.now(timezone.utc) - timedelta(hours=48)
+    _write_snapshot(data_dir / "bb_forex" / "2026-04-20.json", _forex_snapshot(scraped_at=stale))
+    monkeypatch.setenv("ECONDELTA_DRY_RUN", "1")
+    monkeypatch.setenv("ECONDELTA_SKIP_SUPABASE", "0")
+
+    import utils.supabase_writer as sw
+
+    captured: dict = {}
+
+    def _fake_upsert(**kwargs):
+        captured.update(kwargs)
+        return len(kwargs.get("data", {}))
+
+    monkeypatch.setattr(sw, "upsert_metric_history", _fake_upsert)
+    monkeypatch.setattr(sw, "upsert_metric_definitions_seed", lambda *a, **k: 0)
+
+    rc = agg.main()
+    assert rc == 0
+    assert captured, "expected upsert_metric_history to be called"
+
+    # The value is the fresh v3 one (999.9), confirmed by the sibling test above.
+    assert captured["data"]["usd_bdt_exchange_rate"] == 999.9
+    source_as_of_map = captured.get("source_as_of_map") or {}
+    assert "usd_bdt_exchange_rate" not in source_as_of_map, (
+        f"usd_bdt_exchange_rate must get NO Tier-1 date when bb_forex is stale "
+        f"-- found {source_as_of_map.get('usd_bdt_exchange_rate')!r} instead. "
+        f"The date must follow the (gated) value, not bb_forex unconditionally."
+    )
 
 
 def test_main_fires_warning_on_stale_source(

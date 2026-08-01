@@ -44,10 +44,18 @@ _SCRAPER_CADENCE: dict[str, str] = {
     "usd_bdt_sell": "daily",
     "eur_bdt": "daily",
     "gbp_bdt": "daily",
-    "gross_reserves_usd_bn": "daily",
+    # END-of-month stock, not a daily-moving figure -- reclassified with the
+    # Tier-1 as_of forgery fix (aggregate_latest._build_tier1_source_as_of_map
+    # now stamps this with the reserves month-end, not the run date).
+    "gross_reserves_usd_bn": "monthly",
     "import_cover_months": "daily",
     "usd_bdt_exchange_rate": "daily",
-    "fx_reserve_gross_and_bpm6": "daily",
+    # Inert in practice -- fx_reserve_gross_and_bpm6 has its own
+    # sources-v3.json entry, so `load_cadence_map`'s config pass sets it
+    # before this scraper map is ever consulted (setdefault no-ops here).
+    # Kept truthful anyway (monthly, matching config/sources-v3.json) so this
+    # line doesn't contradict the gross_reserves_usd_bn entry above it.
+    "fx_reserve_gross_and_bpm6": "monthly",
     # dse_market index — daily (trading-day aware)
     "dsex": "daily",
     "ds30": "daily",

@@ -276,7 +276,17 @@ class TestUndatedQuarterlyWarns:
             agg._build_source_as_of_map(domains)
         assert any("fy_export" in r.getMessage() for r in caplog.records)
 
-    def test_daily_metric_without_date_does_not_warn(self, caplog):
+    def test_daily_metric_without_date_now_warns_log_only(self, caplog):
+        """Tier-1 PR: the silent-freeze warning now covers ALL cadences, not
+        just quarterly/fiscal_year -- a daily/monthly source that stops
+        recovering its date is just as capable of forging a stale-reads-fresh
+        row (this is exactly the bug class the Tier-1 as_of forgery fix
+        addresses for bb_forex/dse_market/commodity_prices). This synthetic
+        snapshot carries no `_parse_strategy`, so it is NOT on the by-design-
+        undated allow-list (_NEVER_DATED_PARSE_STRATEGIES) and DOES warn --
+        previously (pre-fix) it silently did not. See
+        test_live_scrape_parser_stays_silent_on_the_allow_list below for the
+        sibling case that correctly stays silent."""
         import aggregate_latest as agg
 
         domains = {
@@ -290,6 +300,149 @@ class TestUndatedQuarterlyWarns:
         }
         with caplog.at_level(logging.WARNING, logger="aggregate_latest"):
             agg._build_source_as_of_map(domains)
-        assert not any(
+        assert any(
             "food_rice_coarse" in r.getMessage() for r in caplog.records
-        ), "daily metrics legitimately lack source_as_of — must not warn"
+        ), "daily/monthly cadences must now warn too -- only the parser allow-list is silent"
+
+    def test_live_scrape_parser_stays_silent_on_the_allow_list(self, caplog):
+        """html_table_row / html_call_money / dse_sector_heat scrape a LIVE
+        page with no publication date printed anywhere to recover --
+        source_as_of is legitimately always absent for these, so warning here
+        would be pure noise on every single aggregate run (~9 registry
+        indicators). The allow-list keys off `_parse_strategy`, not cadence,
+        because these parsers also back some "weekly" registry entries
+        (tbond_5y_yield / tbond_10y_yield) where the scrape is still same-day
+        HTML with nothing to date."""
+        import aggregate_latest as agg
+
+        domains = {
+            "money_market": {
+                "bill_bond_rates": {
+                    "value": 10.5,
+                    "cadence": "daily",
+                    "_parse_strategy": "html_table_row",
+                    "scraped_at": datetime.now(timezone.utc).isoformat(),
+                },
+                "tbond_5y_yield": {
+                    "value": 11.2,
+                    "cadence": "weekly",
+                    "_parse_strategy": "html_table_row",
+                    "scraped_at": datetime.now(timezone.utc).isoformat(),
+                },
+                "call_money_rate": {
+                    "value": 9.8,
+                    "cadence": "daily",
+                    "_parse_strategy": "html_call_money",
+                    "scraped_at": datetime.now(timezone.utc).isoformat(),
+                },
+            }
+        }
+        with caplog.at_level(logging.WARNING, logger="aggregate_latest"):
+            agg._build_source_as_of_map(domains)
+        for indicator_id in ("bill_bond_rates", "tbond_5y_yield", "call_money_rate"):
+            assert not any(indicator_id in r.getMessage() for r in caplog.records), (
+                f"{indicator_id} uses a live-scrape parser with no date to "
+                "recover -- must stay silent (allow-list)"
+            )
+
+
+class TestUndatedWarningDiscordSplit:
+    """Item 3 of the Tier-1 as_of forgery fix: quarterly/fiscal_year undated
+    metrics fire a Discord `notify()` (few enough to be useful signal);
+    daily/weekly/monthly stay log-only (dozens possible on a broad outage --
+    the repo's alert-noise rule, see feedback_observability_allow_list_pattern.md)."""
+
+    def test_quarterly_undated_metric_fires_discord_notify(self, monkeypatch):
+        import aggregate_latest as agg
+
+        notify_calls: list[tuple] = []
+        monkeypatch.setattr(agg, "notify", lambda *a, **k: notify_calls.append(a))
+        domains = {
+            "money_market": {
+                "gross_npl_ratio": {
+                    "value": 35.73, "cadence": "quarterly",
+                    "scraped_at": datetime.now(timezone.utc).isoformat(),
+                },
+            }
+        }
+        agg._build_source_as_of_map(domains)
+        assert len(notify_calls) == 1
+        assert notify_calls[0][0] == "warning"
+        # Title is now stable (batched alert, review round 1 item 4) — the id
+        # lives in the body/message, not the title.
+        assert "gross_npl_ratio" in notify_calls[0][2]
+
+    def test_multiple_undated_quarterly_ids_fire_exactly_one_notify(self, monkeypatch):
+        """Review round 1, item 4: systemd starts a fresh process per aggregate
+        run, so the notifier's (level, title) dedup can't collapse a per-id
+        title across runs -- a chronically-undated id (landmine 26's
+        debt_gdp_ratio / gdp / fy_* / debt stocks, up to 11 quarterly+
+        fiscal_year indicators) would otherwise fire a separate Discord
+        message EVERY run, forever. All undated quarterly/fiscal_year ids in
+        one run must collapse into ONE notify call, listing every id in the
+        body."""
+        import aggregate_latest as agg
+
+        notify_calls: list[tuple] = []
+        monkeypatch.setattr(agg, "notify", lambda *a, **k: notify_calls.append(a))
+        domains = {
+            "money_market": {
+                "gross_npl_ratio": {
+                    "value": 35.73, "cadence": "quarterly",
+                    "scraped_at": datetime.now(timezone.utc).isoformat(),
+                },
+            },
+            "fiscal": {
+                "debt_gdp_ratio": {
+                    "value": 34.5, "cadence": "fiscal_year",
+                    "scraped_at": datetime.now(timezone.utc).isoformat(),
+                },
+                "gdp": {
+                    "value": 45000000.0, "cadence": "fiscal_year",
+                    "scraped_at": datetime.now(timezone.utc).isoformat(),
+                },
+            },
+        }
+        agg._build_source_as_of_map(domains)
+        assert len(notify_calls) == 1, "3 undated ids must collapse into exactly 1 notify call"
+        level, title, message = notify_calls[0]
+        assert level == "warning"
+        assert title == "aggregate — undated slow-cadence indicators"
+        for indicator_id in ("gross_npl_ratio", "debt_gdp_ratio", "gdp"):
+            assert indicator_id in message
+
+    def test_monthly_undated_metric_logs_only_no_discord(self, monkeypatch, caplog):
+        import aggregate_latest as agg
+
+        notify_calls: list[tuple] = []
+        monkeypatch.setattr(agg, "notify", lambda *a, **k: notify_calls.append(a))
+        domains = {
+            "fiscal": {
+                "tax_revenue": {
+                    "value": 30000.0, "cadence": "monthly",
+                    "scraped_at": datetime.now(timezone.utc).isoformat(),
+                },
+            }
+        }
+        with caplog.at_level(logging.WARNING, logger="aggregate_latest"):
+            agg._build_source_as_of_map(domains)
+        assert notify_calls == [], "monthly must stay log-only -- no Discord"
+        assert any("tax_revenue" in r.getMessage() for r in caplog.records)
+
+    def test_weekly_undated_metric_logs_only_no_discord(self, monkeypatch, caplog):
+        import aggregate_latest as agg
+
+        notify_calls: list[tuple] = []
+        monkeypatch.setattr(agg, "notify", lambda *a, **k: notify_calls.append(a))
+        domains = {
+            "forex_and_reserves": {
+                "fx_reserve_gross_and_bpm6": {
+                    "value": 34.5, "cadence": "weekly",
+                    "scraped_at": datetime.now(timezone.utc).isoformat(),
+                },
+            }
+        }
+        with caplog.at_level(logging.WARNING, logger="aggregate_latest"):
+            agg._build_source_as_of_map(domains)
+        assert notify_calls == [], "weekly must stay log-only -- no Discord"
+        assert any("fx_reserve_gross_and_bpm6" in r.getMessage() for r in caplog.records)
