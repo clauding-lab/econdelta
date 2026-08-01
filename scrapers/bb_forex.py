@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import sys
 import time
 from datetime import date, datetime, timezone
@@ -24,6 +25,16 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = REPO_ROOT / "data" / "bb_forex"
 CONFIG_PATH = REPO_ROOT / "config" / "sources.json"
 THRESHOLDS_PATH = REPO_ROOT / "config" / "thresholds.json"
+
+# Fiscal-year header row on BB's reserves table, e.g. "2025-2026".
+_FISCAL_YEAR_RE = re.compile(r"^\s*(\d{4})\s*-\s*(\d{4})\s*$")
+
+# Fallback bounds for the month-advance sanity check (see main()) when
+# config/thresholds.json is missing the gross_reserves_usd_bn_advance_drop /
+# _jump keys -- normally those keys drive the check; these are a belt-and-
+# suspenders default only.
+_RESERVES_ADVANCE_DROP_DEFAULT = 0.10
+_RESERVES_ADVANCE_JUMP_DEFAULT = 0.25
 
 logger = logging.getLogger("bb_forex")
 
@@ -262,12 +273,10 @@ def parse_reserves(html: str) -> ForexReserves:
 
         if len(cells) == 1:
             text = cells[0].get_text(strip=True)
-            # Fiscal year header looks like "2025-2026" or "(In million US $)"
-            if "-" in text and text.replace("-", "").replace(" ", "").isdigit() is False:
-                # Could be fiscal year like "2025-2026"
-                parts = text.split("-")
-                if len(parts) == 2 and parts[0].strip().isdigit() and parts[1].strip().isdigit():
-                    current_year = text.strip()
+            # Fiscal year header looks like "2025-2026"; other 1-cell rows
+            # are noise like "(In million US $)" and are skipped.
+            if _FISCAL_YEAR_RE.match(text):
+                current_year = text
             continue
 
         if len(cells) >= 3:
@@ -298,13 +307,35 @@ def parse_reserves(html: str) -> ForexReserves:
     )
 
 
-def _parse_reserves_date(month_name: str, fiscal_year: str | None) -> date:
+def _parse_reserves_date(
+    month_name: str, fiscal_year: str | None, today: date | None = None
+) -> date:
     """Derive a date from month name and fiscal year string like '2025-2026'.
 
-    BD fiscal year runs July–June. Month names are English (January, February, etc.).
-    We determine the calendar year from which half of the fiscal year the month falls in.
-    If fiscal_year is unknown we use the current year.
+    BD fiscal year runs July-June. Month names are English (January, February, etc.).
+    July-December fall in the fiscal year's start (calendar) year; January-June fall
+    in its end (calendar) year.
+
+    When no fiscal-year header was captured (or it doesn't match the expected
+    "YYYY-YYYY" shape), fall back to today's year — but guard the January
+    window: if that fallback lands in the future, the row's month must belong
+    to last year, not this one (e.g. today is 2027-01-05 and the most recent
+    row read is "November" with no header in view — that is November 2026,
+    not a November that hasn't happened yet).
+
+    An unrecognised period label (e.g. BB relabels "March" to "Mar-2026")
+    raises ParseError rather than fabricating today's month — silently
+    guessing a date here would accept whatever value came with that row with
+    no alert, which is worse than failing loudly.
+
+    Args:
+        today: Injectable "current date" for deterministic tests. Defaults to
+            date.today().
+
+    Raises:
+        ParseError: month_name doesn't match a known English month name.
     """
+    today = today or date.today()
 
     month_map = {
         m.lower(): i for i, m in enumerate(
@@ -315,24 +346,26 @@ def _parse_reserves_date(month_name: str, fiscal_year: str | None) -> date:
 
     month_num = month_map.get(month_name.lower().strip())
     if month_num is None:
-        # Unrecognised month — fall back to first of current month
-        today = date.today()
-        return date(today.year, today.month, 1)
+        raise ParseError(
+            f"unrecognised reserves period label {month_name!r} — "
+            "BB's reserves table layout may have changed"
+        )
 
     if fiscal_year:
-        # fiscal_year like "2025-2026": first half (Jul-Dec) = start year, second half (Jan-Jun) = end year
-        parts = fiscal_year.split("-")
-        try:
-            start_year = int(parts[0].strip())
-            end_year = int(parts[1].strip())
-        except (ValueError, IndexError):
-            start_year = date.today().year
-            end_year = start_year
-        year = end_year if month_num <= 6 else start_year
-    else:
-        year = date.today().year
+        match = _FISCAL_YEAR_RE.match(fiscal_year)
+        if match:
+            # fiscal_year like "2025-2026": first half (Jul-Dec) = start year,
+            # second half (Jan-Jun) = end year.
+            start_year, end_year = int(match.group(1)), int(match.group(2))
+            year = end_year if month_num <= 6 else start_year
+            return date(year, month_num, 1)
 
-    return date(year, month_num, 1)
+    # No usable fiscal header — fall back to today's year, with the
+    # future-date guard described above.
+    candidate = date(today.year, month_num, 1)
+    if candidate > today:
+        candidate = date(today.year - 1, month_num, 1)
+    return candidate
 
 
 def load_previous_snapshot(today: date) -> ForexSnapshot | None:
@@ -376,10 +409,19 @@ def write_snapshot(snapshot: ForexSnapshot) -> Path:
 def main() -> int:
     """Fetch, validate, anomaly-check, and write a ForexSnapshot.
 
+    Reserves are published MONTHLY, not daily, so they are gated on month
+    advance rather than the rates' fractional-change band — see the reserves
+    section below for the month-advance / same-month-revision / month-regressed
+    cases.
+
     Exit codes:
-        0 — success, snapshot written
+        0 — success, snapshot written with fresh rates and fresh (or
+            month-advanced) reserves
         1 — fetch / parse / validation error
-        2 — anomaly detected, write skipped
+        2 — anomaly: a rate anomaly skips the write entirely; a reserves
+            same-month revision anomaly or month regression HOLDS reserves
+            (the previous reserves value is carried forward verbatim) but
+            still writes the snapshot with fresh rates
     """
     logging.basicConfig(
         level=logging.INFO,
@@ -407,13 +449,25 @@ def main() -> int:
         )
         reserves = parse_reserves(reserves_html)
         reserves = reserves.model_copy(update={"source_url": reserves_url})
-    except (ParseError, Exception) as e:
-        logger.exception("fetch/parse failed")
+    except ParseError as e:
+        logger.exception("bb_forex parse failed")
+        notify(
+            "error",
+            "bb_forex parse failed",
+            f"{type(e).__name__}: {e} — BB page layout may have changed",
+        )
+        return 1
+    except Exception as e:
+        logger.exception("bb_forex fetch failed")
         notify("error", "bb_forex fetch failed", f"{type(e).__name__}: {e}")
         return 1
 
     # Anomaly check vs previous snapshot
     prev = load_previous_snapshot(date.today())
+    prev_res = prev.reserves if prev is not None else None
+    reserves_for_snapshot = reserves
+    exit_code = 0
+
     if prev is not None:
         rate_checks = [
             ("usd_bdt_mid", rates.usd_bdt_mid, prev.rates.usd_bdt_mid),
@@ -432,34 +486,113 @@ def main() -> int:
                 )
                 return 2
 
-        if prev.reserves is not None:
-            ok, pct = check_threshold(
-                "gross_reserves_usd_bn",
-                reserves.gross_reserves_usd_bn,
-                prev.reserves.gross_reserves_usd_bn,
-                thresholds,
-            )
-            if not ok:
+        # Reserves are published MONTHLY (see BB's #sortableTable), unlike the
+        # daily rates above — a >3% step is the expected shape of a normal
+        # month-to-month move, not an anomaly. Gate on reserves_date instead:
+        #   - month advanced  -> accept the new value regardless of magnitude
+        #   - same month      -> apply the existing fractional-change band;
+        #                        a trip HOLDS the previous value (revision
+        #                        noise / mid-cycle re-read), doesn't reject
+        #                        the whole run
+        #   - month regressed -> HOLD; this is the wrong-column/layout
+        #                        signature (e.g. reading the BPM6 column)
+        if prev_res is not None:
+            if reserves.reserves_date > prev_res.reserves_date:
+                # Accepted regardless of magnitude -- reserves genuinely move
+                # in month-sized jumps, including large POSITIVE ones: BD's
+                # fiscal year ends in June, and June reserves spike hard
+                # (this repo's own fixture history: May->June 2025 = +23.16%,
+                # May->June 2024 = +10.40%, both entirely legitimate). A
+                # wrong-VALUE-column read (e.g. landing on BPM6 instead of
+                # gross, which reads noticeably lower for the same period --
+                # observed at -12.4% / -15.3%) can land on a fresh month too,
+                # since the month label and the value live in different table
+                # cells -- the date alone can't catch it.
+                #
+                # The split between the two is DIRECTIONAL, not a shared
+                # magnitude cutoff: legitimate large steps are positive
+                # (June spikes), wrong-column reads are negative. The
+                # largest legitimate NEGATIVE step observed (a fiscal
+                # year-end June -> July rollover) is only -6.21%. Because a
+                # June spike and a column swap can overlap in raw magnitude,
+                # this check stays warn-only -- it must never HOLD an
+                # advance, only flag one for a human to check.
+                drop_limit = thresholds.get(
+                    "gross_reserves_usd_bn_advance_drop", _RESERVES_ADVANCE_DROP_DEFAULT
+                )
+                jump_limit = thresholds.get(
+                    "gross_reserves_usd_bn_advance_jump", _RESERVES_ADVANCE_JUMP_DEFAULT
+                )
+                if prev_res.gross_reserves_usd_bn:
+                    signed_pct = (
+                        reserves.gross_reserves_usd_bn - prev_res.gross_reserves_usd_bn
+                    ) / prev_res.gross_reserves_usd_bn
+                else:
+                    signed_pct = 0.0
+                logger.info(
+                    "reserves month advanced %s -> %s (%.4fbn -> %.4fbn, %+.2f%% step)",
+                    prev_res.reserves_date,
+                    reserves.reserves_date,
+                    prev_res.gross_reserves_usd_bn,
+                    reserves.gross_reserves_usd_bn,
+                    signed_pct * 100,
+                )
+                if signed_pct < -drop_limit or signed_pct > jump_limit:
+                    notify(
+                        "warning",
+                        "bb_forex reserves month-advance step unusually large",
+                        (
+                            f"gross_reserves {prev_res.reserves_date.isoformat()} -> "
+                            f"{reserves.reserves_date.isoformat()}: "
+                            f"{prev_res.gross_reserves_usd_bn:.2f}bn -> "
+                            f"{reserves.gross_reserves_usd_bn:.2f}bn ({signed_pct:+.2%}) "
+                            f"is outside [-{drop_limit:.0%}, +{jump_limit:.0%}] "
+                            "— verify this isn't a wrong-column read (e.g. BPM6 vs gross)"
+                        ),
+                    )
+                # Still accepted either way -- reserves_for_snapshot stays
+                # the new value, exit_code stays 0.
+            elif reserves.reserves_date == prev_res.reserves_date:
+                ok, pct = check_threshold(
+                    "gross_reserves_usd_bn",
+                    reserves.gross_reserves_usd_bn,
+                    prev_res.gross_reserves_usd_bn,
+                    thresholds,
+                )
+                if not ok:
+                    notify(
+                        "warning",
+                        "bb_forex reserves same-month revision anomaly — value held",
+                        (
+                            f"gross_reserves at {reserves.reserves_date.isoformat()}: "
+                            f"{prev_res.gross_reserves_usd_bn:.2f}bn -> "
+                            f"{reserves.gross_reserves_usd_bn:.2f}bn ({pct:.2%})"
+                        ),
+                    )
+                    reserves_for_snapshot = prev_res
+                    exit_code = 2
+            else:
                 notify(
                     "warning",
-                    "bb_forex reserves anomaly — write skipped",
+                    "bb_forex reserves month regressed — value held",
                     (
-                        f"gross_reserves: {prev.reserves.gross_reserves_usd_bn:.2f}bn "
-                        f"-> {reserves.gross_reserves_usd_bn:.2f}bn ({pct:.2%})"
+                        f"reserves_date regressed: {prev_res.reserves_date.isoformat()} "
+                        f"-> {reserves.reserves_date.isoformat()}"
                     ),
                 )
-                return 2
+                reserves_for_snapshot = prev_res
+                exit_code = 2
 
     snapshot = ForexSnapshot(
         schema_version="1.0",
         date=date.today(),
         scraped_at=datetime.now(timezone.utc),
         rates=rates,
-        reserves=reserves,
+        reserves=reserves_for_snapshot,
     )
     path = write_snapshot(snapshot)
     logger.info("wrote %s", path)
-    return 0
+    return exit_code
 
 
 if __name__ == "__main__":

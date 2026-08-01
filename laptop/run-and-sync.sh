@@ -10,7 +10,9 @@
 #   1. Activate venv
 #   2. Run scraper module
 #   3. If scraper exits 0 (success or non-trading-day no-op), rsync snapshot dir to VPS
-#   4. If scraper exits 2 (anomaly — write skipped), log but do not rsync
+#   4. If scraper exits 2 (anomaly hold), rsync anyway — bb_forex still writes a
+#      snapshot on hold (fresh rates + previous reserves carried forward); a
+#      scraper that skips the write entirely on exit 2 just gets a no-op rsync
 #   5. If scraper exits 1 (hard error), log, do not rsync; scraper already fired Discord
 #   6. Log all output to logs/launchd-<scraper>.log
 
@@ -57,8 +59,15 @@ mkdir -p "$(dirname "$LOG_FILE")"
 
   echo "scraper exit code: $RC"
 
-  # Rsync only on clean exit (0)
-  if [[ "$RC" -eq 0 ]]; then
+  # Rsync on RC 0 (clean) or RC 2 (anomaly hold) — bb_forex still writes a
+  # snapshot on hold (fresh rates + held reserves; see scrapers/bb_forex.py
+  # main()), so skipping the sync on RC 2 would strand that write on the
+  # laptop forever. A scraper that skips the write entirely on RC 2 just
+  # gets a harmless no-op rsync.
+  if [[ "$RC" -eq 0 || "$RC" -eq 2 ]]; then
+    if [[ "$RC" -eq 2 ]]; then
+      echo "INFO: anomaly hold — snapshot written, syncing"
+    fi
     SRC_DIR="$ECONDELTA_HOME/data/$SCRAPER"
     DEST="$ECONDELTA_VPS:$ECONDELTA_VPS_REPO/data/$SCRAPER/"
     echo "+ rsync $SRC_DIR/ -> $DEST"
@@ -72,8 +81,6 @@ mkdir -p "$(dirname "$LOG_FILE")"
     # Trigger VPS aggregator so latest.json refreshes immediately
     echo "+ ssh remote aggregator trigger"
     ssh -o ConnectTimeout=10 "$ECONDELTA_VPS" "sudo systemctl start econdelta-aggregate.service" 2>&1 || echo "WARN: remote aggregator trigger failed (non-fatal)"
-  elif [[ "$RC" -eq 2 ]]; then
-    echo "INFO: anomaly exit — skipping rsync (no write to sync)"
   else
     echo "ERROR: scraper failed (exit $RC); Discord alert fired by scraper"
   fi

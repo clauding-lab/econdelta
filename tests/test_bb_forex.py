@@ -17,6 +17,7 @@ import pytest
 
 from scrapers.bb_forex import (
     ParseError,
+    _parse_reserves_date,
     load_previous_snapshot,
     parse_exchange_rates,
     parse_reserves,
@@ -44,6 +45,7 @@ def _make_snapshot(
     eur_bdt: float = 144.34,
     gbp_bdt: float = 165.85,
     gross_reserves: float = 34.1166,
+    reserves_date: date = date(2026, 3, 1),
 ) -> ForexSnapshot:
     rates = ForexRates(
         usd_bdt_mid=usd_mid,
@@ -56,7 +58,7 @@ def _make_snapshot(
     reserves = ForexReserves(
         gross_reserves_usd_bn=gross_reserves,
         import_cover_months=None,
-        reserves_date=date(2026, 3, 1),
+        reserves_date=reserves_date,
         source_url="https://example.com/reserves",
     )
     return ForexSnapshot(
@@ -181,7 +183,9 @@ class TestParseReserves:
         assert reserves.reserves_date.day == 1
 
     def test_reserves_date_is_march_2026(self):
-        """Most recent row in fixture is March 2026."""
+        """Most recent row in fixture is March 2026, driven off the fiscal-year
+        header row ('2025-2026') actually present in the table — not off
+        date.today(), so this holds regardless of which year the suite runs in."""
         html = _read_fixture("bb_forex_reserves.html")
         reserves = parse_reserves(html)
         assert reserves.reserves_date == date(2026, 3, 1)
@@ -207,6 +211,73 @@ class TestParseReserves:
         reserves = parse_reserves(html)
         assert reserves.gross_reserves_usd_bn == pytest.approx(34.1166, abs=0.0001)
         assert reserves.import_cover_months is None
+        assert reserves.reserves_date == date(2026, 3, 1)
+
+    def test_reserves_date_uses_fiscal_header_unlike_current_year(self):
+        """A fiscal header year that does NOT match whatever year the suite
+        happens to run in must still win — the dead isdigit() check this PR
+        fixes silently defeated every fiscal header and fell back to
+        date.today().year, so a suite running in 2026 could never catch that
+        bug against a 2026 fixture (the fallback and the header answer
+        coincided by accident). A header from a different decade discriminates
+        the fix: 2019-2020 header + 'March' -> 2020-03-01, never today's year."""
+        html = (
+            "<html><body>"
+            "<table id='sortableTable'>"
+            "<tr><td>(In million US $)</td></tr>"
+            "<tr><td>Period</td><td>Foreign Exchange Reserves(Gross)</td><td>Foreign Exchange Reserves(as per BPM6)</td></tr>"
+            "<tr><td>2019-2020</td></tr>"
+            "<tr><td>March</td><td>32000.0</td><td>27000.0</td></tr>"
+            "</table>"
+            "</body></html>"
+        )
+        reserves = parse_reserves(html)
+        assert reserves.reserves_date == date(2020, 3, 1)
+
+
+class TestParseReservesDate:
+    """Direct coverage of _parse_reserves_date's fiscal-year math and the
+    no-header fallback's future-date guard (landmine: the old fiscal-header
+    regex was dead code, so every reserves_date silently used date.today().year)."""
+
+    def test_fiscal_header_is_clock_independent(self):
+        """A wildly wrong 'today' must not change a fiscal-header-driven result —
+        proves the header path never consults the wall clock."""
+        result = _parse_reserves_date("March", "2025-2026", today=date(1999, 1, 1))
+        assert result == date(2026, 3, 1)
+
+    def test_fiscal_window_second_half_month_maps_to_start_year(self):
+        """November (second half of the fiscal year, Jul-Dec) under header
+        '2026-2027' belongs to the start year, 2026."""
+        result = _parse_reserves_date("November", "2026-2027")
+        assert result == date(2026, 11, 1)
+
+    def test_fiscal_window_first_half_month_maps_to_end_year(self):
+        """February (first half of the fiscal year, Jan-Jun) under header
+        '2026-2027' belongs to the end year, 2027."""
+        result = _parse_reserves_date("February", "2026-2027")
+        assert result == date(2027, 2, 1)
+
+    def test_no_header_fallback_guards_the_january_window(self):
+        """No fiscal header seen; today is 2027-01-05 and the row reads
+        'November' — the naive fallback (today.year=2027) would land in the
+        future, so it must roll back to 2026."""
+        result = _parse_reserves_date("November", None, today=date(2027, 1, 5))
+        assert result == date(2026, 11, 1)
+
+    def test_no_header_fallback_january_stays_in_current_year(self):
+        """Same wall-clock date, but the row itself reads 'January' — that
+        does NOT land in the future, so no rollback is applied."""
+        result = _parse_reserves_date("January", None, today=date(2027, 1, 5))
+        assert result == date(2027, 1, 1)
+
+    def test_unrecognized_month_label_raises_parse_error(self):
+        """An unrecognised period label (e.g. BB relabels 'March' to
+        'Mar-2026') must raise ParseError, not fabricate
+        date(today.year, today.month, 1) — the old fabricated-date fallback
+        would have silently accepted whatever value came with that row."""
+        with pytest.raises(ParseError, match="unrecognised reserves period label"):
+            _parse_reserves_date("Mar-2026", "2025-2026")
 
 
 # ---------------------------------------------------------------------------
@@ -318,7 +389,9 @@ class TestMain:
         assert len(snapshots) == 1
 
     def test_exit_1_on_fetch_failure(self, tmp_path):
-        """main() returns 1 when fetch_rendered_html raises an exception."""
+        """main() returns 1 when fetch_rendered_html raises a generic (non-parse)
+        exception — the generic `except Exception` branch, notified as a fetch
+        failure."""
         with (
             patch("scrapers.bb_forex.fetch_rendered_html", side_effect=OSError("connection refused")),
             patch("scrapers.bb_forex.DATA_DIR", tmp_path),
@@ -332,6 +405,73 @@ class TestMain:
         mock_notify.assert_called_once()
         call_args = mock_notify.call_args[0]
         assert call_args[0] == "error"
+        assert call_args[1] == "bb_forex fetch failed"
+
+    def test_exit_1_on_parse_error_notified_distinctly_from_fetch_failure(self, tmp_path):
+        """A ParseError (e.g. BB's page layout changed) hits the dedicated
+        `except ParseError` branch — notified as a parse failure, distinct from
+        a generic fetch failure, with a hint that the layout may have changed."""
+        with (
+            patch("scrapers.bb_forex.fetch_rendered_html", return_value="<html></html>"),
+            patch(
+                "scrapers.bb_forex.parse_exchange_rates",
+                side_effect=ParseError("expected 2+ tables, got 0"),
+            ),
+            patch("scrapers.bb_forex.DATA_DIR", tmp_path),
+            patch("scrapers.bb_forex.notify") as mock_notify,
+        ):
+            from scrapers.bb_forex import main
+
+            result = main()
+
+        assert result == 1
+        assert list(tmp_path.glob("*.json")) == []
+        mock_notify.assert_called_once()
+        call_args = mock_notify.call_args[0]
+        assert call_args[0] == "error"
+        assert call_args[1] == "bb_forex parse failed"
+        assert "layout may have changed" in call_args[2]
+
+    def test_exit_1_on_unrecognized_reserves_month_label(self, tmp_path):
+        """BB relabels the period column (e.g. 'March' -> 'Mar-2026') --
+        _parse_reserves_date now raises ParseError instead of fabricating
+        date(today.year, today.month, 1), so this routes through main()'s
+        parse-failed path: exit 1, no write, distinct from a generic fetch
+        failure. Before this fix the fabricated date would have accepted
+        whatever (possibly garbage) value came with that row at exit 0."""
+        bad_reserves_html = (
+            "<html><body>"
+            "<table id='sortableTable'>"
+            "<tr><td>(In million US $)</td></tr>"
+            "<tr><td>Period</td><td>Foreign Exchange Reserves(Gross)</td><td>Foreign Exchange Reserves(as per BPM6)</td></tr>"
+            "<tr><td>2025-2026</td></tr>"
+            "<tr><td>Mar-2026</td><td>9000.0</td><td>7000.0</td></tr>"
+            "</table>"
+            "</body></html>"
+        )
+
+        def side_effect(url: str, *args, **kwargs) -> str:
+            if "exchangerate" in url:
+                return RATES_HTML
+            if "intreserve" in url:
+                return bad_reserves_html
+            raise ValueError(f"Unexpected URL: {url}")
+
+        with (
+            patch("scrapers.bb_forex.fetch_rendered_html", side_effect=side_effect),
+            patch("scrapers.bb_forex.DATA_DIR", tmp_path),
+            patch("scrapers.bb_forex.notify") as mock_notify,
+        ):
+            from scrapers.bb_forex import main
+
+            result = main()
+
+        assert result == 1
+        assert list(tmp_path.glob("*.json")) == []
+        mock_notify.assert_called_once()
+        call_args = mock_notify.call_args[0]
+        assert call_args[0] == "error"
+        assert call_args[1] == "bb_forex parse failed"
 
     def test_exit_2_on_rate_anomaly(self, mock_fetch, tmp_path):
         """main() returns 2 and skips write when USD rate exceeds threshold (>2%)."""
@@ -360,9 +500,13 @@ class TestMain:
         assert call_args[0] == "warning"
         assert "anomaly" in call_args[1].lower()
 
-    def test_exit_2_on_reserves_anomaly(self, mock_fetch, tmp_path):
-        """main() returns 2 when reserves change exceeds threshold (>3%)."""
-        # Previous snapshot has reserves 10% higher than fixture (~34.12bn) -> anomaly
+    def test_exit_2_on_reserves_same_month_revision_anomaly(self, mock_fetch, tmp_path):
+        """Same reserves_date as the freshly parsed reserves (March 2026, matching
+        the live fixture) but gross reserves jumps >3% -- this is a same-month
+        REVISION, not a month advance, so the existing fractional-change band
+        still applies. It must be HELD (previous reserves value carried
+        forward), NOT rejected outright -- the snapshot is still written with
+        fresh rates."""
         prev_snapshot = _make_snapshot(
             snapshot_date=date(2026, 4, 19),
             usd_mid=122.7,
@@ -371,6 +515,7 @@ class TestMain:
             eur_bdt=144.34,
             gbp_bdt=165.85,
             gross_reserves=50.0,  # far from live ~34.12bn -> > 3% change
+            reserves_date=date(2026, 3, 1),  # SAME month as the live fixture's March 2026
         )
 
         with (
@@ -383,14 +528,287 @@ class TestMain:
             result = main()
 
         assert result == 2
-        assert list(tmp_path.glob("*.json")) == []
-        mock_notify.assert_called_once()
+        # HOLD still writes -- the snapshot exists, with the OLD reserves value
+        # carried and fresh rates.
+        snapshots = list(tmp_path.glob("*.json"))
+        assert len(snapshots) == 1
+        raw = json.loads(snapshots[0].read_text(encoding="utf-8"))
+        written = ForexSnapshot.model_validate(raw)
+        assert written.reserves.gross_reserves_usd_bn == pytest.approx(50.0)
+        assert written.reserves.reserves_date == date(2026, 3, 1)
+        assert written.rates.usd_bdt_mid == pytest.approx(122.7000)
 
-    def test_no_write_on_anomaly(self, mock_fetch, tmp_path):
-        """Verify no partial JSON file exists after anomaly skip."""
+        mock_notify.assert_called_once()
+        call_args = mock_notify.call_args[0]
+        assert call_args[0] == "warning"
+        assert "revision" in call_args[1].lower()
+
+    def test_exit_0_on_reserves_month_advance_accepts_any_magnitude(self, mock_fetch, tmp_path):
+        """Reserves month advances (May -> June) with an 8.77% step -- BB's real
+        gross-reserves jump, 34.5478bn -> 37.5780bn -- must be ACCEPTED
+        regardless of magnitude because it's an ordinary monthly publication
+        advance, not daily noise."""
+        prev_snapshot = _make_snapshot(
+            snapshot_date=date(2026, 6, 5),
+            usd_mid=122.7,
+            usd_buy=122.7,
+            usd_sell=122.7,
+            eur_bdt=144.34,
+            gbp_bdt=165.85,
+            gross_reserves=34.5478,
+            reserves_date=date(2026, 5, 1),
+        )
+        new_reserves = ForexReserves(
+            gross_reserves_usd_bn=37.5780,
+            import_cover_months=None,
+            reserves_date=date(2026, 6, 1),
+            source_url="https://example.com/reserves",
+        )
+
+        with (
+            patch("scrapers.bb_forex.DATA_DIR", tmp_path),
+            patch("scrapers.bb_forex.load_previous_snapshot", return_value=prev_snapshot),
+            patch("scrapers.bb_forex.parse_reserves", return_value=new_reserves),
+            patch("scrapers.bb_forex.notify") as mock_notify,
+        ):
+            from scrapers.bb_forex import main
+
+            result = main()
+
+        assert result == 0
+        snapshots = list(tmp_path.glob("*.json"))
+        assert len(snapshots) == 1
+        raw = json.loads(snapshots[0].read_text(encoding="utf-8"))
+        written = ForexSnapshot.model_validate(raw)
+        assert written.reserves.gross_reserves_usd_bn == pytest.approx(37.5780)
+        assert written.reserves.reserves_date == date(2026, 6, 1)
+        mock_notify.assert_not_called()
+
+    def test_exit_0_on_reserves_month_advance_june_spike_silent(self, mock_fetch, tmp_path):
+        """BD's fiscal year ends in June, and June reserves genuinely spike --
+        this repo's own fixture history shows May->June 2025 at +23.16%
+        (25.7982bn -> 31.7720bn), entirely legitimate. This is the case a
+        SYMMETRIC band would have gotten wrong: a naive +/-10% band fires a
+        false-positive warning on this exact real step every June. Under the
+        signed, asymmetric band (gross_reserves_usd_bn_advance_jump=0.25),
+        a +23.16% advance stays silent."""
+        prev_snapshot = _make_snapshot(
+            snapshot_date=date(2025, 6, 5),
+            usd_mid=122.7,
+            usd_buy=122.7,
+            usd_sell=122.7,
+            eur_bdt=144.34,
+            gbp_bdt=165.85,
+            gross_reserves=25.7982,
+            reserves_date=date(2025, 5, 1),
+        )
+        june_spike_reserves = ForexReserves(
+            gross_reserves_usd_bn=31.7720,  # +23.16% -- real May->June 2025 fixture step
+            import_cover_months=None,
+            reserves_date=date(2025, 6, 1),
+            source_url="https://example.com/reserves",
+        )
+
+        with (
+            patch("scrapers.bb_forex.DATA_DIR", tmp_path),
+            patch("scrapers.bb_forex.load_previous_snapshot", return_value=prev_snapshot),
+            patch("scrapers.bb_forex.parse_reserves", return_value=june_spike_reserves),
+            patch("scrapers.bb_forex.notify") as mock_notify,
+        ):
+            from scrapers.bb_forex import main
+
+            result = main()
+
+        assert result == 0
+        snapshots = list(tmp_path.glob("*.json"))
+        assert len(snapshots) == 1
+        raw = json.loads(snapshots[0].read_text(encoding="utf-8"))
+        written = ForexSnapshot.model_validate(raw)
+        assert written.reserves.gross_reserves_usd_bn == pytest.approx(31.7720)
+        assert written.reserves.reserves_date == date(2025, 6, 1)
+        mock_notify.assert_not_called()
+
+    def test_exit_0_on_reserves_month_advance_fiscal_boundary_drop_silent(
+        self, mock_fetch, tmp_path
+    ):
+        """The fiscal year-end rollover (June -> July) genuinely DROPS --
+        this repo's own fixture history shows June->July 2025 at -6.21%
+        (31.7720bn -> 29.7998bn), the largest legitimate negative step
+        observed. Under the drop limit (gross_reserves_usd_bn_advance_drop
+        =0.10), -6.21% stays silent."""
+        prev_snapshot = _make_snapshot(
+            snapshot_date=date(2025, 7, 5),
+            usd_mid=122.7,
+            usd_buy=122.7,
+            usd_sell=122.7,
+            eur_bdt=144.34,
+            gbp_bdt=165.85,
+            gross_reserves=31.7720,
+            reserves_date=date(2025, 6, 1),
+        )
+        july_reserves = ForexReserves(
+            gross_reserves_usd_bn=29.7998,  # -6.21% -- real June->July 2025 fixture step
+            import_cover_months=None,
+            reserves_date=date(2025, 7, 1),
+            source_url="https://example.com/reserves",
+        )
+
+        with (
+            patch("scrapers.bb_forex.DATA_DIR", tmp_path),
+            patch("scrapers.bb_forex.load_previous_snapshot", return_value=prev_snapshot),
+            patch("scrapers.bb_forex.parse_reserves", return_value=july_reserves),
+            patch("scrapers.bb_forex.notify") as mock_notify,
+        ):
+            from scrapers.bb_forex import main
+
+            result = main()
+
+        assert result == 0
+        snapshots = list(tmp_path.glob("*.json"))
+        assert len(snapshots) == 1
+        raw = json.loads(snapshots[0].read_text(encoding="utf-8"))
+        written = ForexSnapshot.model_validate(raw)
+        assert written.reserves.gross_reserves_usd_bn == pytest.approx(29.7998)
+        assert written.reserves.reserves_date == date(2025, 7, 1)
+        mock_notify.assert_not_called()
+
+    def test_exit_0_on_reserves_month_advance_alerts_when_drop_exceeds_band(
+        self, mock_fetch, tmp_path
+    ):
+        """A month advance whose DROP exceeds
+        gross_reserves_usd_bn_advance_drop (0.10) -- e.g. a silent
+        gross->BPM6 column swap, which reads roughly -15% lower for the SAME
+        date since the month label and the value live in different table
+        cells -- must still be ACCEPTED and written (the date-based gate
+        never holds an advance), but must notify a warning so a human can
+        catch the wrong-column read. This is well past the -6.21% largest
+        legitimate drop observed, so it's unambiguously a signal, not noise."""
+        prev_snapshot = _make_snapshot(
+            snapshot_date=date(2026, 6, 5),
+            usd_mid=122.7,
+            usd_buy=122.7,
+            usd_sell=122.7,
+            eur_bdt=144.34,
+            gbp_bdt=165.85,
+            gross_reserves=37.5780,
+            reserves_date=date(2026, 6, 1),
+        )
+        swapped_column_reserves = ForexReserves(
+            gross_reserves_usd_bn=31.8286,  # -15.3% of 37.5780 -- BPM6-shaped
+            import_cover_months=None,
+            reserves_date=date(2026, 7, 1),  # month DID advance
+            source_url="https://example.com/reserves",
+        )
+
+        with (
+            patch("scrapers.bb_forex.DATA_DIR", tmp_path),
+            patch("scrapers.bb_forex.load_previous_snapshot", return_value=prev_snapshot),
+            patch("scrapers.bb_forex.parse_reserves", return_value=swapped_column_reserves),
+            patch("scrapers.bb_forex.notify") as mock_notify,
+        ):
+            from scrapers.bb_forex import main
+
+            result = main()
+
+        assert result == 0
+        snapshots = list(tmp_path.glob("*.json"))
+        assert len(snapshots) == 1
+        raw = json.loads(snapshots[0].read_text(encoding="utf-8"))
+        written = ForexSnapshot.model_validate(raw)
+        assert written.reserves.gross_reserves_usd_bn == pytest.approx(31.8286)
+        assert written.reserves.reserves_date == date(2026, 7, 1)
+
+        mock_notify.assert_called_once()
+        call_args = mock_notify.call_args[0]
+        assert call_args[0] == "warning"
+        assert "unusually large" in call_args[1].lower()
+
+    def test_exit_2_on_reserves_month_regressed_held(self, mock_fetch, tmp_path):
+        """New reserves_date is EARLIER than the previous snapshot's -- the
+        wrong-column / layout-drift signature (e.g. accidentally reading the
+        BPM6 column, which reads far lower than gross). HELD: the snapshot is
+        still written but with the previous reserves value carried forward."""
         prev_snapshot = _make_snapshot(
             snapshot_date=date(2026, 4, 19),
-            usd_mid=50.0,  # wildly wrong -> triggers anomaly
+            usd_mid=122.7,
+            usd_buy=122.7,
+            usd_sell=122.7,
+            eur_bdt=144.34,
+            gbp_bdt=165.85,
+            gross_reserves=37.5780,
+            reserves_date=date(2026, 6, 1),
+        )
+        regressed_reserves = ForexReserves(
+            gross_reserves_usd_bn=32.9,  # BPM6-shaped lower figure
+            import_cover_months=None,
+            reserves_date=date(2026, 5, 1),  # earlier than prev's June
+            source_url="https://example.com/reserves",
+        )
+
+        with (
+            patch("scrapers.bb_forex.DATA_DIR", tmp_path),
+            patch("scrapers.bb_forex.load_previous_snapshot", return_value=prev_snapshot),
+            patch("scrapers.bb_forex.parse_reserves", return_value=regressed_reserves),
+            patch("scrapers.bb_forex.notify") as mock_notify,
+        ):
+            from scrapers.bb_forex import main
+
+            result = main()
+
+        assert result == 2
+        snapshots = list(tmp_path.glob("*.json"))
+        assert len(snapshots) == 1
+        raw = json.loads(snapshots[0].read_text(encoding="utf-8"))
+        written = ForexSnapshot.model_validate(raw)
+        assert written.reserves.gross_reserves_usd_bn == pytest.approx(37.5780)
+        assert written.reserves.reserves_date == date(2026, 6, 1)
+        # A HOLD still lets fresh rates land -- only reserves are frozen.
+        assert written.rates.usd_bdt_mid == pytest.approx(122.7000)
+
+        mock_notify.assert_called_once()
+        call_args = mock_notify.call_args[0]
+        assert call_args[0] == "warning"
+        assert "regressed" in call_args[1].lower()
+
+    def test_exit_0_when_prev_reserves_is_none(self, mock_fetch, tmp_path):
+        """prev snapshot exists (so rate checks run) but its reserves is None
+        -- e.g. the very first reserves read, or the day after a HOLD that had
+        no baseline yet. Accepted unconditionally."""
+        prev_snapshot = _make_snapshot(
+            snapshot_date=date(2026, 4, 19),
+            usd_mid=122.7,
+            usd_buy=122.7,
+            usd_sell=122.7,
+            eur_bdt=144.34,
+            gbp_bdt=165.85,
+        )
+        prev_no_reserves = prev_snapshot.model_copy(update={"reserves": None})
+
+        with (
+            patch("scrapers.bb_forex.DATA_DIR", tmp_path),
+            patch("scrapers.bb_forex.load_previous_snapshot", return_value=prev_no_reserves),
+            patch("scrapers.bb_forex.notify") as mock_notify,
+        ):
+            from scrapers.bb_forex import main
+
+            result = main()
+
+        assert result == 0
+        snapshots = list(tmp_path.glob("*.json"))
+        assert len(snapshots) == 1
+        raw = json.loads(snapshots[0].read_text(encoding="utf-8"))
+        written = ForexSnapshot.model_validate(raw)
+        assert written.reserves is not None
+        assert written.reserves.gross_reserves_usd_bn == pytest.approx(34.1166)
+        mock_notify.assert_not_called()
+
+    def test_no_write_on_anomaly(self, mock_fetch, tmp_path):
+        """Verify no partial JSON file exists after a RATE anomaly skip (the
+        only case where the write is skipped entirely; a reserves anomaly
+        instead HOLDS and still writes -- see test_exit_2_on_reserves_*)."""
+        prev_snapshot = _make_snapshot(
+            snapshot_date=date(2026, 4, 19),
+            usd_mid=50.0,  # wildly wrong -> triggers a rate anomaly
         )
 
         with (
@@ -400,8 +818,9 @@ class TestMain:
         ):
             from scrapers.bb_forex import main
 
-            main()
+            result = main()
 
+        assert result == 2
         assert list(tmp_path.glob("*.json")) == []
         assert list(tmp_path.glob("*.tmp")) == []
 
