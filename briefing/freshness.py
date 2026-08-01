@@ -23,29 +23,43 @@ from datetime import date
 # skipped briefings that should have run. Matches sentinel/cadence.py's
 # GRACE_DAYS_BY_CADENCE, which already used 165 for the same reason.
 #
-# monthly=45 (was 35, owner-approved 2026-08-01, review round 1, corrected
-# review round 2): BBS CPI — a core-tier metric — was measured publishing at
-# 32/36/53 day lags across three recent vintages, so the old 35d window keeps
-# going dark on the slow tail. Matches sentinel/cadence.py's
-# GRACE_DAYS_BY_CADENCE, which already used 45 for the same reason.
+# monthly=60 (was 45, owner-approved 2026-08-02 — this sign-off is what
+# supersedes the earlier "do not widen further without owner sign-off" line
+# from the 2026-08-01 review; that guard now protects 60, see below): BBS
+# CPI — a core-tier metric — was measured publishing at 32/36/53 day lags
+# across three recent vintages. 45d covered only the first extra Monday it
+# was widened for (08-10) and still left 08-17/08-24/08-31 dark whenever the
+# real lag ran past ~45d (see the worked timeline below). This DELIBERATELY
+# DIVERGES from sentinel/cadence.py's GRACE_DAYS_BY_CADENCE, which stays at
+# 45 (unchanged — the sentinel still pages on a 45d freeze); only the
+# briefing's own publish gate gets more tolerant, so a real freeze is still
+# caught by the sentinel while the briefing keeps publishing on CPI's normal
+# slow tail.
 #
 # Worked timeline under the fix (point_to_point_inflation as_of 2026-06-30):
-# Mondays 08-03 fresh (34d) and 08-10 fresh (41d — this is the Monday the OLD
-# 35d window would have LOST, since 41 > 35) both still generate; 08-17,
-# 08-24, and 08-31 are STILL STALE (48d/55d/62d) — 45d does not cover the
-# whole gap to the next vintage, only the first one. Recovery lands on 09-07
-# ONLY IF July CPI (as_of 2026-07-31) has arrived by then: the three observed
-# BBS lags (32/36/53d) put its real arrival at 09-01, 09-05, and 09-22
-# respectively, so the two faster lags recover the 09-07 briefing but the
-# slowest (53d, arriving 09-22) leaves it dark too — a source-lag gap this
-# window was never meant to close, not a pipeline fault.
+# Mondays 08-03 (34d) and 08-10 (41d) are fresh under both 45d and 60d.
+# 08-17 (48d) and 08-24 (55d) were STALE under the old 45d window and are the
+# two Mondays 60d actually rescues (48 and 55 are both <= 60). 08-31 (62d) is
+# STILL STALE even under 60d — 62 > 60 — so widening to 60 narrows the dark
+# window, it does not close it. Recovery from 08-31 onward depends on which
+# observed BBS lag applies to July CPI (as_of 2026-07-31): lags of 32d and
+# 36d put its real arrival at 09-01 and 09-05 — both before the 09-07
+# Monday — so those two lags DO recover 09-07 on a fresh July vintage; the
+# slowest observed lag (53d) puts arrival at 09-22, so in that scenario
+# 08-31, 09-07, 09-14, and 09-21 ALL stay dark on June's now-stale vintage
+# until July CPI finally lands on 09-22 — 60d does not leave every Monday
+# lit, only more of them than 45d did.
 #
-# Trade-off, accepted: widening 35->45 also means the 3 monthly core
-# policy_rate_* ids (repo/sdf/slf) now take 46 days of real silence to trip
-# the gate instead of 36 before a genuine freeze is caught — aligned with the
-# sentinel's own 45d grace, and accepted as the cost of not false-positiving
-# on CPI's normal lag. Do NOT widen further without owner sign-off — a wider
-# window is a separate decision.
+# Trade-off, accepted: widening 45->60 also means the monthly core ids
+# (policy_rate_repo/sdf/slf, point_to_point_inflation,
+# fx_reserve_gross_and_bpm6) now take 61 days of real silence to trip the
+# briefing's gate instead of 46 before — 15 days slower than before to catch
+# a genuine freeze via the briefing specifically. The sentinel's own 45d/46d
+# trip point is UNCHANGED and remains the earlier, authoritative alert — this
+# widening only affects when the briefing itself stops publishing, never
+# when Adnan gets paged. Accepted as the cost of not false-positiving on
+# CPI's normal lag. Do NOT widen further without a fresh owner sign-off — a
+# wider window is a separate decision.
 #
 # daily=2 (was 1, owner-approved 2026-08-01): under honest Tier-1 source_as_of
 # dating (as_of comes from the source, never the run date — AGENTS.md
@@ -54,7 +68,7 @@ from datetime import date
 # holiday, a transient Sunday scraper miss) silently skipped the whole
 # briefing. 2 days buys one real day of slack without hiding a genuine freeze.
 _STALE_DAYS_BY_CADENCE = {
-    "daily": 2, "weekly": 8, "monthly": 45, "quarterly": 165, "fiscal_year": 400,
+    "daily": 2, "weekly": 8, "monthly": 60, "quarterly": 165, "fiscal_year": 400,
 }
 # NOTE: even a 2-day 'daily' window means a Monday briefing can still
 # honestly skip when the freshest daily reading predates Saturday — e.g. a BD

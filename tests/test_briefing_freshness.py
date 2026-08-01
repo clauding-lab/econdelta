@@ -35,7 +35,7 @@ def test_no_recent_aggregate_trips_gate_even_if_as_of_fresh():
 def test_stale_peripheral_only_yields_banner_not_skip():
     latest = {"call_money_rate": date(2026, 5, 29), "tbond_5y_yield": date(2026, 5, 26),
               "policy_rate_repo": date(2026, 5, 1),
-              "some_fiscal": date(2026, 1, 1)}  # ancient, monthly window=45d -> stale, but peripheral
+              "some_fiscal": date(2026, 1, 1)}  # ancient, monthly window=60d -> stale, but peripheral
     r = assess_freshness(latest, CADENCE, CORE, TODAY, aggregate_ok_recent=True)
     assert r.core_stale is False
     assert r.stale_series == ["some_fiscal"]
@@ -77,6 +77,6 @@ def test_daily_boundary_2_fresh_3_stale():
     assert _is_stale(_BOUNDARY_TODAY - timedelta(days=3), "daily", _BOUNDARY_TODAY) is True
 
 
-def test_monthly_boundary_45_fresh_46_stale():
-    assert _is_stale(_BOUNDARY_TODAY - timedelta(days=45), "monthly", _BOUNDARY_TODAY) is False
-    assert _is_stale(_BOUNDARY_TODAY - timedelta(days=46), "monthly", _BOUNDARY_TODAY) is True
+def test_monthly_boundary_60_fresh_61_stale():
+    assert _is_stale(_BOUNDARY_TODAY - timedelta(days=60), "monthly", _BOUNDARY_TODAY) is False
+    assert _is_stale(_BOUNDARY_TODAY - timedelta(days=61), "monthly", _BOUNDARY_TODAY) is True

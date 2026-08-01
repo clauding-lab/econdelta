@@ -470,6 +470,21 @@ daily-stamped rows are NOT deleted** (owner decision) — they are point-in-time
 history; the freshness *view* below is the long-term surface that makes the
 distinction clean for new consumers.
 
+**2026-08-02 exception (owner-approved).** The no-delete rule above held until
+one dated, explicitly-approved exception. On 2026-08-02, with explicit owner
+sign-off, the 64 run-date-stamped rows for `gross_reserves_usd_bn` and
+`fx_reserve_gross_and_bpm6` with `as_of` in `2026-07-01..2026-08-01` were
+**deleted**. Those rows were BB's May figure re-stamped with the run date every
+day by the pre-#97 `as_of` forgery (landmine 26/AGENTS.md) — under an
+`ORDER BY as_of DESC LIMIT 1` read they outranked the honest month-end
+vintages and would have masked BB's real July figure until mid-September. The
+`2026-06-30` rows were corrected in place to the true June figure `37.578`. A
+full JSON backup of the deleted rows was retained by the operator before
+deletion. Rows on or before `2026-06-30` for these two ids, and every other
+id's legacy daily-stamped rows, were left untouched — the general no-delete
+rule above still stands; this is a one-time, narrowly-scoped exception, not a
+new default.
+
 **Freshness definition.** A metric is fresh when
 `as_of >= today − grace(cadence)`. Grace tiers:
 
@@ -477,7 +492,7 @@ distinction clean for new consumers.
 |---|---|---|
 | daily | 2 BD **trading** days | weekend/holiday gap is not stale; the sentinel does the trading-day math, the view approximates with 4 calendar days |
 | weekly | 10 days | |
-| monthly | 45 days | |
+| monthly | 45 days | the sentinel and this DB view stay at 45 (unchanged); the briefing's OWN publish gate deliberately uses 60 — see `briefing/freshness.py`'s `_STALE_DAYS_BY_CADENCE` and its worked-timeline comment |
 | quarterly | 165 days | |
 | fiscal_year | 400 days | |
 
