@@ -51,6 +51,18 @@ When something ships broken, when a methodology gap is exposed, or when a smoke 
 
 **Cross-references:** AGENTS.md landmines 26 (extended), 37, 38; `deploy/gitpull.sh` FATAL path; `briefing/freshness.py` `_STALE_DAYS_BY_CADENCE`; PRs #96, #97.
 
+---
+
+## OPEN — not yet fixed
+
+Found live during the 2026-08-01 DB state check (see the entry directly above). Recorded so they aren't lost between sessions; neither has a hotfix in this PR.
+
+**OPEN 1 — `parsers/html_call_money.py` no longer matches BB's live table shape, so the deterministic parser fails silently every day and the LLM fallback carries the whole metric.** BB's call-money page now splits the table by Product/Maturity in a layout the deterministic parser wasn't written for; the `call_money_rate` config (`config/sources-v3.json`) still lists `html_call_money` as the `deterministic` strategy with `html_call_money.txt` as the `llm_prompt` fallback, so `hybrid.parse_one` quietly falls through to the LLM path every run instead of the intended deterministic extraction. Not currently breaking anything (the LLM path is producing values), but it means a cost-bearing, less-deterministic path is running daily where a free, deterministic one is configured — and any future BB layout drift on the LLM side has no deterministic backstop. Needs: re-verify the live table shape and rewrite `parsers/html_call_money.py`'s column/row matching for the Product/Maturity split.
+
+**OPEN 2 — `gsom.bb.org.bd/mtm-bill.php` and `mtm.php` both 404, leaving `treasury_bill_outstanding` and `treasury_bond_outstanding` sourceless.** Both ids' `config/sources-v3.json` entries point at those two URLs (lines ~314 and ~340); both currently 404 on BB's own GSOM subdomain. Whatever fed these two metrics has moved or been retired BB-side — same shape as the landmine-24 auction-source restructure (BB routinely reorganizes GSOM/monetaryactivity pages without redirects). Needs: find the current live source for T-bill/T-bond outstanding amounts on `gsom.bb.org.bd` (or a sibling BB domain) before either metric can resume landing rows.
+
+---
+
 ## 2026-07-10 — "policy_rate_sdf 7.50 vs a 'real' 8.50 floor" was inverted: 7.50 was real, 8.50 was the stale prior
 
 **Trigger:** Ecosystem-review handoff (E1.4) — the one P0/P1 item flagged INVESTIGATE-ONLY (no adversarial verification, no root-cause trace). It read: "policy_rate_sdf writes 7.50 daily while the real SDF floor is 8.50."
@@ -444,13 +456,3 @@ When something ships broken, when a methodology gap is exposed, or when a smoke 
 **Hotfix:** PR #28 (`5f07c45`) — retired both news scrapers, aliased `nbr_fytd_collected_cr` directly to `tax_revenue` (BB PDF source, deterministic, stable at 287,862.59 crore for 10+ consecutive days).
 
 **Cross-references:** PR #28 (`5f07c45`), AGENTS.md landmine 4 (NBR FYTD canonical = tax_revenue).
-
----
-
-## OPEN — not yet fixed
-
-Found live during the 2026-08-01 DB state check (see that entry above). Recorded so they aren't lost between sessions; neither has a hotfix in this PR.
-
-**OPEN 1 — `parsers/html_call_money.py` no longer matches BB's live table shape, so the deterministic parser fails silently every day and the LLM fallback carries the whole metric.** BB's call-money page now splits the table by Product/Maturity in a layout the deterministic parser wasn't written for; the `call_money_rate` config (`config/sources-v3.json`) still lists `html_call_money` as the `deterministic` strategy with `html_call_money.txt` as the `llm_prompt` fallback, so `hybrid.parse_one` quietly falls through to the LLM path every run instead of the intended deterministic extraction. Not currently breaking anything (the LLM path is producing values), but it means a cost-bearing, less-deterministic path is running daily where a free, deterministic one is configured — and any future BB layout drift on the LLM side has no deterministic backstop. Needs: re-verify the live table shape and rewrite `parsers/html_call_money.py`'s column/row matching for the Product/Maturity split.
-
-**OPEN 2 — `gsom.bb.org.bd/mtm-bill.php` and `mtm.php` both 404, leaving `treasury_bill_outstanding` and `treasury_bond_outstanding` sourceless.** Both ids' `config/sources-v3.json` entries point at those two URLs (lines ~314 and ~340); both currently 404 on BB's own GSOM subdomain. Whatever fed these two metrics has moved or been retired BB-side — same shape as the landmine-24 auction-source restructure (BB routinely reorganizes GSOM/monetaryactivity pages without redirects). Needs: find the current live source for T-bill/T-bond outstanding amounts on `gsom.bb.org.bd` (or a sibling BB domain) before either metric can resume landing rows.

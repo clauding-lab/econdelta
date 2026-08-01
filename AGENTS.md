@@ -28,7 +28,7 @@ laptop/               Mac launchd .plist files + run-and-sync.sh
 pwa/                  Next.js dashboard (deploys to GitHub Pages)
 scripts/              build_catalog.py and other one-off ops scripts
 docs/                 data-contract, indicator-catalog (autogen), superpowers/specs|plans/
-tests/                the full pytest suite (975+ passed as of this PR; count grows)
+tests/                the full pytest suite (982 passed as of this PR; count grows)
 ```
 
 ## Build, Test, Run

@@ -82,10 +82,20 @@ cd "$REPO" || {
   # a broken webhook or missing `logger` must never mask the real `exit 1`.
   # $DISCORD_WEBHOOK_URL comes from systemd's EnvironmentFile=/etc/econdelta.env
   # (loaded before ExecStart runs), so it's already in the environment here.
+  #
+  # Coverage (review round 1): this alert fires for a WRONG $ECONDELTA_HOME
+  # (a stale/bad env value pointing at a path that doesn't exist -- the actual
+  # 2026-07-09 incident class) or a permission-stripped repo dir (deploy/
+  # econdelta-gitpull.service's ReadWritePaths now tolerates that at
+  # namespace-setup time). It does NOT cover a genuinely, fully DELETED
+  # checkout: that unit's WorkingDirectory= is unprefixed and still requires
+  # the path to exist, so that case fails unit setup before ExecStart ever
+  # runs this script -- visible only in systemd state
+  # (`systemctl status econdelta-gitpull`), never in Discord or syslog.
   log "FATAL: repo $REPO not found"
-  logger -t econdelta-gitpull "FATAL: repo $REPO not found — gitpull cannot cd, aborting before any repo tooling (no run_logs row, no $PY)" || true
+  logger -t econdelta-gitpull "FATAL: repo $REPO not found — gitpull cannot cd, aborting before any repo tooling (no run_logs row, no \$PY)" || true
   if [[ -n "${DISCORD_WEBHOOK_URL:-}" ]]; then
-    curl -fsS -m 5 -X POST -H 'Content-Type: application/json' \
+    curl -fs -m 5 -X POST -H 'Content-Type: application/json' \
       -d "{\"content\":\"\\ud83d\\udea8 EconDelta gitpull FATAL: repo path \`$REPO\` not found on ExonVPS. cd failed before any repo tooling (no run_logs row was written for this run) — checkout is unreachable.\"}" \
       "$DISCORD_WEBHOOK_URL" >/dev/null 2>&1 || true
   fi

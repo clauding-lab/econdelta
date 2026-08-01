@@ -14,14 +14,22 @@ from dataclasses import dataclass
 from datetime import date
 
 # STALE_THRESHOLDS_HOURS_BY_CADENCE (aggregate_latest.py) / 24, rounded up —
-# except quarterly and daily below, which have since diverged from that
-# formula for reasons specific to the briefing gate (see each note).
+# except quarterly, monthly, and daily below, which have since diverged from
+# that formula for reasons specific to the briefing gate (see each note).
 #
 # quarterly=165 (was 100, owner-approved 2026-08-01): BD banking releases the
 # core tier depends on (QFSAR NPL/CAR) lag by design ~2 quarters, so the old
 # 100d window flagged a correctly-dated, on-schedule vintage as stale and
 # skipped briefings that should have run. Matches sentinel/cadence.py's
 # GRACE_DAYS_BY_CADENCE, which already used 165 for the same reason.
+#
+# monthly=45 (was 35, owner-approved 2026-08-01, review round 1): BBS CPI —
+# a core-tier metric — was measured publishing at 32-53 day lags per vintage
+# (32/53/36d observed), so the old 35d window would go dark again on the very
+# next slow vintage (July CPI at the median lag lands ~2026-09-01, 4 days past
+# a 2026-08-10 five-week-old check). Matches sentinel/cadence.py's
+# GRACE_DAYS_BY_CADENCE, which already used 45 for the same reason. Do NOT
+# widen further without owner sign-off — a wider window is a separate decision.
 #
 # daily=2 (was 1, owner-approved 2026-08-01): under honest Tier-1 source_as_of
 # dating (as_of comes from the source, never the run date — AGENTS.md
@@ -30,7 +38,7 @@ from datetime import date
 # holiday, a transient Sunday scraper miss) silently skipped the whole
 # briefing. 2 days buys one real day of slack without hiding a genuine freeze.
 _STALE_DAYS_BY_CADENCE = {
-    "daily": 2, "weekly": 8, "monthly": 35, "quarterly": 165, "fiscal_year": 400,
+    "daily": 2, "weekly": 8, "monthly": 45, "quarterly": 165, "fiscal_year": 400,
 }
 # NOTE: even a 2-day 'daily' window means a Monday briefing can still
 # honestly skip when the freshest daily reading predates Saturday — e.g. a BD
