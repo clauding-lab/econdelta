@@ -47,9 +47,15 @@ def _forex_snapshot(
     scraped_at: datetime = _NOW,
     reserves_date: date = date(2026, 5, 1),
     gross_reserves_usd_bn: float = 34.5478,
+    snapshot_date: date | None = None,
 ) -> ForexSnapshot:
+    """`date` defaults to `scraped_at.date()` -- realistic pairing, since the
+    real scraper sets both fields at the same moment (scrapers/bb_forex.py:
+    ``date=date.today(), scraped_at=datetime.now(timezone.utc)``). Pass
+    `snapshot_date` explicitly to decouple them (used to prove the Tier-1 map
+    reads `.date`, not `.scraped_at`)."""
     return ForexSnapshot(
-        date=date(2026, 4, 20),
+        date=snapshot_date if snapshot_date is not None else scraped_at.date(),
         scraped_at=scraped_at,
         rates=ForexRates(
             usd_bdt_mid=122.7,
@@ -124,26 +130,65 @@ class TestReservesMonthEnd:
 
     def test_none_reserves_skips_the_key(self):
         forex = _forex_snapshot().model_copy(update={"reserves": None})
-        m = agg._build_tier1_source_as_of_map({"bb_forex": forex})
+        m = agg._build_tier1_source_as_of_map({"bb_forex": forex}, bb_forex_ok=True)
         assert "gross_reserves_usd_bn" not in m
         assert "fx_reserve_gross_and_bpm6" not in m
+        assert "import_cover_months" not in m
         # rates still get an override -- only the reserves side is skipped
         assert "usd_bdt_mid" in m
 
 
-class TestForexRatesScrapedAtDate:
-    def test_rates_use_scraped_at_date(self):
-        scraped = datetime(2026, 4, 1, 3, 0, tzinfo=timezone.utc)
-        forex = _forex_snapshot(scraped_at=scraped)
+class TestImportCoverMonths:
+    """Review round 1, item 3: import_cover_months is flatten_data's other
+    reserves-block key (set unconditionally alongside gross_reserves_usd_bn),
+    but it was missing from the Tier-1 map entirely -- reviewer proved it
+    landed as_of=today while its sibling gross_reserves_usd_bn got the honest
+    month-end date."""
+
+    def test_import_cover_months_maps_to_reserves_month_end(self):
+        forex = _forex_snapshot(reserves_date=date(2026, 5, 1))
+        m = agg._build_tier1_source_as_of_map({"bb_forex": forex})
+        assert m["import_cover_months"] == date(2026, 5, 31) == m["gross_reserves_usd_bn"]
+
+    def test_import_cover_months_not_gated_on_bb_forex_ok(self):
+        """Unlike the two force-overwrite alias keys, import_cover_months is
+        set unconditionally by flatten_data (not part of the freshness-gated
+        block) -- it must get a date regardless of bb_forex_ok."""
+        forex = _forex_snapshot(reserves_date=date(2026, 5, 1))
+        m = agg._build_tier1_source_as_of_map({"bb_forex": forex}, bb_forex_ok=False)
+        assert m["import_cover_months"] == date(2026, 5, 31)
+
+
+class TestForexRatesSnapshotDate:
+    """Review round 1, item 2: rates (and their alias) are dated from
+    `forex.date` (the scraper's own calendar-day field), not
+    `forex.scraped_at.date()` (a UTC timestamp). Both regimes agree under the
+    current 00:0x-UTC retry-writer pattern, but `forex.date` stays correct if
+    the primary ~23:05 UTC slot ever survives on the BDT-local box --
+    scraped_at's UTC calendar date would then lag the intended BDT reporting
+    day by one, shaving the Monday briefing's zero margin negative."""
+
+    def test_rates_use_the_date_field(self):
+        forex = _forex_snapshot(snapshot_date=date(2026, 4, 1))
         m = agg._build_tier1_source_as_of_map({"bb_forex": forex})
         for key in ("usd_bdt_mid", "usd_bdt_buy", "usd_bdt_sell", "eur_bdt", "gbp_bdt"):
             assert m[key] == date(2026, 4, 1)
 
-    def test_frozen_snapshot_re_read_keeps_its_own_old_scraped_at(self):
-        """A snapshot scraped 20 days ago and never refreshed since must be
-        dated by ITS scraped_at, not today's run date."""
+    def test_uses_date_field_not_scraped_at_when_they_differ(self):
+        """The decoupling proof: scraped_at says one UTC day, `date` says
+        another -- the map must follow `date`."""
+        scraped_at_utc = datetime(2026, 4, 1, 23, 5, tzinfo=timezone.utc)
+        forex = _forex_snapshot(scraped_at=scraped_at_utc, snapshot_date=date(2026, 4, 2))
+        m = agg._build_tier1_source_as_of_map({"bb_forex": forex})
+        assert m["usd_bdt_mid"] == date(2026, 4, 2)
+        assert m["usd_bdt_mid"] != scraped_at_utc.date()
+
+    def test_frozen_snapshot_re_read_keeps_its_own_old_date(self):
+        """A snapshot written 20 days ago and never refreshed since must be
+        dated by ITS OWN `date` field (realistic pairing: scraped_at and date
+        set together at write time), not today's run date."""
         stale = datetime.now(timezone.utc) - timedelta(days=20)
-        forex = _forex_snapshot(scraped_at=stale)
+        forex = _forex_snapshot(scraped_at=stale)  # date defaults to stale.date()
         m = agg._build_tier1_source_as_of_map({"bb_forex": forex})
         assert m["usd_bdt_mid"] == stale.date()
         assert m["usd_bdt_mid"] != date.today()
@@ -151,11 +196,14 @@ class TestForexRatesScrapedAtDate:
 
 class TestDseTradingDay:
     def test_dse_keys_use_the_snapshot_date_field_not_scraped_at(self):
-        """DseSnapshot.date is the trading day itself (set by the scraper to
-        date.today() only when is_bd_trading_day() was True); `trading_day`
-        is a BOOL, not a date. Using scraped_at would be wrong on the
-        Fri/Sat/holiday carry-forward path, where a snapshot re-read TODAY
-        still describes the LAST trading day's close."""
+        """DseSnapshot.date is set to date.today() on EVERY scraper run,
+        trading day or not (scrapers/dse_market.py:227-236 sets it on the
+        non-trading path too -- it is NOT "only on trading days"). What
+        distinguishes a trading day is `indices`/`market` being populated
+        (a bool, `trading_day`, tracks that separately). Using scraped_at
+        would be wrong on the Fri/Sat/holiday/failed-scrape carry-forward
+        path, where a snapshot file re-read TODAY still honestly describes
+        the LAST trading day's close via its own `date` field."""
         scraped_today = datetime.now(timezone.utc)
         dse = _dse_snapshot(scraped_at=scraped_today, trading_day_date=date(2026, 7, 16))
         m = agg._build_tier1_source_as_of_map({"dse_market": dse})
@@ -184,15 +232,41 @@ class TestCommodityScrapedAt:
 
 
 class TestAliasPropagation:
-    def test_usd_bdt_exchange_rate_inherits_usd_bdt_mid_date(self):
-        forex = _forex_snapshot(scraped_at=datetime(2026, 4, 5, tzinfo=timezone.utc))
-        m = agg._build_tier1_source_as_of_map({"bb_forex": forex})
+    """Review round 1, item 1 (HIGH): the two force-overwrite alias keys
+    (usd_bdt_exchange_rate, fx_reserve_gross_and_bpm6) get their VALUE from
+    bb_forex only when bb_forex's status is "ok" (aggregate_latest.main(),
+    the freshness gate). The DATE override must follow that SAME gate --
+    otherwise a stale bb_forex can date a fresh v3-sourced value with its own
+    stale date (proven live: value 999.9 from v3, date from 48h-old bb_forex)."""
+
+    def test_usd_bdt_exchange_rate_inherits_usd_bdt_mid_date_when_bb_forex_ok(self):
+        forex = _forex_snapshot(snapshot_date=date(2026, 4, 5))
+        m = agg._build_tier1_source_as_of_map({"bb_forex": forex}, bb_forex_ok=True)
         assert m["usd_bdt_exchange_rate"] == m["usd_bdt_mid"] == date(2026, 4, 5)
 
-    def test_fx_reserve_gross_and_bpm6_inherits_reserves_month_end(self):
+    def test_fx_reserve_gross_and_bpm6_inherits_reserves_month_end_when_bb_forex_ok(self):
         forex = _forex_snapshot(reserves_date=date(2026, 6, 1))
-        m = agg._build_tier1_source_as_of_map({"bb_forex": forex})
+        m = agg._build_tier1_source_as_of_map({"bb_forex": forex}, bb_forex_ok=True)
         assert m["fx_reserve_gross_and_bpm6"] == m["gross_reserves_usd_bn"] == date(2026, 6, 30)
+
+    def test_alias_keys_get_no_tier1_date_when_bb_forex_not_ok(self):
+        """The date must follow the (gated) value: when bb_forex is stale,
+        no Tier-1 date is stamped on either alias key at all -- the raw
+        usd_bdt_mid/gross_reserves_usd_bn keys are unaffected (not gated)."""
+        forex = _forex_snapshot(reserves_date=date(2026, 6, 1))
+        m = agg._build_tier1_source_as_of_map({"bb_forex": forex}, bb_forex_ok=False)
+        assert "usd_bdt_exchange_rate" not in m
+        assert "fx_reserve_gross_and_bpm6" not in m
+        assert "usd_bdt_mid" in m
+        assert "gross_reserves_usd_bn" in m
+
+    def test_bb_forex_ok_defaults_to_false(self):
+        """Conservative default: a caller that forgets to pass bb_forex_ok
+        gets no alias date, never a possibly-wrong one."""
+        forex = _forex_snapshot()
+        m = agg._build_tier1_source_as_of_map({"bb_forex": forex})
+        assert "usd_bdt_exchange_rate" not in m
+        assert "fx_reserve_gross_and_bpm6" not in m
 
 
 class TestEmptySnapshots:

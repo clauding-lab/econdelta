@@ -50,7 +50,12 @@ _SCRAPER_CADENCE: dict[str, str] = {
     "gross_reserves_usd_bn": "monthly",
     "import_cover_months": "daily",
     "usd_bdt_exchange_rate": "daily",
-    "fx_reserve_gross_and_bpm6": "daily",
+    # Inert in practice -- fx_reserve_gross_and_bpm6 has its own
+    # sources-v3.json entry, so `load_cadence_map`'s config pass sets it
+    # before this scraper map is ever consulted (setdefault no-ops here).
+    # Kept truthful anyway (monthly, matching config/sources-v3.json) so this
+    # line doesn't contradict the gross_reserves_usd_bn entry above it.
+    "fx_reserve_gross_and_bpm6": "monthly",
     # dse_market index — daily (trading-day aware)
     "dsex": "daily",
     "ds30": "daily",

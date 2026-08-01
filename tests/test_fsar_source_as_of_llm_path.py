@@ -368,7 +368,48 @@ class TestUndatedWarningDiscordSplit:
         agg._build_source_as_of_map(domains)
         assert len(notify_calls) == 1
         assert notify_calls[0][0] == "warning"
-        assert "gross_npl_ratio" in notify_calls[0][1]
+        # Title is now stable (batched alert, review round 1 item 4) — the id
+        # lives in the body/message, not the title.
+        assert "gross_npl_ratio" in notify_calls[0][2]
+
+    def test_multiple_undated_quarterly_ids_fire_exactly_one_notify(self, monkeypatch):
+        """Review round 1, item 4: systemd starts a fresh process per aggregate
+        run, so the notifier's (level, title) dedup can't collapse a per-id
+        title across runs -- a chronically-undated id (landmine 26's
+        debt_gdp_ratio / gdp / fy_* / debt stocks, up to 11 quarterly+
+        fiscal_year indicators) would otherwise fire a separate Discord
+        message EVERY run, forever. All undated quarterly/fiscal_year ids in
+        one run must collapse into ONE notify call, listing every id in the
+        body."""
+        import aggregate_latest as agg
+
+        notify_calls: list[tuple] = []
+        monkeypatch.setattr(agg, "notify", lambda *a, **k: notify_calls.append(a))
+        domains = {
+            "money_market": {
+                "gross_npl_ratio": {
+                    "value": 35.73, "cadence": "quarterly",
+                    "scraped_at": datetime.now(timezone.utc).isoformat(),
+                },
+            },
+            "fiscal": {
+                "debt_gdp_ratio": {
+                    "value": 34.5, "cadence": "fiscal_year",
+                    "scraped_at": datetime.now(timezone.utc).isoformat(),
+                },
+                "gdp": {
+                    "value": 45000000.0, "cadence": "fiscal_year",
+                    "scraped_at": datetime.now(timezone.utc).isoformat(),
+                },
+            },
+        }
+        agg._build_source_as_of_map(domains)
+        assert len(notify_calls) == 1, "3 undated ids must collapse into exactly 1 notify call"
+        level, title, message = notify_calls[0]
+        assert level == "warning"
+        assert title == "aggregate — undated slow-cadence indicators"
+        for indicator_id in ("gross_npl_ratio", "debt_gdp_ratio", "gdp"):
+            assert indicator_id in message
 
     def test_monthly_undated_metric_logs_only_no_discord(self, monkeypatch, caplog):
         import aggregate_latest as agg

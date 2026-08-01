@@ -455,6 +455,53 @@ def test_force_overwrite_wins_when_bb_forex_ok(
     assert payload["data"]["usd_bdt_exchange_rate"] == 122.7  # _forex_snapshot's usd_bdt_mid
 
 
+def test_alias_date_follows_gated_value_not_stale_bb_forex_date(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review round 1, item 1 (HIGH): when bb_forex is stale, the alias VALUE
+    correctly falls back to the v3 pipeline's own value (999.9, proven by
+    test_force_overwrite_skipped_when_bb_forex_stale above) -- but pre-fix,
+    the Tier-1 map still stamped that fresh v3 value with bb_forex's OLD
+    stale date, because the date override was unconditional while the value
+    override was gated. A fresh value wearing a stale date is exactly the
+    forgery this PR set out to kill, just relocated. The fix: the Tier-1 map
+    must only date usd_bdt_exchange_rate/fx_reserve_gross_and_bpm6 from
+    bb_forex when bb_forex's own status is "ok" -- same gate as the value."""
+    data_dir = _setup_v3_with_usd_bdt_exchange_rate_indicator(tmp_path, monkeypatch, v3_value=999.9)
+    stale = datetime.now(timezone.utc) - timedelta(hours=48)
+    _write_snapshot(data_dir / "bb_forex" / "2026-04-20.json", _forex_snapshot(scraped_at=stale))
+    monkeypatch.setenv("ECONDELTA_DRY_RUN", "1")
+    monkeypatch.setenv("ECONDELTA_SKIP_SUPABASE", "0")
+
+    import utils.supabase_writer as sw
+
+    captured: dict = {}
+
+    def _fake_upsert(**kwargs):
+        captured.update(kwargs)
+        return len(kwargs.get("data", {}))
+
+    monkeypatch.setattr(sw, "upsert_metric_history", _fake_upsert)
+    monkeypatch.setattr(sw, "upsert_metric_definitions_seed", lambda *a, **k: 0)
+
+    rc = agg.main()
+    assert rc == 0
+    assert captured, "expected upsert_metric_history to be called"
+
+    # The value is the fresh v3 one (999.9), confirmed by the sibling test above.
+    assert captured["data"]["usd_bdt_exchange_rate"] == 999.9
+    source_as_of_map = captured.get("source_as_of_map") or {}
+    stale_date = stale.date()
+    got = source_as_of_map.get("usd_bdt_exchange_rate")
+    assert got != stale_date, (
+        f"usd_bdt_exchange_rate carries bb_forex's stale date ({got}) on a fresh "
+        f"v3 value (999.9) -- the date must follow the (gated) value, not bb_forex "
+        f"unconditionally. Either no override (falls back to today, honest for an "
+        f"undated fresh v3 value) or the v3 registry's own recovered date is "
+        f"acceptable -- bb_forex's stale date ({stale_date}) is not."
+    )
+
+
 def test_main_fires_warning_on_stale_source(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
