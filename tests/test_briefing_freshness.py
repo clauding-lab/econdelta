@@ -77,6 +77,6 @@ def test_daily_boundary_2_fresh_3_stale():
     assert _is_stale(_BOUNDARY_TODAY - timedelta(days=3), "daily", _BOUNDARY_TODAY) is True
 
 
-def test_monthly_boundary_45_fresh_46_stale():
-    assert _is_stale(_BOUNDARY_TODAY - timedelta(days=45), "monthly", _BOUNDARY_TODAY) is False
-    assert _is_stale(_BOUNDARY_TODAY - timedelta(days=46), "monthly", _BOUNDARY_TODAY) is True
+def test_monthly_boundary_60_fresh_61_stale():
+    assert _is_stale(_BOUNDARY_TODAY - timedelta(days=60), "monthly", _BOUNDARY_TODAY) is False
+    assert _is_stale(_BOUNDARY_TODAY - timedelta(days=61), "monthly", _BOUNDARY_TODAY) is True
