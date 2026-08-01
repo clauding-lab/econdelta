@@ -34,6 +34,21 @@ ACCEPTED_STALE_METRIC_IDS: frozenset[str] = frozenset(
     {"tax_gdp_ratio", "rev_gdp_ratio"}
 )
 
+# Metrics whose id has fallen out of its SOURCE's tracked universe — a
+# DIFFERENT reason for never-alerting than ACCEPTED_STALE_METRIC_IDS above
+# (source-lag-by-design vs. an id with no live producer left at all), so it
+# gets its own frozenset rather than being merged into that one.
+# dse_close_KOHINOOR / dse_close_LINDEBD / dse_close_UNIQUEHRL fell out of the
+# DS30 constituents at the ~2026-07-16 rebalance; scripts/backfill_dse_dayend.py
+# fetches the LIVE constituent list with no delisting handling, so these three
+# ids simply stopped being written and now breach the daily grace forever.
+# Routed to the same silent `accepted_stale` bucket. A genuinely dead scraper
+# for any OTHER dse_close_* id is NOT covered by this set and still falls
+# through to `breaches`/`unmapped` normally.
+RETIRED_METRIC_IDS: frozenset[str] = frozenset(
+    {"dse_close_KOHINOOR", "dse_close_LINDEBD", "dse_close_UNIQUEHRL"}
+)
+
 
 @dataclass(frozen=True)
 class MetricFreshness:
@@ -163,8 +178,9 @@ def assess(
     A metric is:
       * unmapped — cadence can't be resolved, OR it has no non-future as_of to
         judge (both are actionable dedupe/retire/projection-split signals);
-      * accepted_stale — in ``ACCEPTED_STALE_METRIC_IDS``: its source lags by
-        design, so a breach here is not actionable and must never alert;
+      * accepted_stale — in ``ACCEPTED_STALE_METRIC_IDS`` (source lags by
+        design) or ``RETIRED_METRIC_IDS`` (the id's producer no longer writes
+        it): either way a breach here is not actionable and must never alert;
       * breach   — latest_as_of is older than its cadence grace allows;
       * fresh    — otherwise.
     """
@@ -205,6 +221,24 @@ def assess(
         # DO have a cadence + a real vintage — a scraper that stopped writing
         # entirely falls to `unmapped` above, so this can't mask a dead scraper.
         if mid in ACCEPTED_STALE_METRIC_IDS:
+            accepted_stale.append(
+                MetricFreshness(
+                    metric_id=mid,
+                    cadence=cadence,
+                    latest_as_of=latest_as_of,
+                    latest_ingested_at=latest_ing,
+                    age_days=(today - latest_as_of).days,
+                    breach=False,
+                    tables=tables,
+                )
+            )
+            continue
+
+        # Retired ids (see RETIRED_METRIC_IDS above): a different reason than
+        # source-lag for the same silent treatment — kept as a separate check
+        # so each set's rationale stays legible and one can be edited without
+        # touching the other's semantics.
+        if mid in RETIRED_METRIC_IDS:
             accepted_stale.append(
                 MetricFreshness(
                     metric_id=mid,

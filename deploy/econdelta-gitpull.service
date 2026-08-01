@@ -24,7 +24,10 @@ ProtectSystem=strict
 ProtectHome=read-only
 # git pull writes .git/ + the working tree, both under the repo dir in $HOME,
 # so the repo itself must be writable even though the rest of home is read-only.
-ReadWritePaths=/home/adnan-local/econdelta
+# `-` prefix: tolerate this path being absent at namespace-setup time (a
+# missing/permission-stripped dir no longer fails the bind mount outright) —
+# see deploy/gitpull.sh for what this does and doesn't make visible.
+ReadWritePaths=-/home/adnan-local/econdelta
 
 TimeoutStartSec=300
 Restart=on-failure
