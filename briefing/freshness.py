@@ -13,13 +13,29 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date
 
-# STALE_THRESHOLDS_HOURS_BY_CADENCE (aggregate_latest.py) / 24, rounded up.
+# STALE_THRESHOLDS_HOURS_BY_CADENCE (aggregate_latest.py) / 24, rounded up —
+# except quarterly and daily below, which have since diverged from that
+# formula for reasons specific to the briefing gate (see each note).
+#
+# quarterly=165 (was 100, owner-approved 2026-08-01): BD banking releases the
+# core tier depends on (QFSAR NPL/CAR) lag by design ~2 quarters, so the old
+# 100d window flagged a correctly-dated, on-schedule vintage as stale and
+# skipped briefings that should have run. Matches sentinel/cadence.py's
+# GRACE_DAYS_BY_CADENCE, which already used 165 for the same reason.
+#
+# daily=2 (was 1, owner-approved 2026-08-01): under honest Tier-1 source_as_of
+# dating (as_of comes from the source, never the run date — AGENTS.md
+# landmine 26, PR #97), a Monday 01:00 UTC briefing sits at EXACTLY zero
+# margin against a 1-day window — one missed Sunday snapshot (a BD public
+# holiday, a transient Sunday scraper miss) silently skipped the whole
+# briefing. 2 days buys one real day of slack without hiding a genuine freeze.
 _STALE_DAYS_BY_CADENCE = {
-    "daily": 1, "weekly": 8, "monthly": 35, "quarterly": 100, "fiscal_year": 400,
+    "daily": 2, "weekly": 8, "monthly": 35, "quarterly": 165, "fiscal_year": 400,
 }
-# NOTE: a 1-day 'daily' window means a Monday briefing honestly skips when the
-# freshest daily reading predates Sunday — e.g. BD public holidays when BB
-# didn't publish. That's an intentional skip (no briefing on stale data), not a bug.
+# NOTE: even a 2-day 'daily' window means a Monday briefing can still
+# honestly skip when the freshest daily reading predates Saturday — e.g. a BD
+# public holiday run spanning the weekend when BB didn't publish. That's an
+# intentional skip (no briefing on stale data), not a bug.
 _DEFAULT_STALE_DAYS = 35
 
 

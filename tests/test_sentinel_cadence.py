@@ -47,6 +47,25 @@ def test_scraper_only_ids_are_mapped():
     assert m["usd_bdt_mid"] == "daily"
 
 
+def test_commodity_prices_ids_are_mapped_daily():
+    """brent_crude_usd_barrel/wti_crude_usd_barrel/gold_usd_oz are
+    aggregate_latest's flatten unit-suffixed keys for the daily (23:08 UTC)
+    commodity_prices scraper — previously absent from _SCRAPER_CADENCE despite
+    landing fresh rows every day, so the sentinel could never see them."""
+    m = load_cadence_map()
+    assert m["brent_crude_usd_barrel"] == "daily"
+    assert m["wti_crude_usd_barrel"] == "daily"
+    assert m["gold_usd_oz"] == "daily"
+
+
+def test_import_cover_months_has_no_cadence_mapping():
+    """Zero rows ever (BB's reserves page has never published it) -- removed
+    from _SCRAPER_CADENCE so it correctly resolves to unmapped, not a false
+    'daily' cadence with nothing to judge against."""
+    m = load_cadence_map()
+    assert resolve_cadence("import_cover_months", m) is None
+
+
 def test_gross_reserves_is_monthly_not_daily():
     """Reclassified with the Tier-1 as_of forgery fix: BB's reserves figure is
     an END-of-month stock, not a daily-moving one. Was 'daily' (2-day grace),

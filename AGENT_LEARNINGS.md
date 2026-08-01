@@ -37,6 +37,20 @@ When something ships broken, when a methodology gap is exposed, or when a smoke 
 
 ## Entries (most recent first)
 
+## 2026-08-01 — Four independent rots found by one DB state check: a ratchet deadlock, a silent FATAL, a dark briefing, and a never-written table
+
+**Trigger:** Owner asked for a plain DB state check ("is everything actually healthy right now") — not a bug report, just due diligence. The check surfaced four unrelated failures none of which had tripped an alert on their own.
+
+**What went wrong:** (1) `bb_forex` reserves anomaly guard rejected every run 2026-07-13→2026-08-01 (120+ identical rejections) because the guard's own rejection also blocked the baseline it compared against from ever advancing — the first legitimate month-over-month step-change could never pass, permanently, until PR #96's month-advance gate. The deadlock was invisible on the surface because the aggregate's Tier-1 flatten path was independently forging `as_of` as the run date rather than the source's real reporting date (fixed by PR #97), so the frozen value still *looked* freshly dated every day. (2) `deploy/gitpull.sh`'s `cd "$REPO" || { ...; exit 1; }` FATAL path fired daily for 23 days with zero Discord alert and zero `run_logs` row — both the notifier and the run-log writer are `$REPO`-relative, so the one failure mode that matters most (the repo checkout itself is gone/wrong) had no tooling left to report itself; only systemd's own state showed it (this PR's gitpull.sh fix). (3) The weekly briefing job had gone dark since 2026-07-10 because `briefing/freshness.py`'s quarterly stale window (100 days) was tighter than BD banking releases' real ~2-quarter publishing lag, so a correctly-dated, on-schedule NPL/CAR vintage tripped the core-stale gate and silently skipped generation every week (this PR's freshness-window fix). (4) `metric_history_monthly` has never had a live daily writer — it's seeded from a third-party source that is itself frozen, so "monthly cadence, stale" readings there are the upstream's own publishing frontier, not a pipeline gap (tracked, not fixed by this PR).
+
+**Lesson:** None of these four would have been caught by "tests pass" or "the pipeline exits 0" — each is a *live-state* rot: a value frozen behind a self-consistent-looking loop, a failure path with no tooling to report itself, a gate tuned for the wrong cadence, and a table nobody actually owns. A routine state check that reads real production data (not just green CI) is the only thing that surfaces this class of bug. Specific rules, one per rot: (a) an anomaly guard must never be the same mechanism that blocks its own baseline from updating (AGENTS.md landmine 38); (b) `as_of` must always come from the source's own reporting date, never the run date — and that rule applies to every flatten/source path, not just the ones it was first fixed for (AGENTS.md landmine 26 extension, PR #97); (c) a failure path that occurs BEFORE a script's normal tooling is reachable (no repo, no Python, no DB) needs its OWN alerting mechanism that doesn't depend on that tooling; (d) a freshness/staleness gate is only as honest as the vintage assumptions baked into its window — a window copied from a different tier (or set before the real publishing lag was known) can silently suppress correct behavior indefinitely, not just fail to catch a real fault.
+
+**Prevention:** PR #96 (month-advance reserves gate — breaks the bb_forex deadlock), PR #97 (Tier-1 source_as_of map — as_of from the source, never the run date), this PR (gitpull FATAL-path alerting + briefing quarterly/daily window correction). The `metric_history_monthly` upstream-freeze is a DB-correction/ownership question returned to the owner, not a code fix.
+
+**Hotfix:** See PRs #96 and #97 (already merged ahead of this entry) plus this PR's gitpull.sh + briefing/freshness.py changes.
+
+**Cross-references:** AGENTS.md landmines 26 (extended), 37, 38; `deploy/gitpull.sh` FATAL path; `briefing/freshness.py` `_STALE_DAYS_BY_CADENCE`; PRs #96, #97.
+
 ## 2026-07-10 — "policy_rate_sdf 7.50 vs a 'real' 8.50 floor" was inverted: 7.50 was real, 8.50 was the stale prior
 
 **Trigger:** Ecosystem-review handoff (E1.4) — the one P0/P1 item flagged INVESTIGATE-ONLY (no adversarial verification, no root-cause trace). It read: "policy_rate_sdf writes 7.50 daily while the real SDF floor is 8.50."
@@ -430,3 +444,13 @@ When something ships broken, when a methodology gap is exposed, or when a smoke 
 **Hotfix:** PR #28 (`5f07c45`) — retired both news scrapers, aliased `nbr_fytd_collected_cr` directly to `tax_revenue` (BB PDF source, deterministic, stable at 287,862.59 crore for 10+ consecutive days).
 
 **Cross-references:** PR #28 (`5f07c45`), AGENTS.md landmine 4 (NBR FYTD canonical = tax_revenue).
+
+---
+
+## OPEN — not yet fixed
+
+Found live during the 2026-08-01 DB state check (see that entry above). Recorded so they aren't lost between sessions; neither has a hotfix in this PR.
+
+**OPEN 1 — `parsers/html_call_money.py` no longer matches BB's live table shape, so the deterministic parser fails silently every day and the LLM fallback carries the whole metric.** BB's call-money page now splits the table by Product/Maturity in a layout the deterministic parser wasn't written for; the `call_money_rate` config (`config/sources-v3.json`) still lists `html_call_money` as the `deterministic` strategy with `html_call_money.txt` as the `llm_prompt` fallback, so `hybrid.parse_one` quietly falls through to the LLM path every run instead of the intended deterministic extraction. Not currently breaking anything (the LLM path is producing values), but it means a cost-bearing, less-deterministic path is running daily where a free, deterministic one is configured — and any future BB layout drift on the LLM side has no deterministic backstop. Needs: re-verify the live table shape and rewrite `parsers/html_call_money.py`'s column/row matching for the Product/Maturity split.
+
+**OPEN 2 — `gsom.bb.org.bd/mtm-bill.php` and `mtm.php` both 404, leaving `treasury_bill_outstanding` and `treasury_bond_outstanding` sourceless.** Both ids' `config/sources-v3.json` entries point at those two URLs (lines ~314 and ~340); both currently 404 on BB's own GSOM subdomain. Whatever fed these two metrics has moved or been retired BB-side — same shape as the landmine-24 auction-source restructure (BB routinely reorganizes GSOM/monetaryactivity pages without redirects). Needs: find the current live source for T-bill/T-bond outstanding amounts on `gsom.bb.org.bd` (or a sibling BB domain) before either metric can resume landing rows.

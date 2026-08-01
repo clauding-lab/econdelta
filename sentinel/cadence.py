@@ -48,8 +48,12 @@ _SCRAPER_CADENCE: dict[str, str] = {
     # Tier-1 as_of forgery fix (aggregate_latest._build_tier1_source_as_of_map
     # now stamps this with the reserves month-end, not the run date).
     "gross_reserves_usd_bn": "monthly",
-    "import_cover_months": "daily",
     "usd_bdt_exchange_rate": "daily",
+    # import_cover_months is deliberately NOT mapped: BB's reserves page has
+    # never published it (scrapers/bb_forex.py hardcodes it to None) -- zero
+    # rows in metric_history, ever. The id stays in the schema/flatten harmlessly;
+    # absent any real vintage it correctly falls through to `unmapped`, not a
+    # false breach.
     # Inert in practice -- fx_reserve_gross_and_bpm6 has its own
     # sources-v3.json entry, so `load_cadence_map`'s config pass sets it
     # before this scraper map is ever consulted (setdefault no-ops here).
@@ -67,6 +71,13 @@ _SCRAPER_CADENCE: dict[str, str] = {
     "advancing": "daily",
     "declining": "daily",
     "unchanged": "daily",
+    # commodity_prices (yfinance) — daily, timer fires 23:08 UTC. Ids are
+    # aggregate_latest's flatten unit-suffixed keys ({key}_{currency}_{unit}
+    # from _build_tier1_source_as_of_map), not the scraper's own brent_crude/
+    # wti_crude/gold keys — previously unmapped despite landing fresh rows daily.
+    "brent_crude_usd_barrel": "daily",
+    "wti_crude_usd_barrel": "daily",
+    "gold_usd_oz": "daily",
     # world_bank_pink_sheet — monthly
     "lng_price_usd_mmbtu": "monthly",
     "palm_oil_price_usd_mt": "monthly",

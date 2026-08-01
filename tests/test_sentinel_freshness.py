@@ -228,3 +228,44 @@ def test_should_send_stays_silent_on_accepted_stale_only_non_heartbeat():
     assert report.breaches == []
     assert should_send(report, is_heartbeat_day=False) is False   # silent, no nag
     assert should_send(report, is_heartbeat_day=True) is True     # weekly health ping still fires
+
+
+# --- assess: retired ids (fell out of the source's universe) -----------------
+
+def test_retired_dse_tickers_route_to_accepted_stale_not_breaches():
+    """dse_close_KOHINOOR/LINDEBD/UNIQUEHRL fell out of the DS30 constituents
+    at the ~2026-07-16 rebalance; backfill_dse_dayend.py has no delisting
+    handling so they simply stopped being written and now breach daily grace.
+    Distinct reason from source-lag (ACCEPTED_STALE_METRIC_IDS) but same
+    silent treatment — must never fire the daily breach alert for a ticker
+    that will never be written again."""
+    m = load_cadence_map()
+    report = assess(
+        rows_daily=[_row("dse_close_KOHINOOR", "2026-07-15"),
+                    _row("dse_close_LINDEBD", "2026-07-15"),
+                    _row("dse_close_UNIQUEHRL", "2026-07-15")],
+        rows_monthly=[],
+        cadence_map=m,
+        today=date(2026, 8, 1),
+    )
+    ids = {"dse_close_KOHINOOR", "dse_close_LINDEBD", "dse_close_UNIQUEHRL"}
+    assert {s.metric_id for s in report.accepted_stale} == ids
+    assert report.breaches == []
+    retired = {s.metric_id: s for s in report.accepted_stale}["dse_close_KOHINOOR"]
+    assert retired.latest_as_of == date(2026, 7, 15)
+    assert retired.breach is False
+
+
+def test_other_dse_close_tickers_still_breach_normally():
+    """A different, still-tracked dse_close_* ticker freezing for a genuinely
+    dead scraper is NOT in RETIRED_METRIC_IDS and must still breach —
+    retirement routing is scoped to the three named ids only."""
+    m = load_cadence_map()
+    report = assess(
+        rows_daily=[_row("dse_close_GP", "2026-06-10")],
+        rows_monthly=[],
+        cadence_map=m,
+        today=date(2026, 8, 1),
+    )
+    assert {b.metric_id for b in report.breaches} == {"dse_close_GP"}
+    assert report.accepted_stale == []
