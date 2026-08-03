@@ -41,7 +41,6 @@ from fetchers.pdf_fetcher import fetch_pdf
 from utils.notifier import notify
 from utils.supabase_reader import SupabaseReadError, get_metric_history
 from utils.supabase_writer import (
-    SupabaseWriteError,
     upsert_metric_definitions_seed,
     upsert_metric_history,
     verify_landed_count,
@@ -449,7 +448,11 @@ def main() -> int:
         count = upsert_metric_history(
             data=rows, as_of=position_date, source=SOURCE_LABEL, ingested_at=write_ts,
         )
-    except SupabaseWriteError as e:
+    except Exception as e:
+        # Broad on purpose (matches the fetch stage): upsert_metric_definitions_seed
+        # does not always wrap failures in SupabaseWriteError (e.g. a raw
+        # ConnectionError can escape utils/supabase_writer.py) and these ids are
+        # ACCEPTED_STALE, so the sentinel can never backstop a silent escape here.
         notify("error", "bb_npl_structure: Supabase write failed", str(e))
         return 1
     verify_landed_count(count, since=write_ts, metric_ids=list(rows), source_label="bb_npl_structure")

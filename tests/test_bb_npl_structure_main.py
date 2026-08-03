@@ -88,3 +88,21 @@ def test_main_fetch_failure_notifies_and_fails():
          patch.object(mod, "notify") as noti:
         assert mod.main() == 1
     assert noti.call_args.args[0] == "error"
+
+
+def test_main_seed_failure_notifies_and_fails(tmp_path):
+    # upsert_metric_definitions_seed does not always wrap failures in
+    # SupabaseWriteError (a raw ConnectionError can escape it) — pin that
+    # main() still catches, notifies, and returns 1 rather than propagating.
+    fr = MagicMock(artifact_path=tmp_path / "f.pdf")
+    with patch.object(mod, "fetch_latest_fsr", return_value=fr), \
+         patch.object(mod, "extract_pdf_text_full", return_value="end-December 2025"), \
+         patch.object(mod, "slice_table_window", return_value="w"), \
+         patch.object(mod, "already_captured", return_value=False), \
+         patch.object(mod, "run_extraction", return_value=dict(GOOD)), \
+         patch.object(mod, "upsert_metric_definitions_seed", side_effect=ConnectionError("dns fail")), \
+         patch.object(mod, "upsert_metric_history") as up, \
+         patch.object(mod, "notify") as noti:
+        assert mod.main() == 1
+    up.assert_not_called()
+    assert noti.call_args.args[0] == "error"
