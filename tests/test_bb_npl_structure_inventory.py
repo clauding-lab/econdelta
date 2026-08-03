@@ -37,7 +37,9 @@ def test_no_collision_with_sources_v3_ids():
 
 def test_extraction_keys_and_required_set():
     from scrapers.bb_npl_structure import (
-        FSR_EXTRACTION_KEYS, METRIC_SPECS, REQUIRED_EXTRACTION_KEYS,
+        FSR_EXTRACTION_KEYS,
+        METRIC_SPECS,
+        REQUIRED_EXTRACTION_KEYS,
     )
     fsr_ids = {m for m, s in METRIC_SPECS.items() if s.fsr}
     assert set(FSR_EXTRACTION_KEYS) == fsr_ids | {"overall_npl_ratio_fsr"}
@@ -56,3 +58,4 @@ def test_definitions_rows_cover_all_35():
         assert row["cadence"] == "fiscal_year"
         assert row["unit"] == spec.unit
         assert row["source"] == ("BB FSR" if spec.fsr else "bb_via_press_static")
+        assert row["grace_days"] == 400
