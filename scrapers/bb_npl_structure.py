@@ -260,3 +260,77 @@ def run_extraction(window: str) -> dict:
             return result.parsed
         last_raw = (result.raw_text or "")[:200]
     raise ExtractionError(f"unparseable extraction after 2 attempts: {last_raw}")
+
+
+# Full reconciliation is possible here (unlike the abandoned QFSAR band
+# design): the FSR prints EVERY sector's share and rate plus the totals.
+# Real 2025 figures: weighted 30.61 vs printed 30.60; shares sum 100.01;
+# 5570.32/18204.30 = 30.60% — all three checks pass with tight tolerances,
+# while a single wrong-column read (e.g. mfg 48.51 for 28.91) moves the
+# weighted average ~10pp and rejects.
+SHARE_SUM_TOLERANCE = 0.5
+WEIGHTED_TOLERANCE_PP = 1.0
+STOCK_RATIO_TOLERANCE_PP = 0.5
+RATE_RANGE = (0.0, 60.0)
+ADVANCES_RANGE_BN = (12_000.0, 40_000.0)
+NPL_STOCK_RANGE_BN = (1_000.0, 20_000.0)
+_POSITION_MAX_AGE_DAYS = 600
+
+
+def _num(v) -> float | None:
+    return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+
+
+def validate_extraction(payload: dict, position_date: date, today: date) -> list[str]:
+    """Granular reject reasons; empty list = internally consistent."""
+    rejects: list[str] = []
+
+    for key in sorted(REQUIRED_EXTRACTION_KEYS):
+        if _num(payload.get(key)) is None:
+            rejects.append(f"required key missing or non-numeric: {key}")
+    if rejects:
+        return rejects
+
+    for mid, spec in METRIC_SPECS.items():
+        if not spec.fsr:
+            continue
+        v = _num(payload.get(mid))
+        if v is None:
+            continue  # optional sub-rate not published
+        if spec.unit == "percent" and not (RATE_RANGE[0] <= v <= RATE_RANGE[1]):
+            rejects.append(f"{mid} out of range {RATE_RANGE}: {v}")
+        elif mid == "total_bank_advances" and not (ADVANCES_RANGE_BN[0] <= v <= ADVANCES_RANGE_BN[1]):
+            rejects.append(f"total_bank_advances out of range {ADVANCES_RANGE_BN} bn: {v}")
+        elif mid == "gross_npl_stock" and not (NPL_STOCK_RANGE_BN[0] <= v <= NPL_STOCK_RANGE_BN[1]):
+            rejects.append(f"gross_npl_stock out of range {NPL_STOCK_RANGE_BN} bn: {v}")
+
+    overall = _num(payload["overall_npl_ratio_fsr"])
+    shares = {k: _num(payload[f"lending_share_sector_{k}"]) for k in _SECTORS}
+    rates = {k: _num(payload[f"npl_rate_sector_{k}"]) for k in _SECTORS}
+
+    share_sum = sum(shares.values())
+    if abs(share_sum - 100.0) > SHARE_SUM_TOLERANCE:
+        rejects.append(f"sector shares sum {share_sum:.2f}, expected 100±{SHARE_SUM_TOLERANCE}")
+
+    weighted = sum(rates[k] * shares[k] for k in _SECTORS) / 100.0
+    if abs(weighted - overall) > WEIGHTED_TOLERANCE_PP:
+        rejects.append(
+            f"weighted sector rates {weighted:.2f} vs overall {overall}"
+            f" (tolerance {WEIGHTED_TOLERANCE_PP}pp)"
+        )
+
+    advances = _num(payload["total_bank_advances"])
+    stock = _num(payload["gross_npl_stock"])
+    stock_ratio = 100.0 * stock / advances if advances else 0.0
+    if abs(stock_ratio - overall) > STOCK_RATIO_TOLERANCE_PP:
+        rejects.append(
+            f"npl stock/advances {stock_ratio:.2f} vs overall {overall}"
+            f" (tolerance {STOCK_RATIO_TOLERANCE_PP}pp)"
+        )
+
+    if position_date > today:
+        rejects.append(f"position date in the future: {position_date}")
+    elif (today - position_date).days > _POSITION_MAX_AGE_DAYS:
+        rejects.append(f"position date implausibly old: {position_date}")
+
+    return rejects
