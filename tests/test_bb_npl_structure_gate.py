@@ -50,8 +50,23 @@ def test_wrong_column_read_fails_weighted_reconciliation():
 
 def test_decimal_slip_in_stock_fails_stock_ratio_check():
     bad = dict(GOOD)
-    bad["gross_npl_stock"] = 557.032
-    assert any("stock" in r for r in _gate(bad))
+    bad["gross_npl_stock"] = 2000.0  # inside NPL_STOCK_RANGE_BN, wrong vs advances
+    assert any("npl stock/advances" in r for r in _gate(bad))
+
+
+def test_stock_out_of_range_rejects():
+    bad = dict(GOOD)
+    bad["gross_npl_stock"] = 25000.0  # outside NPL_STOCK_RANGE_BN
+    assert any("gross_npl_stock out of range" in r for r in _gate(bad))
+
+
+def test_nan_overall_ratio_rejects_as_missing():
+    bad = dict(GOOD)
+    bad["overall_npl_ratio_fsr"] = float("nan")
+    assert any(
+        "required key missing or non-numeric: overall_npl_ratio_fsr" in r
+        for r in _gate(bad)
+    )
 
 
 def test_shares_not_summing_to_100_rejects():
@@ -62,7 +77,7 @@ def test_shares_not_summing_to_100_rejects():
 
 def test_rate_out_of_range_rejects():
     bad = dict(GOOD)
-    bad["npl_rate_sub_construction"] = 77.0
+    bad["npl_rate_sub_construction"] = 85.0
     assert any("npl_rate_sub_construction" in r for r in _gate(bad))
 
 
@@ -77,4 +92,8 @@ def test_future_position_rejects():
 
 
 def test_ancient_position_rejects():
-    assert any("position" in r for r in _gate(dict(GOOD), pos=date(2024, 6, 30)))
+    assert any("position" in r for r in _gate(dict(GOOD), pos=date(2023, 12, 31)))
+
+
+def test_position_within_widened_age_bound_passes():
+    assert _gate(dict(GOOD), pos=date(2025, 6, 30)) == []

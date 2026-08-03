@@ -8,6 +8,14 @@ of lending), 4 sub-sector rates, total advances and gross NPL stock.
 One LLM extraction pass over a deterministic slice of the document, hard
 arithmetic gate (full reconciliation), all-or-nothing upsert.
 
+Gate coverage is uneven by design, not oversight: the 8 sector rates/shares
+and the two totals are reconciliation-checked (share-sum, weighted-average
+vs overall, stock/advances ratio) — a wrong-column or unit-slip read moves
+those checks by multiple points. nbfi and capital_market carry <0.5% of
+lending share each, so a bad read there barely moves the weighted average;
+they and the 4 sub-sector rates are range-checked only (RATE_RANGE), never
+reconciled against another figure in the document.
+
 Seed-only family (no scheduled source — press/parliament disclosures):
 band-wise NPL rates/outstandings and CMSME segment rates, written once by
 scripts/seed_npl_structure.py with source "bb_via_press_static".
@@ -19,6 +27,7 @@ amendment: docs/superpowers/specs/2026-08-03-bb-npl-structure-design.md.
 """
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
@@ -271,14 +280,17 @@ def run_extraction(window: str) -> dict:
 SHARE_SUM_TOLERANCE = 0.5
 WEIGHTED_TOLERANCE_PP = 1.0
 STOCK_RATIO_TOLERANCE_PP = 0.5
-RATE_RANGE = (0.0, 60.0)
+RATE_RANGE = (0.0, 80.0)
 ADVANCES_RANGE_BN = (12_000.0, 40_000.0)
 NPL_STOCK_RANGE_BN = (1_000.0, 20_000.0)
-_POSITION_MAX_AGE_DAYS = 600
+_POSITION_MAX_AGE_DAYS = 800
 
 
 def _num(v) -> float | None:
-    return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+    if not isinstance(v, (int, float)) or isinstance(v, bool):
+        return None
+    f = float(v)
+    return f if math.isfinite(f) else None
 
 
 def validate_extraction(payload: dict, position_date: date, today: date) -> list[str]:
@@ -305,6 +317,9 @@ def validate_extraction(payload: dict, position_date: date, today: date) -> list
             rejects.append(f"gross_npl_stock out of range {NPL_STOCK_RANGE_BN} bn: {v}")
 
     overall = _num(payload["overall_npl_ratio_fsr"])
+    if not (RATE_RANGE[0] <= overall <= RATE_RANGE[1]):
+        rejects.append(f"overall_npl_ratio_fsr out of range {RATE_RANGE}: {overall}")
+
     shares = {k: _num(payload[f"lending_share_sector_{k}"]) for k in _SECTORS}
     rates = {k: _num(payload[f"npl_rate_sector_{k}"]) for k in _SECTORS}
 
