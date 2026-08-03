@@ -1228,7 +1228,7 @@ git commit -m "feat(npl-structure): press-provenance static seeder, dry-run defa
 - Modify: `deploy/install.sh` (`TIMERS=()` array — landmine 19)
 - Modify: `docs/data-contract.md`, `AGENTS.md`
 
-- [ ] **Step 1: Service unit** (mirror `deploy/econdelta-fiscal-gdp.service` verbatim except names/paths and `TimeoutStartSec=1200` — the happy path includes a multi-minute Opus extraction):
+- [ ] **Step 1: Service unit** (mirror `deploy/econdelta-fiscal-gdp.service` verbatim except names/paths and `TimeoutStartSec=2700` — worst case is 2x900s of LLM retry alone before fetch + 148-page pdfplumber extraction; the repo's largest existing unit ceiling (1800s) would kill the run mid-retry):
 
 ```ini
 [Unit]
@@ -1259,7 +1259,7 @@ ProtectSystem=strict
 ProtectHome=read-only
 ReadWritePaths=/home/adnan-local/econdelta/data /home/adnan-local/econdelta/logs
 
-TimeoutStartSec=1200
+TimeoutStartSec=2700
 Restart=on-failure
 RestartSec=300
 
