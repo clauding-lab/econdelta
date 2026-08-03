@@ -19,7 +19,14 @@ amendment: docs/superpowers/specs/2026-08-03-bb-npl-structure-design.md.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
+from datetime import date, datetime, timezone
+from pathlib import Path
+
+from fetch_all import _download_index_html
+from fetchers.pdf_discovery import discover_latest_pdf
+from fetchers.pdf_fetcher import fetch_pdf
 
 SOURCE_LABEL = "BB FSR"
 SEED_ONLY_SOURCE_NOTE = "bb_via_press_static"
@@ -116,3 +123,80 @@ def build_definitions_rows() -> list[dict]:
         }
         for mid, spec in METRIC_SPECS.items()
     ]
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+FSR_LISTING_URL = "https://www.bb.org.bd/en/index.php/publication/publictn/0/37"
+
+_TABLE_MARKER = "SECTOR-WISE NON-PERFORMING LOANS DISTRIBUTION"
+_SLICE_BEFORE = 2_000
+_SLICE_AFTER = 10_000
+
+_MONTHS = {
+    "january": 1, "february": 2, "march": 3, "april": 4, "may": 5, "june": 6,
+    "july": 7, "august": 8, "september": 9, "october": 10, "november": 11,
+    "december": 12,
+}
+_QUARTER_END = {3: 31, 6: 30, 9: 30, 12: 31}
+# Matches "end-December 2025", "END-DECEMBER 2025", "end of December, 2025".
+_POSITION_RE = re.compile(
+    r"end[\s\-]+(?:of[\s\-]+)?(" + "|".join(_MONTHS) + r")[\s,]+(\d{4})",
+    re.IGNORECASE,
+)
+
+
+class PositionDateError(ValueError):
+    """Document text carries no recognizable quarter-end position date."""
+
+
+class TableMarkerError(ValueError):
+    """FSR text no longer contains the Table 2.3 marker — layout changed."""
+
+
+def fetch_latest_fsr(data_root: Path):
+    """Discover + download the newest FSR from BB's annual listing.
+
+    Runs on the box (BD IP). The helpers raise FetchError on failure;
+    main() catches and notifies.
+    """
+    html = _download_index_html(FSR_LISTING_URL)
+    url, period = discover_latest_pdf(html=html, base_url=FSR_LISTING_URL)
+    as_of_month = datetime.now(timezone.utc).strftime("%Y-%m")
+    return fetch_pdf(
+        url=url,
+        indicator_id="bb_npl_structure",
+        snapshot_dir=data_root,
+        as_of_month=as_of_month,
+        period=period,
+    )
+
+
+def extract_pdf_text_full(pdf_path: Path) -> str:
+    from parsers.hybrid import _extract_pdf_text
+
+    return _extract_pdf_text(pdf_path, page_hint=None, indicator_id="bb_npl_structure")
+
+
+def derive_position_date(text: str) -> date:
+    """Latest quarter-end 'end-<Month> <Year>' date in the document's own text.
+
+    max() beats the stale comparison-period dates gov reports print alongside
+    the current one (pdf_table_row landmine).
+    """
+    candidates = [
+        date(int(year), _MONTHS[m.lower()], _QUARTER_END[_MONTHS[m.lower()]])
+        for m, year in _POSITION_RE.findall(text)
+        if _MONTHS[m.lower()] in _QUARTER_END
+    ]
+    if not candidates:
+        raise PositionDateError("no quarter-end position date found in FSR text")
+    return max(candidates)
+
+
+def slice_table_window(text: str) -> str:
+    """The Table 2.3 neighborhood, centered on the LAST marker occurrence
+    (the first is the TOC line). Missing marker = loud failure, not a guess."""
+    idx = text.rfind(_TABLE_MARKER)
+    if idx == -1:
+        raise TableMarkerError(f"marker not found: {_TABLE_MARKER!r}")
+    return text[max(0, idx - _SLICE_BEFORE): idx + _SLICE_AFTER]
