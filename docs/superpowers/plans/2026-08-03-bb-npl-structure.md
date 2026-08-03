@@ -549,12 +549,14 @@ git commit -m "feat(npl-structure): Table 2.3 extraction prompt + retried run_ma
 
 ### Task 4: Full-reconciliation gate (all-or-nothing)
 
+> **EXECUTED WITH AMENDMENTS (2026-08-04, adversarial review rounds 1-2):** `_num` is finite-only (`math.isfinite` — bare NaN from `json.loads` must reject, not disable the reconciliations); `overall_npl_ratio_fsr` gets an explicit RATE_RANGE check; `_POSITION_MAX_AGE_DAYS=800` and `RATE_RANGE=(0,80)` are both mutation-pinned by boundary tests (672-day position; sub-rate 65.0); stock range vs stock/advances ratio checks are separately pinned; module docstring states measured gate coverage (only mfg/trade/services/other rates are wrong-column-proof). The shipped code + tests in git are canonical over the snippets below.
+
 **Files:**
 - Modify: `scrapers/bb_npl_structure.py`
 - Test: `tests/test_bb_npl_structure_gate.py`
 
 **Interfaces:**
-- Produces: `validate_extraction(payload: dict, position_date: date, today: date) -> list[str]` (empty = pass), constants `SHARE_SUM_TOLERANCE = 0.5`, `WEIGHTED_TOLERANCE_PP = 1.0`, `STOCK_RATIO_TOLERANCE_PP = 0.5`, `RATE_RANGE = (0.0, 60.0)`, `ADVANCES_RANGE_BN = (12_000.0, 40_000.0)`, `NPL_STOCK_RANGE_BN = (1_000.0, 20_000.0)`, `_POSITION_MAX_AGE_DAYS = 600`.
+- Produces: `validate_extraction(payload: dict, position_date: date, today: date) -> list[str]` (empty = pass), constants `SHARE_SUM_TOLERANCE = 0.5`, `WEIGHTED_TOLERANCE_PP = 1.0`, `STOCK_RATIO_TOLERANCE_PP = 0.5`, `RATE_RANGE = (0.0, 80.0)`, `ADVANCES_RANGE_BN = (12_000.0, 40_000.0)`, `NPL_STOCK_RANGE_BN = (1_000.0, 20_000.0)`, `_POSITION_MAX_AGE_DAYS = 800`.
 
 The gate is per-document internal consistency ONLY — it never compares against prior DB values, so the bb_forex ratchet shape (landmine 38) is structurally impossible.
 
@@ -619,7 +621,7 @@ def test_shares_not_summing_to_100_rejects():
 
 
 def test_rate_out_of_range_rejects():
-    bad = dict(GOOD); bad["npl_rate_sub_construction"] = 77.0
+    bad = dict(GOOD); bad["npl_rate_sub_construction"] = 85.0
     assert any("npl_rate_sub_construction" in r for r in _gate(bad))
 
 
@@ -633,7 +635,7 @@ def test_future_position_rejects():
 
 
 def test_ancient_position_rejects():
-    assert any("position" in r for r in _gate(dict(GOOD), pos=date(2024, 6, 30)))
+    assert any("position" in r for r in _gate(dict(GOOD), pos=date(2023, 12, 31)))
 ```
 
 - [ ] **Step 2: Run to verify failure.**
@@ -650,10 +652,10 @@ def test_ancient_position_rejects():
 SHARE_SUM_TOLERANCE = 0.5
 WEIGHTED_TOLERANCE_PP = 1.0
 STOCK_RATIO_TOLERANCE_PP = 0.5
-RATE_RANGE = (0.0, 60.0)
+RATE_RANGE = (0.0, 80.0)
 ADVANCES_RANGE_BN = (12_000.0, 40_000.0)
 NPL_STOCK_RANGE_BN = (1_000.0, 20_000.0)
-_POSITION_MAX_AGE_DAYS = 600
+_POSITION_MAX_AGE_DAYS = 800
 
 
 def _num(v) -> float | None:
