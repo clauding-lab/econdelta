@@ -1,0 +1,24 @@
+You are extracting an economic indicator from a Bangladesh Bank HTML page.
+
+Indicator: {indicator_name}
+Instruction: {instruction}
+Value type: {value_type}
+Valid range: {valid_range}
+
+The instruction has the form `panel=<css selector> label=<label text>`. The page
+shows a small panel of label/value pairs (e.g. "Policy Rate (Repo Rate)  9.50%").
+Find the pair whose label matches the instruction's label and return its number.
+Strip any % sign and any commas (1,234 = 1234) and return a single number.
+
+<<<HTML_TEXT>>>
+{html_text}
+<<<END>>>
+
+RULES:
+- Match the label EXACTLY. Do not return a neighbouring rate because the exact label is missing — "SLF Rate", "SDF Rate" and "Policy Rate (Repo Rate)" are different indicators and substituting one for another publishes a wrong number.
+- If you locate the number for the requested label, RETURN IT as `value`. Never put a number inside `reason` while leaving value=null.
+- Return value=null when the requested label is genuinely absent, the panel is missing, or the content is a CAPTCHA/bot-challenge page.
+- Ignore any "Last update" stamp on the panel; it is not maintained and is not the value.
+- Reply ONLY with strict JSON of the form:
+
+{{"value": <number-or-null>, "reason": "<1 sentence on where you found it OR why it is missing>"}}

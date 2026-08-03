@@ -492,14 +492,13 @@
       "domain": "money_market",
       "cadence": "monthly",
       "fetch": {
-        "type": "pdf",
-        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
-        "task": "page=10 col=Policy rate (repo)",
-        "discover": "latest_pdf_link"
+        "type": "html",
+        "url": "https://www.bb.org.bd/en/index.php",
+        "task": "panel=div.policy label=Policy Rate (Repo Rate)"
       },
       "parse": {
-        "deterministic": "pdf_table_column_latest",
-        "llm_prompt": "pdf_table_column_latest.txt",
+        "deterministic": "html_labeled_value",
+        "llm_prompt": "html_labeled_value.txt",
         "value_type": "percent",
         "valid_range": [
           3.0,
@@ -514,14 +513,13 @@
       "domain": "money_market",
       "cadence": "monthly",
       "fetch": {
-        "type": "pdf",
-        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
-        "task": "page=10 col=SDF rate",
-        "discover": "latest_pdf_link"
+        "type": "html",
+        "url": "https://www.bb.org.bd/en/index.php",
+        "task": "panel=div.policy label=SDF Rate"
       },
       "parse": {
-        "deterministic": "pdf_table_column_latest",
-        "llm_prompt": "pdf_table_column_latest.txt",
+        "deterministic": "html_labeled_value",
+        "llm_prompt": "html_labeled_value.txt",
         "value_type": "percent",
         "valid_range": [
           3.0,
@@ -536,14 +534,13 @@
       "domain": "money_market",
       "cadence": "monthly",
       "fetch": {
-        "type": "pdf",
-        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
-        "task": "page=10 col=SLF rate",
-        "discover": "latest_pdf_link"
+        "type": "html",
+        "url": "https://www.bb.org.bd/en/index.php",
+        "task": "panel=div.policy label=SLF Rate"
       },
       "parse": {
-        "deterministic": "pdf_table_column_latest",
-        "llm_prompt": "pdf_table_column_latest.txt",
+        "deterministic": "html_labeled_value",
+        "llm_prompt": "html_labeled_value.txt",
         "value_type": "percent",
         "valid_range": [
           4.0,
