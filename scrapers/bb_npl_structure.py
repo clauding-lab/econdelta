@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
 
+from claude_max.max_client import MaxCallError, run_max
 from fetch_all import _download_index_html
 from fetchers.pdf_discovery import discover_latest_pdf
 from fetchers.pdf_fetcher import fetch_pdf
@@ -200,3 +201,62 @@ def slice_table_window(text: str) -> str:
     if idx == -1:
         raise TableMarkerError(f"marker not found: {_TABLE_MARKER!r}")
     return text[max(0, idx - _SLICE_BEFORE): idx + _SLICE_AFTER]
+
+
+_EXTRACTION_MODEL = "claude-opus-4-8"
+_EXTRACTION_EFFORT = "high"
+_EXTRACTION_TIMEOUT_S = 900
+
+
+class ExtractionError(RuntimeError):
+    """LLM extraction failed twice (unparseable JSON) or the CLI call errored."""
+
+
+def build_extraction_prompt(window: str) -> str:
+    field_lines = "\n".join(f'  "{k}": <number or null>,' for k in FSR_EXTRACTION_KEYS).rstrip(",")
+    sector_lines = "\n".join(
+        f'- npl_rate_sector_{k} / lending_share_sector_{k}: row "{name}" —'
+        " Gross NPL Ratio column / Share of Loans Extended column"
+        for k, name in _SECTORS.items()
+    )
+    return (
+        "Below is the sector-wise non-performing-loans table from Bangladesh"
+        " Bank's Financial Stability Report, as raw extracted text.\n"
+        "Rules:\n"
+        "- Copy numbers VERBATIM. Never derive, convert, sum, or infer.\n"
+        "- Percent columns: the printed number (49.88 not 0.4988).\n"
+        "- Amount fields: the printed BILLION BDT number exactly as shown"
+        " (e.g. 18,204.30 -> 18204.30). Do NOT convert units.\n"
+        "- If a row or figure is absent from the text, use null. Do not guess.\n"
+        "- Reply with ONLY a JSON object, exactly these keys:\n"
+        "{\n" + field_lines + "\n}\n\n"
+        "Field meanings (top-level sector rows):\n" + sector_lines + "\n"
+        '- npl_rate_sub_rmg: sub-row "RMG" Gross NPL Ratio\n'
+        '- npl_rate_sub_construction: sub-row "Construction Loans" Gross NPL Ratio\n'
+        '- npl_rate_sub_housing_finance: sub-row "Housing Finance" Gross NPL Ratio\n'
+        '- npl_rate_sub_smc_industries: sub-row "Other Industries (Small, Medium and'
+        ' Cottage)" Gross NPL Ratio\n'
+        "- total_bank_advances: Total row, Total Loans Outstanding column (billion BDT)\n"
+        "- gross_npl_stock: Total row, Gross NPL column (billion BDT)\n"
+        "- overall_npl_ratio_fsr: Total row, Gross NPL Ratio column (percent)\n\n"
+        "TABLE TEXT:\n" + window
+    )
+
+
+def run_extraction(window: str) -> dict:
+    prompt = build_extraction_prompt(window)
+    last_raw = ""
+    for _attempt in (1, 2):
+        try:
+            result = run_max(
+                prompt=prompt,
+                model=_EXTRACTION_MODEL,
+                effort=_EXTRACTION_EFFORT,
+                timeout_s=_EXTRACTION_TIMEOUT_S,
+            )
+        except MaxCallError as e:
+            raise ExtractionError(f"max CLI call failed: {e}") from e
+        if isinstance(result.parsed, dict):
+            return result.parsed
+        last_raw = (result.raw_text or "")[:200]
+    raise ExtractionError(f"unparseable extraction after 2 attempts: {last_raw}")
