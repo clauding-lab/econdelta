@@ -8,13 +8,12 @@ of lending), 4 sub-sector rates, total advances and gross NPL stock.
 One LLM extraction pass over a deterministic slice of the document, hard
 arithmetic gate (full reconciliation), all-or-nothing upsert.
 
-Gate coverage is uneven by design, not oversight: the 8 sector rates/shares
-and the two totals are reconciliation-checked (share-sum, weighted-average
-vs overall, stock/advances ratio) — a wrong-column or unit-slip read moves
-those checks by multiple points. nbfi and capital_market carry <0.5% of
-lending share each, so a bad read there barely moves the weighted average;
-they and the 4 sub-sector rates are range-checked only (RATE_RANGE), never
-reconciled against another figure in the document.
+Gate coverage, measured not assumed: all 8 sector SHARES reconcile via the sum-to-100 check;
+sector RATES are wrong-column-proof only where share is large enough to move the weighted-
+average-vs-overall check past its 1pp tolerance — industrial_mfg, trade_commerce,
+industrial_services, other. A bad read on agriculture (~1.0pp shift, near that tolerance edge),
+consumer_credit (~0.4pp), nbfi, or capital_market (each <0.5% lending share) can still pass;
+those 4 rates plus the 4 sub-sector rates are range-checked only, never reconciled.
 
 Seed-only family (no scheduled source — press/parliament disclosures):
 band-wise NPL rates/outstandings and CMSME segment rates, written once by

@@ -96,4 +96,13 @@ def test_ancient_position_rejects():
 
 
 def test_position_within_widened_age_bound_passes():
-    assert _gate(dict(GOOD), pos=date(2025, 6, 30)) == []
+    # 672 days vs TODAY — inside the 600-800 band, passes only under 800.
+    assert _gate(dict(GOOD), pos=date(2024, 9, 30)) == []
+
+
+def test_rate_between_60_and_80_passes():
+    # Range-only id (no reconciliation) so this pins RATE_RANGE alone:
+    # passes under (0, 80), would reject under the old (0, 60) ceiling.
+    ok = dict(GOOD)
+    ok["npl_rate_sub_rmg"] = 65.0
+    assert _gate(ok) == []
