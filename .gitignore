@@ -19,6 +19,10 @@ logs/*.log
 logs/*.stderr
 logs/*.stdout
 data/latest.json
+# Per-box runtime state for the stillness alarm — learned by observation on the
+# box that runs the aggregate; committing one box's copy would seed another with
+# counters it never observed (AGENTS.md landmine 40).
+data/staleness_state.json
 !data/.gitkeep
 !logs/.gitkeep
 !data/*/.gitkeep
