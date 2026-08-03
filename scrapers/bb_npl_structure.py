@@ -26,8 +26,10 @@ amendment: docs/superpowers/specs/2026-08-03-bb-npl-structure-design.md.
 """
 from __future__ import annotations
 
+import logging
 import math
 import re
+import sys
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -36,6 +38,16 @@ from claude_max.max_client import MaxCallError, run_max
 from fetch_all import _download_index_html
 from fetchers.pdf_discovery import discover_latest_pdf
 from fetchers.pdf_fetcher import fetch_pdf
+from utils.notifier import notify
+from utils.supabase_reader import SupabaseReadError, get_metric_history
+from utils.supabase_writer import (
+    SupabaseWriteError,
+    upsert_metric_definitions_seed,
+    upsert_metric_history,
+    verify_landed_count,
+)
+
+logger = logging.getLogger("bb_npl_structure")
 
 SOURCE_LABEL = "BB FSR"
 SEED_ONLY_SOURCE_NOTE = "bb_via_press_static"
@@ -348,3 +360,104 @@ def validate_extraction(payload: dict, position_date: date, today: date) -> list
         rejects.append(f"position date implausibly old: {position_date}")
 
     return rejects
+
+
+_DATA_ROOT = REPO_ROOT / "data"
+_BELLWETHER_ID = "npl_rate_sector_trade_commerce"
+_RECENT_ISSUES_WINDOW = 10  # rows; annual series → a decade of coverage
+_BN_TO_CRORE = 100.0
+_CRORE_IDS = ("total_bank_advances", "gross_npl_stock")
+
+
+def already_captured(position_date: date) -> bool:
+    """True only if THIS exact position date already has a row.
+
+    Exact-match (not >=) so an older FSR issue can still backfill history.
+    Fail-open on read errors: a duplicate run costs one LLM call and an
+    idempotent merge-upsert; a false 'captured' would drop an issue.
+    """
+    try:
+        rows = get_metric_history(_BELLWETHER_ID, days=_RECENT_ISSUES_WINDOW)
+    except SupabaseReadError as e:
+        logger.warning("capture check failed (%s) — proceeding", e)
+        return False
+    return position_date.isoformat() in {r["as_of"] for r in rows}
+
+
+def payload_to_rows(payload: dict) -> dict[str, float]:
+    """FSR-written metrics only; billions→crore for the two amount ids;
+    check field and null sub-rates dropped."""
+    rows: dict[str, float] = {}
+    for mid, spec in METRIC_SPECS.items():
+        if not spec.fsr:
+            continue
+        v = _num(payload.get(mid))
+        if v is None:
+            continue
+        rows[mid] = v * _BN_TO_CRORE if mid in _CRORE_IDS else v
+    return rows
+
+
+def main() -> int:
+    try:
+        artifact = fetch_latest_fsr(_DATA_ROOT)
+    except Exception as e:
+        notify("error", "bb_npl_structure: FSR fetch failed", str(e))
+        return 1
+
+    try:
+        text = extract_pdf_text_full(artifact.artifact_path)
+        position_date = derive_position_date(text)
+    except PositionDateError as e:
+        notify("error", "bb_npl_structure: cannot date the FSR", str(e))
+        return 1
+    except Exception as e:
+        logger.exception("pdf text extraction failed")
+        notify("error", "bb_npl_structure: FSR text extraction failed", str(e))
+        return 1
+
+    if already_captured(position_date):
+        logger.info("FSR position %s already captured — skip", position_date)
+        return 3
+
+    try:
+        window = slice_table_window(text)
+    except TableMarkerError as e:
+        notify("error", "bb_npl_structure: FSR layout changed", str(e))
+        return 1
+
+    try:
+        payload = run_extraction(window)
+    except ExtractionError as e:
+        notify("error", "bb_npl_structure: extraction failed", str(e))
+        return 1
+
+    today = datetime.now(timezone.utc).date()
+    rejects = validate_extraction(payload, position_date, today)
+    if rejects:
+        notify(
+            "error",
+            f"bb_npl_structure: gate rejected {position_date} extraction — ZERO rows written",
+            "\n".join(rejects),
+        )
+        return 1
+
+    rows = payload_to_rows(payload)
+    write_ts = datetime.now(timezone.utc)
+    try:
+        upsert_metric_definitions_seed(build_definitions_rows())  # first-insert-wins no-op later
+        count = upsert_metric_history(
+            data=rows, as_of=position_date, source=SOURCE_LABEL, ingested_at=write_ts,
+        )
+    except SupabaseWriteError as e:
+        notify("error", "bb_npl_structure: Supabase write failed", str(e))
+        return 1
+    verify_landed_count(count, since=write_ts, metric_ids=list(rows), source_label="bb_npl_structure")
+    logger.info("captured FSR %s: %d metrics", position_date, count)
+    return 0
+
+
+if __name__ == "__main__":
+    from utils.supabase_writer import wrap_run
+
+    sys.exit(wrap_run("bb_npl_structure", "econdelta-npl-structure.service", main))
