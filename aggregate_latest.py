@@ -28,11 +28,15 @@ from utils.schema import (
     LatestBundle,
     SourceStatus,
 )
+from utils.staleness import check_value_staleness
 
 REPO_ROOT = Path(__file__).resolve().parent
 DATA_DIR = REPO_ROOT / "data"
 LATEST_PATH = DATA_DIR / "latest.json"
 ARCHIVE_DIR = DATA_DIR / "archive"
+# Cross-run tracker for the stillness alarm (utils/staleness.py). Not a data
+# artifact — losing it only costs the alarm its warm-up window.
+STALENESS_STATE_PATH = DATA_DIR / "staleness_state.json"
 CONFIG_PATH = REPO_ROOT / "config" / "sources.json"
 SOURCES_V3_PATH = REPO_ROOT / "config" / "sources-v3.json"
 HOLIDAYS_PATH = REPO_ROOT / "config" / "holidays_2026.json"
@@ -1209,6 +1213,26 @@ def main() -> int:
     # loudly on a violation. Detect-only — the legs already landed at parse
     # time, so this never rejects the run.
     check_corridor_coherence(data)
+
+    # Stillness alarm: the threshold checks above all ask "did this value move
+    # too much?". Every freeze this project has shipped — 93 days of identical
+    # food prices, 65 days of a pre-cut policy rate — was a failure of the
+    # opposite kind, and nothing was watching for it. Detect-and-alert only;
+    # runs after the corridor check so one bad run reports both problems.
+    try:
+        sources_v3_registry = (
+            json.loads(SOURCES_V3_PATH.read_text()).get("indicators", [])
+            if SOURCES_V3_PATH.exists()
+            else []
+        )
+        check_value_staleness(
+            data,
+            sources_v3_registry,
+            today=now.date(),
+            state_path=STALENESS_STATE_PATH,
+        )
+    except Exception as e:  # observability must never take down the aggregate
+        logger.warning("staleness check failed: %s: %s", type(e).__name__, e)
 
     try:
         bundle = LatestBundle(
