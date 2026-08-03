@@ -1,7 +1,7 @@
 # BB NPL Structure Tracking — Design
 
 **Date:** 2026-08-03
-**Status:** Approved by owner (session 2026-08-03)
+**Status:** Approved by owner (session 2026-08-03); AMENDED same day after the verification gate — see the Amendment section at the end. Where the amendment conflicts with earlier text, the amendment governs.
 **Origin:** Owner deck "Small Loans Big Numbers — Bangladesh NPL Briefing" (BB data via Prothom Alo, 1 Aug 2026, position end-March 2026). Goal: EconDelta gains durable capacity to track the deck's data families as first-class metrics.
 
 ---
@@ -96,3 +96,35 @@ From the box or Hetzner: pull the current QFSAR and the latest FSR; confirm whic
 ## Deliverable shape
 
 Likely 2 PRs: (1) extractor + definitions + sentinel wiring + tests; (2) seeder + supervised seed execution. Final split decided in the implementation plan. Gate for every PR: `.venv/bin/python -m pytest -q` and `.venv/bin/ruff check .` run bare, exit 0.
+
+---
+
+## Amendment — 2026-08-03, post-verification (owner-approved; governs over earlier text)
+
+The verification gate ran against the real documents (QFSAR Jul–Sep-2025 issue from the box; FSR 2025 fetched live from BB via the box). Findings:
+
+1. **QFSAR carries NONE of the three families** (its NPL coverage: overall ratio, bank-cluster, concentration, category composition). It is also STALLED — the Jul–Sep-2025 issue is still the newest as of Aug 2026 (~10-month lag, identical sha across 4 monthly fetches).
+2. **FSR 2025 (annual, published ~Jun 2026, position end-Dec-2025) DOES publish the sectoral family** — Table 2.3 "Sector-wise Non-performing Loans Distribution": 8 top-level sectors + sub-sectors, each with outstanding, gross NPL stock, NPL ratio, share of loans, share of NPLs. Richer than the deck's 4-sector press cut. Full shares column → a complete-reconciliation gate (weighted sector rates ≈ printed overall ratio, shares ≈ 100, stock/advances ≈ ratio).
+3. **Band-wise NPL and CMSME segment rates appear in NEITHER publication** — they are press/parliament disclosures (CIB-derived).
+
+**Owner decisions (2026-08-03, second batch):**
+
+- **Rebuild shape: "FSR sectoral + seed".** The extractor targets FSR Table 2.3 (annual). The scraper performs its own FSR discovery+fetch on the box (proven live: `_download_index_html` + `discover_latest_pdf` + `fetch_pdf`), artifact dir `data/_pdfs/bb_npl_structure/`. The QFSAR-artifact-reuse design is dead.
+- **Band + CMSME families become SEED-ONLY series** (static Mar-2026 press values, provenance `bb_via_press_static`). No automated writer exists for them until a future press/media-screen decision.
+- **Sentinel posture: `accepted_stale`** for all these ids (structural source lag exceeds every sentinel window; precedent `tax_gdp_ratio`/`rev_gdp_ratio`). Non-gating for the briefing stands. Capture failures still surface via run_logs + the scraper's own Discord notifies.
+- **Sector taxonomy = the FSR's**, not the deck's press cut. Consequence for the seed: the deck's 4-sector shares (trade 32 / consumer 9 / construction 7), `npl_rate_consumer` 7.0, and `npl_rate_industry` 32.0 are DROPPED from the seed — they are a different taxonomy from the ongoing FSR series and would create orphan/confusable series. Seed = 7 band rates + 3 band outstandings + 3 CMSME rates (overall 34 / cottage 53 / medium 38) + `total_bank_advances` 1,784,000 crore = 14 values at as_of 2026-03-31.
+
+**Amended metric inventory (35 ids):**
+
+- FSR sector NPL rates (8): `npl_rate_sector_agriculture`, `_industrial_mfg`, `_industrial_services`, `_consumer_credit`, `_trade_commerce`, `_nbfi`, `_capital_market`, `_other`
+- FSR sector lending shares (8): `lending_share_sector_<same 8 suffixes>`
+- FSR sub-sector NPL rates (4, write-if-present): `npl_rate_sub_rmg`, `npl_rate_sub_construction`, `npl_rate_sub_housing_finance`, `npl_rate_sub_smc_industries` (Small/Medium/Cottage industries row)
+- FSR totals (2): `total_bank_advances`, `gross_npl_stock` (both Tk crore; FSR prints billion BDT — code converts ×100; the LLM extracts VERBATIM billions, never converts)
+- Seed-only (13): `npl_rate_band_lt1cr`…`_gt50cr` (7), `loans_outstanding_band_lt1cr`/`_1_10cr`/`_gt50cr` (3), `npl_rate_cmsme_overall`/`_cottage`/`_medium` (3)
+- `overall_npl_ratio_fsr` is extracted as a CHECK field only — never stored (`gross_npl_ratio` remains the QFSAR-sourced overall series; the FSR's 30.60 is a different vintage of the same concept and must not collide).
+
+**Amended freshness:** definitions cadence `fiscal_year`, grace 400d (truth-in-labeling for the DB view); sentinel `_SCRAPER_CADENCE` entries `fiscal_year` + ALL 35 ids in `ACCEPTED_STALE_METRIC_IDS`.
+
+**Fixture:** `tests/_pdfs/fsr_fixture.pdf` (FSR 2025, 6.1MB, sha verified against box fetch) + `tests/fixtures/fsr_fixture_text.txt` (397,499 chars). The QFSAR fixture was discarded (wrong document for the amended build).
+
+**Also observed, out of scope:** the DB's `gross_npl_ratio` 32.26% is the stale Sep-2025 QFSAR figure; press reports 32.7% for Mar-2026. Existing media-screen override path's territory.
