@@ -14,6 +14,13 @@ def test_derive_position_date_from_real_fixture_is_end_dec_2025():
     assert derive_position_date(FIXTURE_TEXT) == date(2025, 12, 31)
 
 
+def test_derive_position_date_on_the_real_sliced_window_matches_full_document():
+    # Pins the path main() actually takes: slice first, then derive from the
+    # WINDOW — must still land on the real fixture's true position date.
+    from scrapers.bb_npl_structure import derive_position_date, slice_table_window
+    assert derive_position_date(slice_table_window(FIXTURE_TEXT)) == date(2025, 12, 31)
+
+
 def test_latest_idiom_wins_and_end_of_variant_parses():
     from scrapers.bb_npl_structure import derive_position_date
     text = "as at end-December 2024 ... at the end of December 2025 the sector"

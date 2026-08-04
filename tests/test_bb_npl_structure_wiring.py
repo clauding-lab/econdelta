@@ -1,10 +1,10 @@
 """tests/test_bb_npl_structure_wiring.py"""
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-_VENV_PYTHON = REPO_ROOT / ".venv" / "bin" / "python"
 
 
 def test_every_metric_resolves_fiscal_year_in_sentinel():
@@ -47,7 +47,7 @@ def test_catalog_regeneration_is_a_noop():
     # `scripts/build_catalog.py` produces right now — a stale committed copy
     # would silently disagree with DERIVED_KEYS/METRIC_SPECS.
     result = subprocess.run(
-        [str(_VENV_PYTHON), str(REPO_ROOT / "scripts" / "build_catalog.py")],
+        [sys.executable, str(REPO_ROOT / "scripts" / "build_catalog.py")],
         capture_output=True, text=True, cwd=REPO_ROOT, check=True,
     )
     committed = (REPO_ROOT / "docs" / "indicator-catalog.md").read_text()
