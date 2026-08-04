@@ -1,8 +1,10 @@
 """tests/test_bb_npl_structure_wiring.py"""
 import json
+import subprocess
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+_VENV_PYTHON = REPO_ROOT / ".venv" / "bin" / "python"
 
 
 def test_every_metric_resolves_fiscal_year_in_sentinel():
@@ -38,3 +40,27 @@ def test_catalog_lists_every_metric():
     catalog = (REPO_ROOT / "docs" / "indicator-catalog.md").read_text()
     for mid in METRIC_SPECS:
         assert f"`{mid}`" in catalog, mid
+
+
+def test_catalog_regeneration_is_a_noop():
+    # Drift guard: docs/indicator-catalog.md must always be exactly what
+    # `scripts/build_catalog.py` produces right now — a stale committed copy
+    # would silently disagree with DERIVED_KEYS/METRIC_SPECS.
+    result = subprocess.run(
+        [str(_VENV_PYTHON), str(REPO_ROOT / "scripts" / "build_catalog.py")],
+        capture_output=True, text=True, cwd=REPO_ROOT, check=True,
+    )
+    committed = (REPO_ROOT / "docs" / "indicator-catalog.md").read_text()
+    assert result.stdout == committed
+
+
+def test_derived_keys_match_metric_specs_for_every_npl_id():
+    from scrapers.bb_npl_structure import METRIC_SPECS
+    from scripts.build_catalog import DERIVED_KEYS
+    by_id = {mid: (unit, cadence, desc) for mid, unit, cadence, desc in DERIVED_KEYS}
+    assert set(METRIC_SPECS) <= set(by_id)
+    for mid, spec in METRIC_SPECS.items():
+        unit, cadence, desc = by_id[mid]
+        assert unit == spec.unit, mid
+        assert desc.startswith(spec.label), mid
+        assert cadence == "fiscal_year", mid

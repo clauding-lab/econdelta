@@ -247,6 +247,8 @@ git commit -m "feat(npl-structure): 35-id metric inventory (22 FSR-written + 13 
 - Consumes: `fetch_all._download_index_html(url) -> str`; `fetchers.pdf_discovery.discover_latest_pdf(*, html, base_url) -> tuple[str, tuple[int, int]]`; `fetchers.pdf_fetcher.fetch_pdf(*, url, indicator_id, snapshot_dir, as_of_month, period=None) -> FetchResult` (writes `<snapshot_dir>/_pdfs/<indicator_id>/<as_of_month>/<name>.pdf`); `parsers.hybrid._extract_pdf_text(pdf_path, page_hint=None, indicator_id=...) -> str`; `fetchers.base.FetchResult` (attrs `artifact_path`, `artifact_type`, `source_url`, `sha256`).
 - Produces: `FSR_LISTING_URL`, `fetch_latest_fsr(data_root: Path) -> "FetchResult"`, `extract_pdf_text_full(pdf_path) -> str`, `derive_position_date(text) -> date` (raises `PositionDateError`), `slice_table_window(text) -> str` (raises `TableMarkerError`), `class PositionDateError(ValueError)`, `class TableMarkerError(ValueError)`.
 
+**Amended after final review, owner-approved 2026-08-05:** `derive_position_date`'s own signature is unchanged (it still just takes `text: str`), but Task 5's `main()` now calls it on the output of `slice_table_window` (the table WINDOW) instead of the full extracted document text — see the Task 5 amendment note for why.
+
 - [ ] **Step 1: Write the failing tests**
 
 ```python
@@ -736,7 +738,7 @@ git commit -m "feat(npl-structure): full-reconciliation arithmetic gate (all-or-
 
 **Interfaces:**
 - Consumes: `utils.supabase_writer.upsert_metric_history(*, data, as_of, source, ingested_at=None) -> int`, `upsert_metric_definitions_seed(list[dict]) -> int`, `verify_landed_count(expected, *, since, metric_ids, source_label)`, `wrap_run`, `SupabaseWriteError`; `utils.supabase_reader.get_metric_history(metric_id, *, days) -> list[dict]` (newest first), `SupabaseReadError`; `utils.notifier.notify`.
-- Produces: `already_captured(position_date) -> bool` (EXACT-date match so older issues can backfill), `payload_to_rows(payload) -> dict[str, float]` (billions→crore ×100 for the two totals), `main() -> int` (0/1/3), `_BELLWETHER_ID = "npl_rate_sector_trade_commerce"`.
+- Produces: `already_captured(position_date) -> bool` (EXACT-date match so older issues can backfill), `payload_to_rows(payload) -> dict[str, float]` (billions→crore ×100 for the two totals), `main() -> int` (0/1/2/3 — **amended after final review, owner-approved 2026-08-05:** exit 2 = position date older than `_POSITION_MAX_AGE_DAYS`, added alongside the pre-existing 0/1/3), `_BELLWETHER_ID = "npl_rate_sector_trade_commerce"`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -950,6 +952,8 @@ if __name__ == "__main__":
 
     sys.exit(wrap_run("bb_npl_structure", "econdelta-npl-structure.service", main))
 ```
+
+**Amended after final review, owner-approved 2026-08-05 — `main()`'s order above is superseded.** The code block shows the ORIGINAL Task 5 order (fetch → extract full text → derive position date from the FULL TEXT → exact-date skip → slice table window → LLM → gate). The shipped order instead is: fetch → extract text → **slice table window first** → **derive position date from the WINDOW** (same `derive_position_date`, called on the window instead of the full text — the full document can carry a newer/older decoy comparison-period date outside Table 2.3 that would otherwise win under `max()`) → **date sanity BEFORE the LLM** (future → `notify("error", ...)`, exit 1; older than `_POSITION_MAX_AGE_DAYS` → `notify("warning", ...)` matching the repo's other stale-path scrapers, exit 2 — new) → exact-date skip (unchanged, exit 3) → LLM → gate. The gate's own future/age checks in `validate_extraction` stay as defence-in-depth and are unchanged.
 
 - [ ] **Step 4: Run tests, expect PASS** — all five module test files together.
 
@@ -1230,7 +1234,9 @@ git commit -m "feat(npl-structure): press-provenance static seeder, dry-run defa
 - Modify: `deploy/install.sh` (`TIMERS=()` array — landmine 19)
 - Modify: `docs/data-contract.md`, `AGENTS.md`
 
-- [ ] **Step 1: Service unit** (mirror `deploy/econdelta-fiscal-gdp.service` verbatim except names/paths and `TimeoutStartSec=2700` — worst case is 2x900s of LLM retry alone before fetch + 148-page pdfplumber extraction; the repo's largest existing unit ceiling (1800s) would kill the run mid-retry):
+- [ ] **Step 1: Service unit** (mirror `deploy/econdelta-fiscal-gdp.service` verbatim except names/paths and `TimeoutStartSec=2700` — worst case is 2x900s of LLM retry alone before fetch + 148-page pdfplumber extraction; 2700s stands on that 2x900s budget plus margin, not on any existing ceiling — `econdelta-parse.service`/`econdelta-briefing.service` are already 3600s, the repo's actual largest):
+
+  **(amended after final review, owner-approved 2026-08-05):** `MemoryMax=1500M` / `MemoryHigh=1200M`, not 500M/400M — measured: whole-PDF pdfplumber over the real 192-page FSR peaks ~1,109MB, and `econdelta-parse.service` (same extraction call path) already runs 1500M/1200M on the same box.
 
 ```ini
 [Unit]
@@ -1250,8 +1256,8 @@ WorkingDirectory=/home/adnan-local/econdelta
 EnvironmentFile=/etc/econdelta.env
 ExecStart=/home/adnan-local/econdelta/.venv/bin/python -m scrapers.bb_npl_structure
 
-MemoryMax=500M
-MemoryHigh=400M
+MemoryMax=1500M
+MemoryHigh=1200M
 CPUQuota=50%
 TasksMax=512
 
@@ -1341,7 +1347,7 @@ git commit -m "feat(npl-structure): systemd units, install wiring, contract + la
 - [ ] **Step 4 (POST-MERGE, OWNER-GATED batch — enumerate, get ONE approval):**
   1. Box pull via healed gitpull (or manual `git pull --ff-only`).
   2. Targeted unit install (landmine 37): `install -m 0644` both units → `daemon-reload` → `enable --now econdelta-npl-structure.timer`. The `.claude` directory carve-out already shipped in the unit's `ReadWritePaths=` (fix round 1, owner-approved 2026-08-04) — no action needed there. The separate `~/.claude.json` file drop-in (landmine 17) now ships in-repo at `deploy/econdelta-npl-structure.service.d/10-claude-json-writable.conf` and install-time auto-copy handles it; just verify it landed post-daemon-reload with `systemctl cat econdelta-npl-structure.service`.
-  3. Supervised seed: before-SELECT proof (0 rows for the 35 ids) → box-side `.venv/bin/python -m scripts.seed_npl_structure --execute` (env sourced server-side, status codes only) → after-SELECT proof (14 rows at 2026-03-31, source `bb_via_press_static`).
+  3. Supervised seed: `unset ECONDELTA_SKIP_SUPABASE` in the box shell before `--execute` (**amended after final review, owner-approved 2026-08-05**: `upsert_metric_definitions_seed` honours this flag and silently no-ops when it's set to `1`, but `upsert_metric_history` does NOT check it at all — a stray `=1` left from a test session would seed history rows for real while silently skipping the definitions rows, an asymmetric partial write) → before-SELECT proof (0 rows for the 35 ids) → box-side `.venv/bin/python -m scripts.seed_npl_structure --execute` (env sourced server-side, status codes only) → after-SELECT proof (14 rows at 2026-03-31, source `bb_via_press_static`).
   4. First live run: `systemctl start econdelta-npl-structure.service` → expect run_logs `ok` with 22 rows at `as_of 2025-12-31` source `BB FSR`, then a second manual run → `skip` (exit 3).
   5. If `grace_days` didn't seed via the writer (Task 1 note): supervised PATCH of `metric_definitions.grace_days=400` for the 35 ids, with proofs.
   6. Sentinel check on next run: all 35 ids in `accepted_stale` bucket, zero new breaches, zero unmapped.

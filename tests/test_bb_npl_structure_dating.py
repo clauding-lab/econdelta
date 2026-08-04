@@ -47,6 +47,22 @@ def test_slice_missing_marker_raises():
         slice_table_window("an FSR whose layout changed completely")
 
 
+def test_slice_table_window_matches_title_case_marker():
+    # C4: matching is case-insensitive — a title-case caption still hits it.
+    from scrapers.bb_npl_structure import slice_table_window
+    text = "Prefix text. Sector-Wise Non-Performing Loans Distribution in 2025 body 705.90 tail."
+    window = slice_table_window(text)
+    assert "705.90" in window
+
+
+def test_position_regex_does_not_swallow_a_five_digit_run_into_a_bogus_year():
+    # C6: (\d{4})(?!\d) — a stray 5-digit run right after the month must not
+    # be misread as a valid 4-digit year.
+    from scrapers.bb_npl_structure import PositionDateError, derive_position_date
+    with pytest.raises(PositionDateError):
+        derive_position_date("end-December 20255 report id")
+
+
 def test_fetch_latest_fsr_wires_discovery_to_fetch(tmp_path):
     import scrapers.bb_npl_structure as mod
     fr = MagicMock(artifact_path=tmp_path / "fsr.pdf")

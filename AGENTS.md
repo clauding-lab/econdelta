@@ -162,11 +162,14 @@ Pre-merge smoke list for backend changes:
     reconciliation gate wrong-column-proves only npl_rate_sector_industrial_mfg,
     npl_rate_sector_trade_commerce, npl_rate_sector_industrial_services, and
     npl_rate_sector_other; npl_rate_sector_agriculture,
-    npl_rate_sector_consumer_credit, npl_rate_sector_nbfi,
-    npl_rate_sector_capital_market, npl_rate_sub_rmg,
-    npl_rate_sub_construction, npl_rate_sub_housing_finance, and
-    npl_rate_sub_smc_industries are range-only — treat their values with
-    that weaker guarantee.
+    npl_rate_sector_consumer_credit, npl_rate_sector_nbfi, and
+    npl_rate_sector_capital_market DO enter the weighted-average-vs-overall
+    sum but each has too small a lending share to move it past the 1pp
+    tolerance on a bad read — inside the reconciliation math, effectively
+    unproven by it. Only npl_rate_sub_rmg, npl_rate_sub_construction,
+    npl_rate_sub_housing_finance, and npl_rate_sub_smc_industries sit
+    outside every reconciliation entirely and are range-only — treat their
+    values with that weaker guarantee.
 
 ## Communication & timezone
 

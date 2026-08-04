@@ -357,7 +357,11 @@ DERIVED_KEYS: list[tuple[str, str, str, str]] = [
         "total_bank_advances",
         "amount_bdt_crore",
         "fiscal_year",
-        "Total loans and advances of the banking sector — from BB FSR Table 2.3 via scrapers/bb_npl_structure.py (annual).",
+        "Total loans and advances of the banking sector — from BB FSR Table 2.3 via "
+        "scrapers/bb_npl_structure.py (annual). Series mixes sources on different "
+        "bases: the press seed at 2026-03-31 records Tk 17.84 lakh crore (1,784,000 "
+        "crore) while FSR vintages differ (e.g. 1,820,430 crore at 2025-12-31) — the "
+        "source column distinguishes them.",
     ),
 ]
 

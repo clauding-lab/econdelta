@@ -71,6 +71,10 @@ def run(*, execute: bool) -> int:
                         mid, value, SEED_AS_OF, SEED_SOURCE)
         logger.info("DRY RUN — %d rows, nothing written. Re-run with --execute.",
                     len(SEED_VALUES))
+        # D6: preview the OTHER write --execute also performs, so a dry run
+        # shows everything that will happen, not just the history rows.
+        logger.info("DRY RUN  metric_definitions seed — %d rows would be upserted (first-insert-wins).",
+                    len(build_definitions_rows()))
         return 0
     new_defs = upsert_metric_definitions_seed(build_definitions_rows())
     count = upsert_metric_history(

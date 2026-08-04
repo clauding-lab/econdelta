@@ -24,7 +24,10 @@ def test_seed_values_are_the_deck_primitives_exactly():
     assert SEED_VALUES["total_bank_advances"] == 1_784_000
     # Press-taxonomy sector values deliberately ABSENT (spec amendment:
     # the sector family lives in the FSR taxonomy; press cut would orphan).
-    for absent in ("lending_share_trade", "npl_rate_consumer", "npl_rate_industry"):
+    # These are REAL METRIC_SPECS ids (fsr=True) — pinning that the seed never
+    # writes the FSR-owned sector family, not just that some made-up string
+    # is absent (the old ids here weren't in METRIC_SPECS at all).
+    for absent in ("npl_rate_sector_consumer_credit", "lending_share_sector_trade_commerce"):
         assert absent not in SEED_VALUES
 
 
@@ -47,6 +50,7 @@ def test_dry_run_writes_nothing():
 
 def test_execute_seeds_definitions_then_history():
     import scripts.seed_npl_structure as seeder
+    from scripts.seed_npl_structure import SEED_VALUES
     with patch.object(seeder, "upsert_metric_definitions_seed", return_value=35) as seed, \
          patch.object(seeder, "upsert_metric_history", return_value=14) as up:
         assert seeder.run(execute=True) == 0
@@ -55,3 +59,4 @@ def test_execute_seeds_definitions_then_history():
     assert kwargs["source"] == "bb_via_press_static"
     assert kwargs["as_of"] == date(2026, 3, 31)
     assert "url" not in kwargs
+    assert kwargs["data"] == SEED_VALUES

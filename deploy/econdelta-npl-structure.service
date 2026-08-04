@@ -15,8 +15,8 @@ WorkingDirectory=/home/adnan-local/econdelta
 EnvironmentFile=/etc/econdelta.env
 ExecStart=/home/adnan-local/econdelta/.venv/bin/python -m scrapers.bb_npl_structure
 
-MemoryMax=500M
-MemoryHigh=400M
+MemoryMax=1500M
+MemoryHigh=1200M
 CPUQuota=50%
 TasksMax=512
 

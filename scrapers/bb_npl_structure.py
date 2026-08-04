@@ -12,8 +12,10 @@ Gate coverage, measured not assumed: all 8 sector SHARES reconcile via the sum-t
 sector RATES are wrong-column-proof only where share is large enough to move the weighted-
 average-vs-overall check past its 1pp tolerance — industrial_mfg, trade_commerce,
 industrial_services, other. A bad read on agriculture (~1.0pp shift, near that tolerance edge),
-consumer_credit (~0.4pp), nbfi, or capital_market (each <0.5% lending share) can still pass;
-those 4 rates plus the 4 sub-sector rates are range-checked only, never reconciled.
+consumer_credit (~0.4pp), nbfi, or capital_market (each <0.5% lending share) still enters the
+weighted-average sum but lacks the leverage to trip it — those 4 rates are inside the
+reconciliation math yet effectively unproven by it. Only the 4 sub-sector rates sit outside
+every reconciliation entirely and are range-checked only.
 
 Seed-only family (no scheduled source — press/parliament disclosures):
 band-wise NPL rates/outstandings and CMSME segment rates, written once by
@@ -36,6 +38,7 @@ from pathlib import Path
 
 from claude_max.max_client import MaxCallError, run_max
 from fetch_all import _download_index_html
+from fetchers.base import FetchResult
 from fetchers.pdf_discovery import discover_latest_pdf
 from fetchers.pdf_fetcher import fetch_pdf
 from utils.notifier import notify
@@ -159,8 +162,10 @@ _MONTHS = {
 }
 _QUARTER_END = {3: 31, 6: 30, 9: 30, 12: 31}
 # Matches "end-December 2025", "END-DECEMBER 2025", "end of December, 2025".
+# Year group has a trailing (?!\d) so a 5+-digit run (e.g. a stray "20255")
+# can't be misread as the first 4 digits of a bogus year.
 _POSITION_RE = re.compile(
-    r"end[\s\-]+(?:of[\s\-]+)?(" + "|".join(_MONTHS) + r")[\s,]+(\d{4})",
+    r"end[\s\-]+(?:of[\s\-]+)?(" + "|".join(_MONTHS) + r")[\s,]+(\d{4})(?!\d)",
     re.IGNORECASE,
 )
 
@@ -173,11 +178,12 @@ class TableMarkerError(ValueError):
     """FSR text no longer contains the Table 2.3 marker — layout changed."""
 
 
-def fetch_latest_fsr(data_root: Path):
+def fetch_latest_fsr(data_root: Path) -> FetchResult:
     """Discover + download the newest FSR from BB's annual listing.
 
-    Runs on the box (BD IP). The helpers raise FetchError on failure;
-    main() catches and notifies.
+    Runs on the box (BD IP). fetch_pdf raises FetchError on failure;
+    discover_latest_pdf raises ValueError (no dated PDF links found on the
+    index page) — main() catches Exception broadly and notifies either way.
     """
     html = _download_index_html(FSR_LISTING_URL)
     url, period = discover_latest_pdf(html=html, base_url=FSR_LISTING_URL)
@@ -215,8 +221,14 @@ def derive_position_date(text: str) -> date:
 
 def slice_table_window(text: str) -> str:
     """The Table 2.3 neighborhood, centered on the LAST marker occurrence
-    (the first is the TOC line). Missing marker = loud failure, not a guess."""
-    idx = text.rfind(_TABLE_MARKER)
+    (the first is the TOC line). Missing marker = loud failure, not a guess.
+
+    Matching is case-insensitive (a title-case caption still hits it), via
+    ``.upper()`` on both sides — offsets are then applied to the ORIGINAL
+    text, never the uppercased copy, so the sliced window's content is
+    unchanged.
+    """
+    idx = text.upper().rfind(_TABLE_MARKER.upper())
     if idx == -1:
         raise TableMarkerError(f"marker not found: {_TABLE_MARKER!r}")
     return text[max(0, idx - _SLICE_BEFORE): idx + _SLICE_AFTER]
@@ -258,14 +270,16 @@ def build_extraction_prompt(window: str) -> str:
         "- total_bank_advances: Total row, Total Loans Outstanding column (billion BDT)\n"
         "- gross_npl_stock: Total row, Gross NPL column (billion BDT)\n"
         "- overall_npl_ratio_fsr: Total row, Gross NPL Ratio column (percent)\n\n"
-        "TABLE TEXT:\n" + window
+        "TABLE TEXT:\n" + window + "\n\n"
+        "Reminder: reply with ONLY the JSON object above — no prose, no markdown fences.\n"
+        "Copy every number VERBATIM from the table text; never compute, derive, or infer a value."
     )
 
 
 def run_extraction(window: str) -> dict:
     prompt = build_extraction_prompt(window)
-    last_raw = ""
-    for _attempt in (1, 2):
+    raw_by_attempt: list[str] = []
+    for attempt in (1, 2):
         try:
             result = run_max(
                 prompt=prompt,
@@ -277,8 +291,8 @@ def run_extraction(window: str) -> dict:
             raise ExtractionError(f"max CLI call failed: {e}") from e
         if isinstance(result.parsed, dict):
             return result.parsed
-        last_raw = (result.raw_text or "")[:200]
-    raise ExtractionError(f"unparseable extraction after 2 attempts: {last_raw}")
+        raw_by_attempt.append(f"attempt {attempt}: {(result.raw_text or '')[:500]}")
+    raise ExtractionError("unparseable extraction after 2 attempts: " + " | ".join(raw_by_attempt))
 
 
 # Full reconciliation is possible here (unlike the abandoned QFSAR band
@@ -363,7 +377,10 @@ def validate_extraction(payload: dict, position_date: date, today: date) -> list
 
 _DATA_ROOT = REPO_ROOT / "data"
 _BELLWETHER_ID = "npl_rate_sector_trade_commerce"
-_RECENT_ISSUES_WINDOW = 10  # rows; annual series → a decade of coverage
+# Rows, not days, despite get_metric_history's days= kwarg name — the reader
+# treats it as a plain PostgREST LIMIT (utils/supabase_reader.py:71), never a
+# calendar filter; annual series → a decade of coverage.
+_RECENT_ISSUES_WINDOW = 10
 _BN_TO_CRORE = 100.0
 _CRORE_IDS = ("total_bank_advances", "gross_npl_stock")
 
@@ -406,18 +423,10 @@ def main() -> int:
 
     try:
         text = extract_pdf_text_full(artifact.artifact_path)
-        position_date = derive_position_date(text)
-    except PositionDateError as e:
-        notify("error", "bb_npl_structure: cannot date the FSR", str(e))
-        return 1
     except Exception as e:
         logger.exception("pdf text extraction failed")
         notify("error", "bb_npl_structure: FSR text extraction failed", str(e))
         return 1
-
-    if already_captured(position_date):
-        logger.info("FSR position %s already captured — skip", position_date)
-        return 3
 
     try:
         window = slice_table_window(text)
@@ -425,13 +434,43 @@ def main() -> int:
         notify("error", "bb_npl_structure: FSR layout changed", str(e))
         return 1
 
+    # Position date is derived from the WINDOW, not the full document: the
+    # full text can carry older/newer comparison-period dates outside Table
+    # 2.3 (pdf_table_row landmine) that would otherwise outrank the real one
+    # under derive_position_date's max()-wins rule (amended after final
+    # review, owner-approved 2026-08-05).
+    try:
+        position_date = derive_position_date(window)
+    except PositionDateError as e:
+        notify("error", "bb_npl_structure: cannot date the FSR", str(e))
+        return 1
+
+    # Date sanity BEFORE the LLM call — a bad date is cheap to catch here and
+    # expensive (2x900s) to discover after burning the extraction attempts.
+    # The gate's own future/age checks in validate_extraction stay as
+    # defence-in-depth (amended after final review, owner-approved 2026-08-05).
+    today = datetime.now(timezone.utc).date()
+    if position_date > today:
+        notify("error", "bb_npl_structure: FSR position date in the future", str(position_date))
+        return 1
+    if (today - position_date).days > _POSITION_MAX_AGE_DAYS:
+        notify(
+            "warning",
+            "bb_npl_structure: FSR position date implausibly old — write skipped",
+            str(position_date),
+        )
+        return 2
+
+    if already_captured(position_date):
+        logger.info("FSR position %s already captured — skip", position_date)
+        return 3
+
     try:
         payload = run_extraction(window)
     except ExtractionError as e:
         notify("error", "bb_npl_structure: extraction failed", str(e))
         return 1
 
-    today = datetime.now(timezone.utc).date()
     rejects = validate_extraction(payload, position_date, today)
     if rejects:
         notify(
@@ -453,7 +492,7 @@ def main() -> int:
         # does not always wrap failures in SupabaseWriteError (e.g. a raw
         # ConnectionError can escape utils/supabase_writer.py) and these ids are
         # ACCEPTED_STALE, so the sentinel can never backstop a silent escape here.
-        notify("error", "bb_npl_structure: Supabase write failed", str(e))
+        notify("error", "bb_npl_structure: Supabase write failed", f"{type(e).__name__}: {e}")
         return 1
     verify_landed_count(count, since=write_ts, metric_ids=list(rows), source_label="bb_npl_structure")
     logger.info("captured FSR %s: %d metrics", position_date, count)

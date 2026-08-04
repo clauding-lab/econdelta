@@ -23,8 +23,9 @@ _DAILY_TRADING_DAY_GRACE = GRACE_DAYS_BY_CADENCE["daily"]
 # never fire the daily breach alert (that would be unactionable alert-fatigue,
 # poisoning the very channel the run_logs dead-man's-switch relies on). A genuine
 # scraper failure is still caught by the scraper's own error path + run_logs, not
-# by data-freshness here; and both ids below are unconsumed parity metrics
-# (fetched, not yet displayed on any surface):
+# by data-freshness here. The two fiscal ratios below are unconsumed parity
+# metrics (fetched, not yet displayed on any surface) — see the bb_npl_structure
+# block further down for a different reason (structural source lag, not parity):
 #   - tax_gdp_ratio: World Bank GC.TAX.TOTL.GD.ZS for BD stops at 2021 (~4-5y lag).
 #   - rev_gdp_ratio: IMF DataMapper "rev" for BD carries no forward projection, so
 #     its latest actual (currently 2024) breaches the fiscal_year grace for a
