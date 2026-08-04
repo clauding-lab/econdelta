@@ -24,7 +24,7 @@ PrivateTmp=true
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=/home/adnan-local/econdelta/data /home/adnan-local/econdelta/logs
+ReadWritePaths=/home/adnan-local/econdelta/data /home/adnan-local/econdelta/logs /home/adnan-local/.claude
 
 TimeoutStartSec=2700
 Restart=on-failure

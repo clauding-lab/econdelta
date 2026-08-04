@@ -1259,7 +1259,7 @@ PrivateTmp=true
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=/home/adnan-local/econdelta/data /home/adnan-local/econdelta/logs
+ReadWritePaths=/home/adnan-local/econdelta/data /home/adnan-local/econdelta/logs /home/adnan-local/.claude
 
 TimeoutStartSec=2700
 Restart=on-failure
@@ -1273,7 +1273,18 @@ SyslogIdentifier=econdelta-npl-structure
 WantedBy=multi-user.target
 ```
 
-Deploy-time note (Task 9 checklist, not a unit line): the claude CLI must run for `User=adnan-local` under this sandbox — if `econdelta-parse.service` needed `ReadWritePaths=/home/adnan-local/.claude.json` drop-ins, mirror them for this unit at install time.
+Deploy-time note (Task 9 checklist, not a unit line — fix round 1, owner-approved
+2026-08-04): the `.claude` **directory** carve-out is no longer a Task 9
+deploy-time step — it's now baked into the unit's own `ReadWritePaths=` above,
+in-repo, matching `econdelta-parse.service` / `econdelta-briefing.service`
+exactly. What Task 9's deploy checklist must still do is mirror the separate
+`~/.claude.json` **file** drop-in that `econdelta-parse.service` needed on the
+box (the May-2026 parse-401 incident, AGENTS.md landmine 17): the claude CLI
+writes `~/.claude.json` (a *sibling* of the `.claude/` dir, at home root) on
+every run, and under `ProtectHome=read-only` that write hits EROFS unless it's
+separately carved out — `ReadWritePaths` covering the directory does NOT cover
+that file. Both carve-outs are needed; only the directory one shipped in this
+unit.
 
 - [ ] **Step 2: Timer** (weekly poll; exit-3 skip makes idle weeks free — no LLM call after the position-date short-circuit):
 
@@ -1329,7 +1340,7 @@ git commit -m "feat(npl-structure): systemd units, install wiring, contract + la
 - [ ] **Step 3: Merge only with owner approval.**
 - [ ] **Step 4 (POST-MERGE, OWNER-GATED batch — enumerate, get ONE approval):**
   1. Box pull via healed gitpull (or manual `git pull --ff-only`).
-  2. Targeted unit install (landmine 37): `install -m 0644` both units → `daemon-reload` → `enable --now econdelta-npl-structure.timer`. Check whether parse-service `.claude.json` drop-ins are needed here too; mirror if so.
+  2. Targeted unit install (landmine 37): `install -m 0644` both units → `daemon-reload` → `enable --now econdelta-npl-structure.timer`. The `.claude` directory carve-out already shipped in the unit's `ReadWritePaths=` (fix round 1, owner-approved 2026-08-04) — no action needed there. Still check whether the separate `~/.claude.json` file drop-in (landmine 17, e.g. `econdelta-parse.service.d/10-claude-json-writable.conf`) is needed here too; mirror if so.
   3. Supervised seed: before-SELECT proof (0 rows for the 35 ids) → box-side `.venv/bin/python -m scripts.seed_npl_structure --execute` (env sourced server-side, status codes only) → after-SELECT proof (14 rows at 2026-03-31, source `bb_via_press_static`).
   4. First live run: `systemctl start econdelta-npl-structure.service` → expect run_logs `ok` with 22 rows at `as_of 2025-12-31` source `BB FSR`, then a second manual run → `skip` (exit 3).
   5. If `grace_days` didn't seed via the writer (Task 1 note): supervised PATCH of `metric_definitions.grace_days=400` for the 35 ids, with proofs.
