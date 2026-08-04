@@ -1,9 +1,9 @@
 [Unit]
-Description=Run EconDelta DSE scraper daily at 23:11 UTC (05:11 BDT next day) — captures previous trading-day's close
+Description=Run EconDelta DSE scraper daily at 19:21 UTC (01:21 BDT next day) — captures previous trading-day's close
 Requires=econdelta-dse.service
 
 [Timer]
-OnCalendar=*-*-* 23:11:00 UTC
+OnCalendar=*-*-* 19:21:00 UTC
 Persistent=true
 RandomizedDelaySec=60
 

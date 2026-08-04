@@ -6,11 +6,11 @@
 # still fires at 23:00 UTC; for the morning brief that's acceptable since most
 # metrics (BB WSEI quarterly, NBR fiscal-year-to-date, banking NPL) refresh
 # weekly or slower, and daily indicators are framed as "yesterday's close".
-Description=Run EconDelta Stage 2 parse daily at 04:30 UTC (10:30 BDT)
+Description=Run EconDelta Stage 2 parse daily at 20:10 UTC (02:10 BDT next day) — 20 min after the last fetch starts, and deliberately clear of 05:00-06:00 BDT, the Anthropic peak window that failed the claude preflight 12 times in May 2026
 Requires=econdelta-parse.service
 
 [Timer]
-OnCalendar=*-*-* 04:30:00 UTC
+OnCalendar=*-*-* 20:10:00 UTC
 Persistent=true
 RandomizedDelaySec=120
 

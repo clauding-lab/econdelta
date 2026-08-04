@@ -1,9 +1,9 @@
 [Unit]
-Description=EconDelta forex retry — fires daily at 00:00 UTC (06:00 BDT) to backstop the primary 23:05 UTC fire (idempotent: re-fetches same-day file)
+Description=EconDelta forex retry — fires daily at 19:50 UTC (01:50 BDT) to backstop the primary 19:15 UTC fire (idempotent: re-fetches same-day file)
 Requires=econdelta-forex.service
 
 [Timer]
-OnCalendar=*-*-* 00:00:00 UTC
+OnCalendar=*-*-* 19:50:00 UTC
 Unit=econdelta-forex.service
 Persistent=true
 RandomizedDelaySec=60

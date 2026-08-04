@@ -42,7 +42,7 @@ indicator IDs are the stable interface.
 
 ```
                   systemd timers @ ExonVPS (BDIX, Dhaka)
-                       │   05:00–06:10 BDT daily
+                       │   01:10–03:35 BDT daily
               ┌────────┼────────┬─────────┬──────────┐
               ↓        ↓        ↓         ↓          ↓
         scrapers/ scrapers/ scrapers/  parsers/   parsers/

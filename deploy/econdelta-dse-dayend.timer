@@ -1,9 +1,9 @@
 [Unit]
-Description=EconDelta DSE DS30 per-ticker close scraper — daily 23:20 UTC (05:20 BDT next day), after the 23:11 index scrape
+Description=EconDelta DSE DS30 per-ticker close scraper — daily 19:30 UTC (01:30 BDT next day), after the 19:21 index scrape
 Requires=econdelta-dse-dayend.service
 
 [Timer]
-OnCalendar=*-*-* 23:20:00 UTC
+OnCalendar=*-*-* 19:30:00 UTC
 Persistent=true
 RandomizedDelaySec=60
 
