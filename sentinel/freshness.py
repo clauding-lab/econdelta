@@ -32,6 +32,48 @@ _DAILY_TRADING_DAY_GRACE = GRACE_DAYS_BY_CADENCE["daily"]
 # See scrapers/fiscal_gdp_ratios.py and sentinel/cadence.py.
 ACCEPTED_STALE_METRIC_IDS: frozenset[str] = frozenset(
     {"tax_gdp_ratio", "rev_gdp_ratio"}
+    # bb_npl_structure (2026-08-03 spec amendment): structural source lag —
+    # FSR annual ~6mo lag (22 ids) / press-only seed series with no schedule
+    # (13 ids), 35 total. Never in briefing.config.CORE_METRIC_IDS or
+    # config/sources-v3.json — owner decision, non-gating. See
+    # docs/superpowers/specs/2026-08-03-bb-npl-structure-design.md.
+    | {
+        "gross_npl_stock",
+        "lending_share_sector_agriculture",
+        "lending_share_sector_capital_market",
+        "lending_share_sector_consumer_credit",
+        "lending_share_sector_industrial_mfg",
+        "lending_share_sector_industrial_services",
+        "lending_share_sector_nbfi",
+        "lending_share_sector_other",
+        "lending_share_sector_trade_commerce",
+        "loans_outstanding_band_1_10cr",
+        "loans_outstanding_band_gt50cr",
+        "loans_outstanding_band_lt1cr",
+        "npl_rate_band_10_20cr",
+        "npl_rate_band_1_10cr",
+        "npl_rate_band_20_30cr",
+        "npl_rate_band_30_40cr",
+        "npl_rate_band_40_50cr",
+        "npl_rate_band_gt50cr",
+        "npl_rate_band_lt1cr",
+        "npl_rate_cmsme_cottage",
+        "npl_rate_cmsme_medium",
+        "npl_rate_cmsme_overall",
+        "npl_rate_sector_agriculture",
+        "npl_rate_sector_capital_market",
+        "npl_rate_sector_consumer_credit",
+        "npl_rate_sector_industrial_mfg",
+        "npl_rate_sector_industrial_services",
+        "npl_rate_sector_nbfi",
+        "npl_rate_sector_other",
+        "npl_rate_sector_trade_commerce",
+        "npl_rate_sub_construction",
+        "npl_rate_sub_housing_finance",
+        "npl_rate_sub_rmg",
+        "npl_rate_sub_smc_industries",
+        "total_bank_advances",
+    }
 )
 
 # Metrics whose id has fallen out of its SOURCE's tracked universe — a

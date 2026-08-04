@@ -143,6 +143,222 @@ DERIVED_KEYS: list[tuple[str, str, str, str]] = [
         "stdlib zip/XML (NO BD egress, no new dependency, no config indicator). "
         "as_of = the latest reporting month's end.",
     ),
+    # bb_npl_structure (2026-08-03 spec amendment) — BB FSR Table 2.3
+    # sector-wise NPL family (22 ids, fsr=True) + seed-only band/CMSME family
+    # (13 ids, fsr=False, written once by scripts/seed_npl_structure.py with
+    # source "bb_via_press_static"), 35 total. Deliberately NOT in
+    # config/sources-v3.json — see scrapers/bb_npl_structure.py and
+    # docs/superpowers/specs/2026-08-03-bb-npl-structure-design.md.
+    (
+        "gross_npl_stock",
+        "amount_bdt_crore",
+        "fiscal_year",
+        "Gross non-performing loans of the banking sector — from BB FSR Table 2.3 via scrapers/bb_npl_structure.py (annual).",
+    ),
+    (
+        "lending_share_sector_agriculture",
+        "percent",
+        "fiscal_year",
+        "Share of lending — Agriculture — from BB FSR Table 2.3 via scrapers/bb_npl_structure.py (annual).",
+    ),
+    (
+        "lending_share_sector_capital_market",
+        "percent",
+        "fiscal_year",
+        "Share of lending — Loans to Capital Market — from BB FSR Table 2.3 via scrapers/bb_npl_structure.py (annual).",
+    ),
+    (
+        "lending_share_sector_consumer_credit",
+        "percent",
+        "fiscal_year",
+        "Share of lending — Consumer Credit — from BB FSR Table 2.3 via scrapers/bb_npl_structure.py (annual).",
+    ),
+    (
+        "lending_share_sector_industrial_mfg",
+        "percent",
+        "fiscal_year",
+        "Share of lending — Industrial (Manufacturing) — from BB FSR Table 2.3 via scrapers/bb_npl_structure.py (annual).",
+    ),
+    (
+        "lending_share_sector_industrial_services",
+        "percent",
+        "fiscal_year",
+        "Share of lending — Industrial (Services) — from BB FSR Table 2.3 via scrapers/bb_npl_structure.py (annual).",
+    ),
+    (
+        "lending_share_sector_nbfi",
+        "percent",
+        "fiscal_year",
+        "Share of lending — Credit to NBFI — from BB FSR Table 2.3 via scrapers/bb_npl_structure.py (annual).",
+    ),
+    (
+        "lending_share_sector_other",
+        "percent",
+        "fiscal_year",
+        "Share of lending — Other Loans — from BB FSR Table 2.3 via scrapers/bb_npl_structure.py (annual).",
+    ),
+    (
+        "lending_share_sector_trade_commerce",
+        "percent",
+        "fiscal_year",
+        "Share of lending — Trade and Commerce (Commercial Loans) — from BB FSR Table 2.3 via scrapers/bb_npl_structure.py (annual).",
+    ),
+    (
+        "loans_outstanding_band_1_10cr",
+        "amount_bdt_crore",
+        "fiscal_year",
+        "Outstanding loans — Tk 1-10 crore — static press-sourced series (bb_via_press_static), no scheduled writer.",
+    ),
+    (
+        "loans_outstanding_band_gt50cr",
+        "amount_bdt_crore",
+        "fiscal_year",
+        "Outstanding loans — above Tk 50 crore — static press-sourced series (bb_via_press_static), no scheduled writer.",
+    ),
+    (
+        "loans_outstanding_band_lt1cr",
+        "amount_bdt_crore",
+        "fiscal_year",
+        "Outstanding loans — under Tk 1 crore — static press-sourced series (bb_via_press_static), no scheduled writer.",
+    ),
+    (
+        "npl_rate_band_10_20cr",
+        "percent",
+        "fiscal_year",
+        "NPL rate — loans Tk 10-20 crore — static press-sourced series (bb_via_press_static), no scheduled writer.",
+    ),
+    (
+        "npl_rate_band_1_10cr",
+        "percent",
+        "fiscal_year",
+        "NPL rate — loans Tk 1-10 crore — static press-sourced series (bb_via_press_static), no scheduled writer.",
+    ),
+    (
+        "npl_rate_band_20_30cr",
+        "percent",
+        "fiscal_year",
+        "NPL rate — loans Tk 20-30 crore — static press-sourced series (bb_via_press_static), no scheduled writer.",
+    ),
+    (
+        "npl_rate_band_30_40cr",
+        "percent",
+        "fiscal_year",
+        "NPL rate — loans Tk 30-40 crore — static press-sourced series (bb_via_press_static), no scheduled writer.",
+    ),
+    (
+        "npl_rate_band_40_50cr",
+        "percent",
+        "fiscal_year",
+        "NPL rate — loans Tk 40-50 crore — static press-sourced series (bb_via_press_static), no scheduled writer.",
+    ),
+    (
+        "npl_rate_band_gt50cr",
+        "percent",
+        "fiscal_year",
+        "NPL rate — loans above Tk 50 crore — static press-sourced series (bb_via_press_static), no scheduled writer.",
+    ),
+    (
+        "npl_rate_band_lt1cr",
+        "percent",
+        "fiscal_year",
+        "NPL rate — loans under Tk 1 crore — static press-sourced series (bb_via_press_static), no scheduled writer.",
+    ),
+    (
+        "npl_rate_cmsme_cottage",
+        "percent",
+        "fiscal_year",
+        "NPL rate — cottage industry — static press-sourced series (bb_via_press_static), no scheduled writer.",
+    ),
+    (
+        "npl_rate_cmsme_medium",
+        "percent",
+        "fiscal_year",
+        "NPL rate — medium enterprise — static press-sourced series (bb_via_press_static), no scheduled writer.",
+    ),
+    (
+        "npl_rate_cmsme_overall",
+        "percent",
+        "fiscal_year",
+        "NPL rate — CMSME overall — static press-sourced series (bb_via_press_static), no scheduled writer.",
+    ),
+    (
+        "npl_rate_sector_agriculture",
+        "percent",
+        "fiscal_year",
+        "NPL rate — Agriculture — from BB FSR Table 2.3 via scrapers/bb_npl_structure.py (annual).",
+    ),
+    (
+        "npl_rate_sector_capital_market",
+        "percent",
+        "fiscal_year",
+        "NPL rate — Loans to Capital Market — from BB FSR Table 2.3 via scrapers/bb_npl_structure.py (annual).",
+    ),
+    (
+        "npl_rate_sector_consumer_credit",
+        "percent",
+        "fiscal_year",
+        "NPL rate — Consumer Credit — from BB FSR Table 2.3 via scrapers/bb_npl_structure.py (annual).",
+    ),
+    (
+        "npl_rate_sector_industrial_mfg",
+        "percent",
+        "fiscal_year",
+        "NPL rate — Industrial (Manufacturing) — from BB FSR Table 2.3 via scrapers/bb_npl_structure.py (annual).",
+    ),
+    (
+        "npl_rate_sector_industrial_services",
+        "percent",
+        "fiscal_year",
+        "NPL rate — Industrial (Services) — from BB FSR Table 2.3 via scrapers/bb_npl_structure.py (annual).",
+    ),
+    (
+        "npl_rate_sector_nbfi",
+        "percent",
+        "fiscal_year",
+        "NPL rate — Credit to NBFI — from BB FSR Table 2.3 via scrapers/bb_npl_structure.py (annual).",
+    ),
+    (
+        "npl_rate_sector_other",
+        "percent",
+        "fiscal_year",
+        "NPL rate — Other Loans — from BB FSR Table 2.3 via scrapers/bb_npl_structure.py (annual).",
+    ),
+    (
+        "npl_rate_sector_trade_commerce",
+        "percent",
+        "fiscal_year",
+        "NPL rate — Trade and Commerce (Commercial Loans) — from BB FSR Table 2.3 via scrapers/bb_npl_structure.py (annual).",
+    ),
+    (
+        "npl_rate_sub_construction",
+        "percent",
+        "fiscal_year",
+        "NPL rate — construction loans — from BB FSR Table 2.3 via scrapers/bb_npl_structure.py (annual).",
+    ),
+    (
+        "npl_rate_sub_housing_finance",
+        "percent",
+        "fiscal_year",
+        "NPL rate — housing finance — from BB FSR Table 2.3 via scrapers/bb_npl_structure.py (annual).",
+    ),
+    (
+        "npl_rate_sub_rmg",
+        "percent",
+        "fiscal_year",
+        "NPL rate — RMG — from BB FSR Table 2.3 via scrapers/bb_npl_structure.py (annual).",
+    ),
+    (
+        "npl_rate_sub_smc_industries",
+        "percent",
+        "fiscal_year",
+        "NPL rate — other industries (small, medium and cottage) — from BB FSR Table 2.3 via scrapers/bb_npl_structure.py (annual).",
+    ),
+    (
+        "total_bank_advances",
+        "amount_bdt_crore",
+        "fiscal_year",
+        "Total loans and advances of the banking sector — from BB FSR Table 2.3 via scrapers/bb_npl_structure.py (annual).",
+    ),
 ]
 
 
