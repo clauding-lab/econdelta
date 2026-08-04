@@ -178,7 +178,9 @@ Browse-by-section:
   `non_food_inflation`, `private_sector_credit`, plus brief-aliased
   `macro_cpi_headline`, `macro_cpi_food`, `macro_credit_growth`
 - **Money market** — `policy_rate_repo`, `policy_rate_slf`,
-  `policy_rate_sdf` (3-line corridor from BB MEI bulletin, monthly),
+  `policy_rate_sdf` (3-line corridor from BB's homepage POLICY RATES panel,
+  which moves on the MPC announcement; was the BB MEI bulletin until PR #100,
+  which lags the announcement by weeks),
   `call_money_rate`,
   `treasury_bill_outstanding` (BDT mn), `treasury_bond_outstanding` (BDT mn),
   `bill_bond_rates` (= 91-day T-Bill yield), `gsec_auction`, plus
@@ -306,7 +308,7 @@ indicator is non-breaking. Changing one requires a careful path.
 distribution from Bangladesh Bank's Financial Stability Report (FSR),
 plus band-wise/CMSME NPL detail with no scheduled BB source at all.
 Deliberately **not** in `config/sources-v3.json` — see AGENTS.md
-landmine 39.
+landmine 41.
 
 - **ids**: 35 — 22 FSR-written (8 sector rates, 8 sector shares, 4
   sub-sector rates, total advances, gross NPL stock) + 13 seed-only

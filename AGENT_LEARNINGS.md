@@ -37,6 +37,30 @@ When something ships broken, when a methodology gap is exposed, or when a smoke 
 
 ## Entries (most recent first)
 
+## 2026-08-03 — The policy rate was read from a monthly bulletin, so it could not move on the day the MPC moved it
+
+**Trigger:** Adnan, reading The Brief issue #184: "policy rate still showing 10%." Bangladesh Bank had cut the repo rate 10.00% → 9.50% on 2026-07-30 (13th MPC meeting, first cut in six years), and SLF 11.50% → 11.00%.
+
+**What went wrong:** Nothing failed. `policy_rate_repo` fetched at `2026-08-02T06:02:08` with exit 0 and correctly returned 10.00 — because its source (`config/sources-v3.json` → `publication/publictn/3/11`, page 10) is the **Selected Macroeconomic Indicators monthly bulletin**, whose latest issue was June 2026. A monthly statistical bulletin structurally *cannot* carry an intra-month announcement. The parser (`pdf_table_column_latest`) was right, the fetch was right, the value was right for the document — the **document was the wrong instrument**. Three layers of defence then failed to notice, all silently: `previous_value`/`change_pct` are `null` on every snapshot, so the `anomaly_threshold` branch in `aggregate_latest.py:547` is unreachable; `_artifact_sha256` is `"0"*64` for all 62 indicators (`parse_all.py:114` re-loads artifacts from disk in a separate stage and stamps a placeholder instead of re-hashing), so "this PDF has not changed in months" is undetectable; and the LLM sanity-note *argued for* the staleness — "matches the last 3 known values exactly, consistent with a stable monthly policy repo rate."
+
+This is not cosmetic. The policy rate is the reference line for every yield comparison downstream: that Monday's briefing was titled "5Y at 9.68% Sub-Repo", which is true against 10% and **false against 9.50%**.
+
+**Lesson:** Match the source's publication cadence to the metric's *event* cadence, not to its nominal cadence. A rate that changes by announcement must be read from wherever the announcement lands; a monthly digest of that rate is a lagging transcript, and a transcript that agrees with itself for months reads as "stable" to every guard you have.
+
+**Prevention:**
+- A flat daily series on a `monthly`-cadence metric is the fingerprint. `metric_history.policy_rate_repo` held one identical 10.0 row per day since 2026-05-29 — value never moved, freshness always green.
+- When auditing an indicator, ask "could this source physically contain today's answer?" before asking "did the scraper run?" A green run proves the pipeline works, not that the source is capable of being right.
+- Never let a sanity check rationalise unchanged data. "Matches the last N values exactly" is evidence for *both* stability and staleness; it can only be read as stability once staleness has been separately ruled out.
+
+**Hotfix:** PR #100 — new `parsers/html_labeled_value.py` reading BB's homepage POLICY RATES panel (a div pseudo-table, invisible to `html_table_row`), and `policy_rate_repo`/`_sdf`/`_slf` repointed from the MEI PDF to `https://www.bb.org.bd/en/index.php`. Verified live through the F5/TSPD challenge: 9.50 / 7.50 / 11.00.
+
+**Deliberately NOT fixed in that PR** (each needs its own change, with blast radius beyond the policy rate):
+1. `previous_value`/`change_pct` are never populated — `parsers/hybrid._build_snapshot` accepts both parameters and no caller passes them, though `parse_one` already receives `history`. Re-arming this turns the per-indicator anomaly alarm on for all 62 indicators at once, against thresholds nobody has re-validated since they were bulk-generated.
+2. `_artifact_sha256` is a placeholder in the parse stage. The fetchers compute a real digest (`fetchers/pdf_fetcher.py:65`, `fetchers/html_fetcher.py:102`); `parse_all._load_artifact_for` discards it by re-deriving the `FetchResult` from disk.
+3. The sanity-check prompt has no notion of "unchanged for too long."
+
+**Cross-references:** AGENTS.md landmine 39; auto-memory `econdelta-policy-rate-stale`; earlier related staleness incidents in this file — 2026-05-28 (`policy_rate_slf_sdf` flat at 10.00 for 15 days) and 2026-07-09 E1.5 (edition-pinned World Bank URL frozen at one edition).
+
 ## 2026-08-01 — Four independent rots found by one DB state check: a ratchet deadlock, a silent FATAL, a dark briefing, and a never-written table
 
 **Trigger:** Owner asked for a plain DB state check ("is everything actually healthy right now") — not a bug report, just due diligence. The check surfaced four unrelated failures none of which had tripped an alert on their own.
