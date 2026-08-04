@@ -126,7 +126,18 @@ Full DDL with indexes, RLS, and column comments lives in
 - **`source`** — Provenance of the row. `EconDelta` is the canonical
   writer (every row from the daily aggregate). Older rows may show
   `BB`, `BBS`, etc. — those came from the brief's transitional inline
-  upserts that have since been removed.
+  upserts that have since been removed. A small family of ids use a
+  **static-seed provenance label** instead: `mof_mfr_static` /
+  `mof_mfr_static_provisional` (Ministry of Finance Monthly Fiscal
+  Report figures, hand-verified backfill rather than a parse —
+  `scripts/backfill_fiscal.py`; the `_provisional` suffix marks
+  government bank-borrowing rows that MoF restates between issues, so
+  they don't FYTD-reconcile the way the `_static` NBR rows do) and
+  `bb_via_press_static` (a one-shot press/parliament-disclosure seed
+  for series with no scheduled BB source at all —
+  `scripts/seed_npl_structure.py`). These rows are written once, not
+  on a recurring pipeline run; `source` is how a consumer tells a
+  seeded value apart from one the daily aggregate keeps refreshing.
 - **`ingested_at`** — Server-side write timestamp. Diagnostics only;
   consumers should not order by this.
 
@@ -288,6 +299,32 @@ indicator is non-breaking. Changing one requires a careful path.
    `docs/indicator-catalog.md`.
 4. Push. Consumers that don't know about the new id are unaffected;
    those that need it see it on the next aggregate.
+
+### `bb_npl_structure` family (2026-08-04) — a non-config addition
+
+35 ids added outside the normal step-1 path above: sector-wise NPL
+distribution from Bangladesh Bank's Financial Stability Report (FSR),
+plus band-wise/CMSME NPL detail with no scheduled BB source at all.
+Deliberately **not** in `config/sources-v3.json` — see AGENTS.md
+landmine 39.
+
+- **ids**: 35 — 22 FSR-written (8 sector rates, 8 sector shares, 4
+  sub-sector rates, total advances, gross NPL stock) + 13 seed-only
+  (7 band-wise rates, 3 band-wise outstandings, 3 CMSME rates)
+- **cadence**: `fiscal_year`
+- **sources**: `BB FSR` (annual report, the 22 FSR-written ids) /
+  `bb_via_press_static` (one-shot press seed, the 13 seed-only ids —
+  see §3 provenance semantics above)
+- **extractor path**: `scrapers/bb_npl_structure.py` (LLM extraction
+  over a deterministic slice of the FSR PDF, hard arithmetic
+  reconciliation gate, all-or-nothing upsert) for the FSR-written ids;
+  `scripts/seed_npl_structure.py` (one-shot, dry-run by default) for
+  the seed-only ids
+- **accepted_stale posture**: all 35 ids sit permanently in
+  `sentinel.ACCEPTED_STALE_METRIC_IDS` — FSR is annual with ~6 month
+  publication lag, and the band/CMSME series have no scheduled source
+  to refresh against at all, so a normal freshness alert would fire
+  forever on data that isn't actually broken
 
 ### Renaming an indicator (breaking — avoid)
 

@@ -150,6 +150,24 @@ Pre-merge smoke list for backend changes:
 
 38. **Anomaly guards must never freeze their own baseline.** A guard that rejects an anomalous value AND is the same guard that would otherwise update the baseline it compares against creates a deadlock: the first legitimate step-change looks anomalous, gets rejected, the baseline never advances past the pre-change value, so tomorrow's (now-normal) reading looks anomalous against the same stale baseline, forever. `bb_forex` reserves hit exactly this 2026-07-13→2026-08-01 — 120+ identical daily rejections against a baseline that could never move. The fix pattern (PR #96) is a month-advance gate: once the guard detects the reporting month itself has rolled forward, it persists the new value even if it would otherwise flag as anomalous, because "the underlying period changed" is a stronger signal than "the number moved a lot." Any new anomaly/coherence guard that both rejects AND gates a baseline update needs an explicit escape hatch like this, or verify by construction that rejection can never block the baseline from ever moving again.
 
+39. **`bb_npl_structure` ids live OUTSIDE the pipeline config.** The 35
+    banking-structure metrics (22 FSR-written, 13 seed-only press series)
+    are written by scrapers/bb_npl_structure.py and
+    scripts/seed_npl_structure.py. Never add these ids to
+    config/sources-v3.json (each would become a daily LLM parse), never to
+    briefing CORE_METRIC_IDS (owner: non-gating), and never remove them
+    from sentinel ACCEPTED_STALE_METRIC_IDS (structural source lag — FSR
+    is annual with ~6mo lag; band/CMSME have no scheduled source at all).
+    tests/test_bb_npl_structure_wiring.py enforces all three. Note: the
+    reconciliation gate wrong-column-proves only npl_rate_sector_industrial_mfg,
+    npl_rate_sector_trade_commerce, npl_rate_sector_industrial_services, and
+    npl_rate_sector_other; npl_rate_sector_agriculture,
+    npl_rate_sector_consumer_credit, npl_rate_sector_nbfi,
+    npl_rate_sector_capital_market, npl_rate_sub_rmg,
+    npl_rate_sub_construction, npl_rate_sub_housing_finance, and
+    npl_rate_sub_smc_industries are range-only — treat their values with
+    that weaker guarantee.
+
 ## Communication & timezone
 
 - **All times in BDT (UTC+6).** When generating timestamps, dates, or schedules, convert to BDT and label it. UTC appears in some systemd unit files and `scraped_at` ISO strings — convert before showing to Adnan.

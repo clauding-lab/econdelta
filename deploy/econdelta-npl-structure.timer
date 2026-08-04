@@ -1,0 +1,11 @@
+[Unit]
+Description=Run EconDelta FSR NPL-structure extractor weekly (Sun 23:29 UTC / Mon 05:29 BDT). FSR is annual; weekly polling + in-scraper skip captures a new issue within a week of publication at zero idle cost.
+Requires=econdelta-npl-structure.service
+
+[Timer]
+OnCalendar=Sun *-*-* 23:29:00 UTC
+Persistent=true
+RandomizedDelaySec=120
+
+[Install]
+WantedBy=timers.target
