@@ -69,4 +69,4 @@ Pipeline order: fetch → forex/commodity/dse scrapers → parse (deterministic 
   After cloning, run `chmod +x deploy/*.sh` if you prefer calling them directly.
 - `/etc/econdelta.env` is owned `root:adnan-local` mode `0640`. The service user reads it at runtime.
 - Logs and data directories are preserved across uninstall runs. To fully reset, remove them manually.
-- The parse + aggregate services carry a `*.service.d/10-claude-json-writable.conf` drop-in adding `~/.claude.json` to `ReadWritePaths` — required because the `claude` CLI writes that state file each run while the services run under `ProtectHome=read-only` (see `AGENT_LEARNINGS.md`, 2026-05-29).
+- Units that shell out to the `claude` CLI carry a `*.service.d/10-claude-json-writable.conf` drop-in adding `~/.claude.json` to `ReadWritePaths` — required because the CLI writes that state file each run while the services run under `ProtectHome=read-only` (see `AGENT_LEARNINGS.md`, 2026-05-29).
