@@ -54,4 +54,5 @@ SKIP_REASONS = frozenset({
     "matches-current-data",   # same period, value within tolerance of current
     "older-period",           # press period older than what we already have
     "already-in-review",      # a valid candidate already pending/rejected in media_review
+    "no-catalog-match",       # extraction succeeded but indicator_hint matched no catalog spec
 })

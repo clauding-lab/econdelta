@@ -81,6 +81,7 @@ def test_run_screen_with_fed_urls_bypasses_sweep(monkeypatch):
     monkeypatch.setattr(ms, "insert_media_review_rows",
                         lambda c, **k: captured.setdefault("c", c) or len(c))
     monkeypatch.setattr(ms, "notify", lambda *a, **k: True)
+    monkeypatch.setattr(ms, "update_zero_insert_streak", lambda *a, **k: 0)
 
     rc = ms.run_screen(dry_run=False, urls=["https://www.tbsnews.net/economy/banking/npls-1452366"])
     assert rc == 0

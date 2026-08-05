@@ -24,12 +24,26 @@ from media_screen.dedup import drop_already_open
 from media_screen.digest import format_report
 from media_screen.extract import extract_numbers
 from media_screen.filter import classify
+from media_screen.streak import update_zero_insert_streak
 from media_screen.types import Candidate, Skip
 from utils.notifier import notify
 from utils.supabase_reader import SupabaseReadError, get_metric_history, get_open_media_review
 from utils.supabase_writer import SupabaseWriteError, insert_media_review_rows
 
 logger = logging.getLogger("media_screen")
+
+# Catalog metric_ids whose backing parse strategy never recovers a true
+# source_as_of (parsers/html_labeled_value.py's own docstring: "No
+# recover_source_as_of"; html_call_money is in aggregate_latest.py's
+# _NEVER_DATED_PARSE_STRATEGIES allow-list). For these, metric_history.as_of
+# is the aggregate run's OWN calendar date every night, not the metric's real
+# reporting/announcement date -- a press article citing an actual past date
+# will then always compare as "older" than that forged same-day stamp in
+# media_screen/filter.py::classify()'s Rule 2, permanently masking real
+# fresher-period candidates. Diagnosed, not fixed here -- see AGENTS.md
+# landmine 47. This set only annotates the disposition log so the next person
+# (or agent) doesn't have to re-derive it from scratch.
+_UNDATED_PARSED_AS_OF_METRIC_IDS = frozenset({"policy_rate_repo", "call_money_rate"})
 
 # (outlet_label, listing_url, article_pattern). Daily Star + TBS only at this
 # stage. Patterns match these sites' real article hrefs (section path + a
@@ -178,16 +192,49 @@ def run_screen(*, dry_run: bool, urls=None) -> int:
     candidates: list[Candidate] = []
     skips: list[Skip] = []
     for text, url, outlet in articles:
-        for ex in extract_numbers(text, specs=specs, source_url=url, source_outlet=outlet):
+        extracted = extract_numbers(text, specs=specs, source_url=url, source_outlet=outlet)
+        if not extracted:
+            logger.info("media_screen: disposition no-finding url=%s outlet=%s", url, outlet)
+            continue
+        for ex in extracted:
             spec = by_name.get(ex.indicator_hint.lower())
             if spec is None:
+                # The LLM found SOMETHING but its free-text label matched no
+                # catalog spec (a paraphrase, or genuinely off-catalog). This
+                # used to be a silent `continue` -- the finding vanished
+                # without a skip, a log line, or a way to distinguish it from
+                # "the LLM correctly found nothing." Surface it as a real Skip
+                # so every extraction is now accounted for.
+                logger.info(
+                    "media_screen: disposition no-catalog-match indicator=%r value=%s "
+                    "period=%s url=%s", ex.indicator_hint, ex.value, ex.period, url,
+                )
+                skips.append(Skip(ex.indicator_hint, ex.value, ex.period, "no-catalog-match"))
                 continue
             parsed_value, parsed_as_of = _parsed_for(spec.metric_id)
             result = classify(spec.metric_id, parsed_value, parsed_as_of, ex,
                               tolerance=spec.tolerance, valid_range=spec.valid_range)
             if isinstance(result, Candidate):
+                logger.info(
+                    "media_screen: disposition candidate metric=%s press=%s@%s "
+                    "parsed=%s@%s kind=%s url=%s", result.metric_id, result.press_value,
+                    result.press_as_of, result.parsed_value, result.parsed_as_of,
+                    result.kind, url,
+                )
                 candidates.append(result)
             else:
+                note = ""
+                if (result.metric_id in _UNDATED_PARSED_AS_OF_METRIC_IDS
+                        and result.reason in ("older-period", "matches-current-data")
+                        and parsed_as_of == _date.today()):
+                    note = (" [parsed_as_of == today for an undated-strategy metric -- "
+                            "likely a forged run-date stamp, not the metric's true "
+                            "reporting date; see AGENTS.md landmine 47]")
+                logger.info(
+                    "media_screen: disposition skip metric=%s value=%s period=%s "
+                    "reason=%s url=%s%s", result.metric_id, result.value, result.period,
+                    result.reason, url, note,
+                )
                 skips.append(result)
 
     candidates = _dedup_candidates(candidates)
@@ -203,6 +250,11 @@ def run_screen(*, dry_run: bool, urls=None) -> int:
     kept = drop_already_open(candidates, open_rows)
     for c in candidates:
         if c not in kept:
+            logger.info(
+                "media_screen: disposition skip metric=%s value=%s period=%s "
+                "reason=already-in-review url=%s", c.metric_id, c.press_value,
+                c.press_as_of, c.source_url,
+            )
             skips.append(Skip(c.metric_id, c.press_value, c.press_as_of, "already-in-review"))
     candidates = kept
 
@@ -221,6 +273,26 @@ def run_screen(*, dry_run: bool, urls=None) -> int:
             logger.exception("media screen: insert into media_review failed")
             notify("error", "media screen failed", f"media_review insert failed: {e}")
             return 1
+        if len(ids) != len(candidates):
+            # PostgREST returned a 2xx with fewer ids than rows posted -- a
+            # partial write (e.g. a conflicting unique constraint silently
+            # dropping rows) that a bare status-code check would miss and log
+            # as success. Never let this exit 0.
+            logger.error(
+                "media screen: insert returned %d id(s) for %d candidate(s) — partial write",
+                len(ids), len(candidates),
+            )
+            notify(
+                "error", "media screen failed",
+                f"media_review insert returned {len(ids)} id(s) for {len(candidates)} "
+                "candidate(s) — partial write, not all candidates landed",
+            )
+            return 1
+        for rid, c in zip(ids, candidates):
+            logger.info(
+                "media_screen: disposition inserted id=%s metric=%s press=%s@%s",
+                rid, c.metric_id, c.press_value, c.press_as_of,
+            )
 
     title, message, fields = format_report(list(zip(ids, candidates)), skips, n_tbs, n_ds)
     level = "warning" if candidates else "info"
@@ -230,6 +302,10 @@ def run_screen(*, dry_run: bool, urls=None) -> int:
     else:
         logger.warning("MEDIA_SCREEN_WEBHOOK_URL not set — skipping #thebrief report")
     logger.info("media screen: %d candidate(s) inserted, %d skip(s)", len(candidates), len(skips))
+
+    streak = update_zero_insert_streak(len(ids), today=_date.today())
+    if streak > 0:
+        logger.info("media screen: %d consecutive zero-insert night(s)", streak)
     return 0
 
 
