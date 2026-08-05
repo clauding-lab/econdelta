@@ -11,13 +11,14 @@ from media_screen.types import Candidate, Skip
 
 # Healthy/expected reasons first, then the eyeball bucket.
 _REASON_ORDER = ["already-in-review", "matches-current-data", "older-period",
-                 "out-of-range", "no-period"]
+                 "out-of-range", "no-period", "no-catalog-match"]
 _REASON_PHRASE = {
     "already-in-review": "already in review queue",
     "matches-current-data": "matches current data",
     "older-period": "older period than current",
     "out-of-range": "value out of range",
     "no-period": "no explicit period",
+    "no-catalog-match": "not a tracked indicator (LLM label didn't match catalog)",
 }
 _MAX_SKIP_LINES = 12
 

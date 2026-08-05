@@ -8,8 +8,8 @@ def test_skip_is_frozen_and_holds_reason():
     assert s.metric_id == "gross_npl_ratio" and s.reason == "matches-current-data"
 
 
-def test_skip_reasons_are_the_five_known():
+def test_skip_reasons_are_the_six_known():
     assert SKIP_REASONS == frozenset({
         "out-of-range", "no-period", "matches-current-data",
-        "older-period", "already-in-review",
+        "older-period", "already-in-review", "no-catalog-match",
     })

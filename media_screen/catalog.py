@@ -38,7 +38,22 @@ _CATALOG: tuple[MetricSpec, ...] = (
     # Rates (ratio %): qualified so the rate/yield family can't collide.
     MetricSpec("policy_rate_repo", ("policy repo rate", "policy interest rate", "central bank policy rate"), 0.05, (0.0, 30.0)),
     MetricSpec("call_money_rate", ("call money rate", "interbank call money rate", "overnight call money rate"), 0.05, (0.0, 30.0)),
-    MetricSpec("tbill_91d_yield_pct", ("91-day treasury bill yield", "91-day t-bill yield", "91-day t-bill rate"), 0.05, (0.0, 30.0)),
+    # NOTE (2026-08-05, PR #116): a "91-day treasury bill yield" entry
+    # PREVIOUSLY lived here, pointing at metric_id="tbill_91d_yield_pct" --
+    # which has NO config/sources-v3.json registry entry (EconDelta only
+    # tracks tbill_182d_yield and tbill_364d_yield; there is no 91-day
+    # series). _parsed_for() would therefore always return (None, None) for
+    # it, and media_screen/filter.py::classify() treats "no parsed value" as
+    # an automatic fresher_period Candidate -- so ANY press mention of a
+    # 91-day T-bill yield became a guaranteed auto-candidate for a series
+    # that doesn't exist, a mis-candidate hazard the new disposition logging
+    # would have surfaced nightly. Removed rather than remapped to 182d/364d:
+    # those are different tenors with genuinely different yields, so
+    # remapping would misattribute a real 91-day figure to the wrong series
+    # (a scoring-correctness call, not just an id fix). Every metric_id in
+    # this catalog must resolve in config/sources-v3.json --
+    # tests/test_media_catalog.py::test_all_catalog_ids_exist_in_registry
+    # enforces it.
     # Inflation: "food inflation" is the distinct headlined component. (Bare "inflation"/
     # "CPI" belong to point_to_point_inflation above; general_inflation is the SAME BB source.)
     MetricSpec("food_inflation", ("food inflation", "food inflation rate"), 0.05, (0.0, 30.0)),
