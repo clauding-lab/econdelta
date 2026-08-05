@@ -805,6 +805,56 @@ should be corrected or the pair should stay independent going forward) and is
 explicitly **out of scope for this PR** — tracked as an open follow-up, not
 fixed here.
 
+**A fifth pair is the OPPOSITE shape of the two above — diverges most of the
+time, converges only on the newest row. Not a confirmed alias; not cleanly
+independent either.** Found during config-conversion batch 2 (issue #113,
+2026-08-05) while checking whether `general_inflation` and
+`point_to_point_inflation` are a duplicate pair worth collapsing:
+
+| `as_of` | `general_inflation` | `point_to_point_inflation` | Agree? |
+|---|---:|---:|---|
+| 2026-06-30 | 9.16 | 9.16 | yes |
+| 2026-06-05 | 8.59 | 9.04 | no (0.45pp gap) |
+| 2026-06-01 | 8.60 | 8.71 | no (0.11pp gap) |
+| 2026-05-31 | 8.63 | 9.42 | no (0.79pp gap) |
+| 2026-05-30 | 8.60 | 8.71 | no (0.11pp gap) |
+
+Both ids are LLM-only extractions from the same BB MEI PDF table ("A.
+Consumer price index (CPI) and rate of inflation at national level"), which
+prints TWO methodology groups side by side — "Twelve-month average" and
+"Point to Point" — each with its own General/Food/Non-food columns. Checked
+against the real June-2026 fixture (`tests/_pdfs/bb_mei_2026_june.pdf`,
+printed page 14 of this edition per the document's own footer — inside the
+config's `page 15` hint's ±3-page search window, so this is the same table
+`general_inflation`'s config already points at): the "Twelve-month average →
+General" column reads
+8.59 (Apr) / 8.63 (May) / 8.68 (Jun) — matching `general_inflation`'s
+historical values almost exactly — while the "Point to Point → General"
+column reads 9.04 (Apr) / 9.42 (May) / 9.16 (Jun) — matching
+`point_to_point_inflation`'s. `food_inflation`/`non_food_inflation` (same
+config task template, "page 15, first table") reliably resolve to the
+Point-to-Point Food/Non-food columns across the same history — only
+`general_inflation` has been drifting onto the WRONG methodology group. Most
+likely read: `general_inflation`'s task ("Go to page 15 of the doc, first
+table") gives the LLM no methodology-group qualifier, so it has been
+inconsistently picking between the two "General" columns run to run — this
+converged with `point_to_point_inflation` for the first time on 2026-06-30
+only because that row came from config-conversion batch 1's NEW deterministic
+`pdf_component` extraction (reads the Executive Summary's explicit "Headline
+inflation (p-t-p) ... 9.16 percent" sentence, unambiguous by construction),
+not because the two ids became a stable pair. **Verdict: not a confirmed
+duplicate (values disagree on 4 of the last 5 dates) and not safely
+independent either (the disagreement looks like one metric's extraction
+being unreliable, not two real different numbers) — flagged, not fixed.**
+Do not add this pair to the confirmed-alias table above. Do not convert
+`general_inflation` to a deterministic parser until the underlying
+dynamic-month-row table problem (same blocker as `food_inflation`/
+`non_food_inflation`, AGENTS.md landmine 47) is solved — and when it is,
+anchor `general_inflation` to the SAME "Point to Point → General" column the
+other three siblings already use, not the ambiguous "first table"
+instruction that produced this drift. See also `AGENT_LEARNINGS.md`
+(2026-08-05 entry) for the incident writeup.
+
 ---
 
 **Questions, schema requests, new consumer onboarding**: open an issue
