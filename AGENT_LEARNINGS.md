@@ -49,7 +49,7 @@ When something ships broken, when a methodology gap is exposed, or when a smoke 
 
 **Hotfix:** PR #111 (`fix/cab-writer`, HOLD MERGE pending owner D2 sign-off — this changes a published financial figure and reverses the plan's original D2 default). Bundle: dedicated header-matched parser with same-table scoping; `llm_prompt` removed for this metric (deterministic is the sole writer); terminal `0.0` fallback replaced with hold-last-good for `amount_*` value types; a sanity-check "implausible" verdict on an indicator with no LLM cross-check now flags (publishes + alerts) rather than vetoes (discards a possibly-correct value), closing a false-positive-freeze hole an Opus review caught in the first draft.
 
-**Cross-references:** AGENTS.md landmine 44; PR #111; `plans/memos/cab-memo-2026-08-05.md`.
+**Cross-references:** AGENTS.md landmine 45; PR #111; `plans/memos/cab-memo-2026-08-05.md`.
 
 ## 2026-08-05 — The NPL unit's memory ceiling was copied from a small scraper; the first live run would have been OOM-killed silently
 

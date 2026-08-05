@@ -409,18 +409,22 @@
     {
       "id": "fx_reserve_gross_and_bpm6",
       "name": "FX Reserve Gross and BPM6",
-      "cadence": "weekly",
+      "cadence": "monthly",
       "primary": {
+        "url": "https://www.bb.org.bd/en/index.php/econdata/intreserve",
+        "type": "html",
+        "task": "Corrected 2026-08-05 (D5 reserves-memo, dead-metadata fix) -- this entry previously declared 'weekly'/PDF, but the value that actually lands in metric_history comes from this monthly HTML page (table#sortableTable, Period | Gross | BPM6 columns), scraped directly by scrapers/bb_forex.py and written via aggregate_latest.py's force-overwrite alias. The two PDF entries below (the original v2 primary/alternate) are real but secondary -- they are config/sources-v3.json's own parse-stage Tier-2 fallback leg for the same metric_id, used only when the direct HTML scrape is stale. Verified: nothing at runtime reads this file's cadence/type (sentinel/cadence.py reads config/sources-v3.json, which already said 'monthly'); this file is hand-frozen legacy (AGENTS.md landmine 36) kept only for historical reference, so this fix is documentation-hygiene with zero pipeline impact."
+      },
+      "alternate": {
         "url": "https://www.bb.org.bd/en/index.php/publication/publictn/5/27",
         "type": "pdf",
         "task": "Go to latest available PDF, Component 1"
       },
-      "alternate": {
+      "fallback": {
         "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
         "type": "pdf",
         "task": "Go to page 28 of the doc, first table"
-      },
-      "fallback": null
+      }
     },
     {
       "id": "private_sector_credit",
