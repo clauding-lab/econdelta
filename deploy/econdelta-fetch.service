@@ -6,9 +6,11 @@ Wants=network-online.target
 
 # Retry on transient failures (BB.org.bd Akamai challenges, network blips).
 # Up to 3 starts per window — initial fire plus 2 retries.
-# Window widened to 4200s so TimeoutStartSec(1800)+RestartSec(300) retry
-# cycles actually land inside it — otherwise StartLimitBurst never trips.
-StartLimitIntervalSec=4200
+# systemd only trips the limiter on the (burst+1)-th start, which lands
+# burst * cycle after the first — not one cycle. Window sized to
+# StartLimitBurst(3) * (TimeoutStartSec(1800)+RestartSec(300)) = 6300,
+# plus margin for the untimed SIGTERM/SIGKILL stop phase between retries.
+StartLimitIntervalSec=6900
 StartLimitBurst=3
 
 [Service]
