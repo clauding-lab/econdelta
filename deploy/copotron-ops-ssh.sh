@@ -73,7 +73,10 @@ _scrub() {
     -e 's/(sb_[A-Za-z0-9]*_[A-Za-z0-9_-]{8,})/[REDACTED-supabase-key]/g' \
     -e 's/(eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{5,})/[REDACTED-jwt]/g' \
     -e 's/(sk-ant-[A-Za-z0-9_-]{10,})/[REDACTED-anthropic-key]/g' \
-    -e 's/(https:\/\/[a-z0-9]+\.supabase\.co[^ "]*(apikey|access_token)=)[^ "&]+/\1[REDACTED]/g'
+    -e 's/(https:\/\/[a-z0-9]+\.supabase\.co[^ "]*(apikey|access_token)=)[^ "&]+/\1[REDACTED]/g' \
+    -e 's#(discord\.com/api/webhooks/[0-9]+/)[A-Za-z0-9_-]+#\1[REDACTED-discord-token]#g' \
+    -e 's/(ghp_[A-Za-z0-9]{36,})/[REDACTED-github-token]/g' \
+    -e 's/(github_pat_[A-Za-z0-9_]{20,})/[REDACTED-github-token]/g'
 }
 
 dry() { [[ -n "${COPOTRON_OPS_DRYRUN:-}" ]]; }
@@ -88,6 +91,13 @@ cmd="${cmd%"${cmd##*[![:space:]]}"}"
 read -r -a argv <<< "$cmd"
 verb="${argv[0]:-help}"
 
+# Every verb's stdout is scrubbed on the way out — not just `log`'s — so a
+# secret some other service wrote into git history, a systemd status line,
+# etc. can't ride back out through this key either. Dispatch stays a plain
+# function so refusal/exit-code behavior inside each branch is unchanged;
+# only the pipe below is new, and PIPESTATUS keeps the verb's own exit code
+# (not _scrub's) as the script's exit code.
+_dispatch() {
 case "$verb" in
   help)
     [[ ${#argv[@]} -le 1 ]] || refuse "'help' takes no arguments"
@@ -161,3 +171,7 @@ case "$verb" in
     refuse "unknown verb ${verb@Q}"
     ;;
 esac
+}
+
+_dispatch | _scrub
+exit "${PIPESTATUS[0]}"

@@ -92,7 +92,17 @@ def notify(
         _recent_alerts[dedup_key] = now
         return True
     except requests.exceptions.RequestException as exc:
-        logger.error("Failed to send Discord alert (%s: %s): %s", level, title, exc)
+        # Never log str(exc) or the response/request objects here: requests
+        # embeds the full webhook URL — token included — in both HTTPError's
+        # message and ConnectionError's. The token is the credential; the
+        # class name + status code are enough to diagnose from the logs that
+        # every unit appends stderr to on disk.
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+        status_note = f" (HTTP {status})" if status is not None else ""
+        logger.error(
+            "Failed to send Discord alert (%s: %s): %s%s",
+            level, title, type(exc).__name__, status_note,
+        )
         return False
 
 
