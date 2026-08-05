@@ -22,10 +22,23 @@ def _parse_instruction(instruction: str) -> tuple[str, int]:
 
 
 def _to_number(text: str) -> float:
-    cleaned = re.sub(r"[^0-9.\-]", "", text)
-    if not cleaned:
+    stripped = text.strip()
+    # Accounting-style negatives: "(1,234.56)" means -1234.56, not +1234.56.
+    negative = stripped.startswith("(") and stripped.endswith(")")
+    if negative:
+        stripped = stripped[1:-1]
+    cleaned = re.sub(r"[^0-9.\-]", "", stripped)
+    if not cleaned or cleaned == "-":
         raise ParseError(f"no number in cell text {text!r}")
-    return float(cleaned)
+    try:
+        value = float(cleaned)
+    except ValueError as e:
+        # e.g. "2025-26" or "5.00-5.50" — a dash-bearing residue that isn't a
+        # sign. Surface as ParseError so hybrid.py's parse ladder catches it
+        # and falls through to the LLM path instead of a bare ValueError
+        # escaping parse_one entirely.
+        raise ParseError(f"no number in cell text {text!r}") from e
+    return -value if negative else value
 
 
 @register("html_table_row")
