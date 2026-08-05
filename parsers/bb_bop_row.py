@@ -14,27 +14,54 @@ different hardcoded index (which would just relocate the same landmine):
 
 1. **Column selection is by HEADER TEXT, never position.** Each header cell
    is scored as (fiscal_year_start, month_span) from patterns like
-   "2025-26PJuly-May"; the column with the highest fiscal year — and, among
-   columns sharing that year, the longest month window — is selected. A
-   "% Changes" delta column carries no fiscal-year/month pattern and is
-   naturally excluded. This generalises across BB's monthly page (5 columns)
-   and yearly page (4 columns) without change.
-2. **Unit scale is detected from the page's own "In million US$" /
-   "In billion US$" label**, not assumed. Converts to the billions the
-   `value_type=amount_usd_bn` config expects.
+   "2025-26PJuly-May"; the column with the highest fiscal year wins, and
+   among columns sharing that year — e.g. BB's "R" (Revised, a shorter
+   month-window) vs "P" (Provisional, the full window-to-date) suffix on
+   the same fiscal year — the LONGEST month window wins. The revision
+   letter itself is never inspected; the tiebreak is purely
+   "how many months does this column cover", which is what "R vs P"
+   actually cashes out to on the real page. A "% Changes" delta column
+   carries no fiscal-year/month pattern and is naturally excluded.
+2. **Unit scale is detected from the SELECTED table's own "In million US$" /
+   "In billion US$" label**, not assumed and not searched page-wide (a stray
+   unit label elsewhere in the document must not silently rescale the
+   value). Converts to the billions the `value_type=amount_usd_bn` config
+   expects.
+3. **Header row and data row are resolved WITHIN THE SAME `<table>`
+   element.** Early versions of this parser walked a flat, document-wide
+   list of `<tr>` — on a page with more than one `<table>` (e.g. a decoy or
+   an unrelated table above the real one), that let the header come from
+   one table while the data came from another, silently producing an
+   in-range but wrong value (proved in review: a decoy table's header
+   pushed column selection to the WRONG index, reading the real table's
+   Jul-Apr column instead of Jul-May — a value that still passes
+   `validate_value`). The parser now walks `soup.find_all("table")` and,
+   for each table, requires BOTH the row match and a scoreable header row
+   inside that same element before accepting a result.
+
+Column selection derives entirely from header text — no fixed column count
+is assumed — so it does not by itself break on a table shaped differently
+from the monthly BoP page. That said, the yearly BoP page
+(`/econdata/bop_yearly/1`) has NOT been fetched or tested against this
+parser: if its column headers state a fiscal year without a month-window
+(plausible for a page whose figures are already annual totals), this parser
+raises `ParseError` rather than guessing — a safe failure (falls through to
+hold-last-good), but the yearly page is not confirmed to work through this
+parser as shipped.
 
 Instruction syntax: ``row=<label>``. The row label is matched EXACTLY after
 normalisation (case-folded, whitespace collapsed) — not a substring — so a
-row-name collision (e.g. "Current Account Balance" vs some future "Current
-Account Balance (Provisional)" variant) fails loudly instead of silently
-matching the wrong row. Mirrors the exact-match design of
-`html_labeled_value.py` (2026-08-03) rather than `html_table_row.py`'s older
-substring style — see AGENTS.md landmine 39 for why "fail loud on a rename"
-beats "quietly match a neighbour".
+row-name collision (e.g. "Current Account Balance" vs "A. Current Account
+Balance") fails loudly instead of silently matching the wrong row. Mirrors
+the exact-match design of `html_labeled_value.py` (2026-08-03) rather than
+`html_table_row.py`'s older substring style — see AGENTS.md landmine 39 for
+why "fail loud on a rename" beats "quietly match a neighbour".
 """
 from __future__ import annotations
 
+import calendar
 import re
+from datetime import date
 
 from bs4 import BeautifulSoup
 
@@ -111,17 +138,44 @@ def _select_column(header_cells: list[str]) -> int:
     return max(scored, key=lambda idx: scored[idx])
 
 
-def _detect_unit_divisor(page_text: str) -> float:
+def _detect_unit_divisor(scoped_text: str) -> float:
     """Divisor to convert the table's stated unit to USD billion.
 
-    Reads the unit from the page (e.g. "In million US$") instead of
-    assuming millions — if BB ever states the table in billions, this
-    converts correctly instead of silently dividing by 1000 a second time.
+    Reads the unit from the SCOPED text passed in (the selected table's own
+    markup, not the whole page — a stray "In billion US$" label elsewhere
+    on the page must not silently rescale this value) instead of assuming
+    millions.
     """
-    m = _UNIT_RE.search(page_text)
+    m = _UNIT_RE.search(scoped_text)
     if not m:
-        raise ParseError("could not find an 'In million/billion US$' unit label on the page")
+        raise ParseError("could not find an 'In million/billion US$' unit label in this table")
     return _UNIT_DIVISOR[m.group(1).lower()]
+
+
+def _column_end_date(header_text: str) -> date | None:
+    """The real-world last day of the period a BoP column header covers,
+    e.g. "2025-26PJuly-May" -> 2026-05-31.
+
+    Used as `source_as_of` so a metric read mid-month is dated by its real
+    reporting period rather than today's run date — the "stale value reads
+    as fresh" failure this codebase has fixed elsewhere (AGENTS.md landmine
+    26). Returns None when the header carries no fiscal-year/month-window
+    pattern (mirrors `_score_column_header`).
+    """
+    fy_match = _FY_RE.search(header_text)
+    month_match = _MONTH_RANGE_RE.search(header_text)
+    if not fy_match or not month_match:
+        return None
+    fy_start = int(fy_match.group(1))
+    start_month = _MONTH_ORDER[month_match.group(1).lower()]
+    end_month = _MONTH_ORDER[month_match.group(2).lower()]
+    # BD fiscal year starts July. The end month falls in the SAME calendar
+    # year as fy_start only when it is >= the start month (e.g. a
+    # hypothetical "July-December" column); the common case ("July-May")
+    # wraps into the following calendar year.
+    end_year = fy_start if end_month >= start_month else fy_start + 1
+    last_day = calendar.monthrange(end_year, end_month)[1]
+    return date(end_year, end_month, last_day)
 
 
 @register("bb_bop_row")
@@ -131,39 +185,49 @@ class BbBopRowParser:
         raw_html = artifact.artifact_path.read_text()
         soup = BeautifulSoup(raw_html, "html.parser")
 
-        rows: list[list[str]] = []
-        for tr in soup.find_all("tr"):
-            cells = tr.find_all(["td", "th"])
-            if not cells:
-                continue
-            rows.append([c.get_text(strip=True) for c in cells])
-
-        header_cells: list[str] | None = None
-        for texts in rows:
-            if any(_score_column_header(t) is not None for t in texts):
-                header_cells = texts
-                break
-        if header_cells is None:
-            raise ParseError("no fiscal-year header row found in artifact")
-        col_idx = _select_column(header_cells)
-
         want = _norm(row_label)
         seen: list[str] = []
-        data_cells: list[str] | None = None
-        for texts in rows:
-            first = texts[0]
-            seen.append(first)
-            if _norm(first) == want:
-                data_cells = texts
-                break
-        if data_cells is None:
-            raise ParseError(f"row {row_label!r} not found; saw {seen}")
-        if col_idx >= len(data_cells):
-            raise ParseError(
-                f"row {row_label!r} has only {len(data_cells)} cells, "
-                f"need header-selected column index {col_idx}"
+        for table in soup.find_all("table"):
+            rows: list[list[str]] = []
+            for tr in table.find_all("tr"):
+                cells = tr.find_all(["td", "th"])
+                if not cells:
+                    continue
+                rows.append([c.get_text(strip=True) for c in cells])
+
+            data_cells: list[str] | None = None
+            for texts in rows:
+                seen.append(texts[0])
+                if _norm(texts[0]) == want:
+                    data_cells = texts
+                    break
+            if data_cells is None:
+                continue  # row not in THIS table — try the next one
+
+            header_cells: list[str] | None = None
+            for texts in rows:
+                if any(_score_column_header(t) is not None for t in texts):
+                    header_cells = texts
+                    break
+            if header_cells is None:
+                raise ParseError(
+                    f"row {row_label!r} found in a table with no fiscal-year "
+                    f"header row of its own"
+                )
+            col_idx = _select_column(header_cells)
+            if col_idx >= len(data_cells):
+                raise ParseError(
+                    f"row {row_label!r} has only {len(data_cells)} cells, "
+                    f"need header-selected column index {col_idx}"
+                )
+
+            raw_value = _to_number(data_cells[col_idx])
+            divisor = _detect_unit_divisor(str(table))
+            source_as_of = _column_end_date(header_cells[col_idx])
+            return ParseResult(
+                value=raw_value / divisor,
+                _parse_strategy="bb_bop_row",
+                source_as_of=source_as_of,
             )
 
-        raw_value = _to_number(data_cells[col_idx])
-        divisor = _detect_unit_divisor(raw_html)
-        return ParseResult(value=raw_value / divisor, _parse_strategy="bb_bop_row")
+        raise ParseError(f"row {row_label!r} not found in any table; saw {seen}")

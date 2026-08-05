@@ -144,17 +144,21 @@ def _load_history(indicator_id: str, data_root: Path, n: int = 3) -> list[float]
 
 
 def _load_last_good(indicator_id: str, data_root: Path, *, max_days_back: int = 60) -> dict | None:
-    """Most recent snapshot for `indicator_id` that was NOT itself a failed
-    parse — used by hybrid.py's terminal fallback to hold a real number
-    forward instead of publishing a synthesised 0.0 (cab-memo-2026-08-05.md).
+    """Most recent snapshot for `indicator_id`, strictly BEFORE today, that
+    was NOT itself a failed parse — used by hybrid.py's terminal fallback to
+    hold a real number forward instead of publishing a synthesised 0.0
+    (cab-memo-2026-08-05.md).
 
-    Mirrors aggregate_latest.py's `_load_last_good_snapshot` (same notion of
-    'bad', same 60-day lookback window) but reads independently at this
-    stage rather than sharing a module — Stage 2 (parse) and Stage 3
-    (aggregate) already keep separate concerns throughout this codebase.
-    Returns the full original snapshot dict (so the caller can carry its
-    real `scraped_at`/`source_url`/etc. forward, not fabricate new ones) or
-    None if nothing usable exists in the window.
+    Excludes TODAY's own snapshot even when it looks good: a retry-timer run
+    later the same day must not relabel this morning's genuinely fresh value
+    as `stale_fallback` just because it's sitting on disk already. Mirrors
+    aggregate_latest.py's `_prior_good_snapshot` exclude-today pattern (and
+    `_load_last_good_snapshot`'s notion of 'bad' + 60-day lookback window)
+    but reads independently at this stage rather than sharing a module —
+    Stage 2 (parse) and Stage 3 (aggregate) already keep separate concerns
+    throughout this codebase. Returns the full original snapshot dict (so
+    the caller can carry its real `scraped_at`/`source_url`/etc. forward,
+    not fabricate new ones) or None if nothing usable exists in the window.
     """
     d = data_root / indicator_id
     if not d.exists():
@@ -176,6 +180,8 @@ def _load_last_good(indicator_id: str, data_root: Path, *, max_days_back: int = 
             scraped = datetime.fromisoformat(blob["scraped_at"].replace("Z", "+00:00")).date()
         except (KeyError, ValueError):
             continue
+        if scraped >= today:
+            continue  # today's own snapshot — not "last GOOD", might be this very run
         if (today - scraped).days > max_days_back:
             return None  # sorted newest-first — nothing closer will qualify either
         blob["_stale_from"] = p.stem

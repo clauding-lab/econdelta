@@ -34,7 +34,7 @@ existing (inverted-semantics) synthetic fixture stayed green.
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -44,7 +44,12 @@ import parsers.bb_bop_row  # noqa: F401  triggers @register
 from claude_max.validators import validate_value
 from fetchers.base import FetchResult
 from parsers.base import ParseError
-from parsers.bb_bop_row import _detect_unit_divisor, _score_column_header, _select_column
+from parsers.bb_bop_row import (
+    _column_end_date,
+    _detect_unit_divisor,
+    _score_column_header,
+    _select_column,
+)
 from parsers.hybrid import parse_one
 from parsers.registry import REGISTRY, get_parser
 
@@ -174,6 +179,122 @@ def test_raises_when_current_account_row_absent(tmp_path: Path):
     parser = get_parser("bb_bop_row")
     with pytest.raises(ParseError):
         parser.parse(artifact, instruction="row=Current Account Balance")
+
+
+def test_row_label_match_is_exact_not_substring(tmp_path: Path):
+    """cab-memo review MED-4: row matching must be EXACT after
+    normalisation, never a substring test. If the real row were renamed
+    to a variant like 'A. Current Account Balance', the parser must raise
+    ParseError (fail loud) rather than silently substring-matching it — a
+    mutation from `==` back to `in` in the row-matching code must fail
+    this test."""
+    html = """
+    <html><body><table>
+      <tr><th>Items</th><th>2024-25RJuly-May</th><th>2025-26PJuly-May</th></tr>
+      <tr><td>A. Current Account Balance</td><td>-778</td><td>-301</td></tr>
+    </table></body></html>
+    """
+    p = tmp_path / "cab_variant_label_test.html"
+    p.write_text(html)
+    artifact = FetchResult(
+        indicator_id="current_account_balance", artifact_path=p, artifact_type="html",
+        fetched_at=datetime.now(timezone.utc),
+        source_url="https://www.bb.org.bd/en/index.php/econdata/bop",
+        sha256="x" * 64, cache_hit=False,
+    )
+    parser = get_parser("bb_bop_row")
+    with pytest.raises(ParseError):
+        parser.parse(artifact, instruction="row=Current Account Balance")
+
+
+# ---------------------------------------------------------------------------
+# Same-table scoping (cab-memo review HIGH-1 / MED-2): header row, data row,
+# and unit label must all be resolved within the SAME <table> element — a
+# decoy or unrelated table elsewhere on the page must never contribute a
+# header, a value, or a unit to the real one.
+# ---------------------------------------------------------------------------
+
+
+def _inject_after_body(html: str, snippet: str) -> str:
+    """Insert `snippet` immediately after the opening <body ...> tag of a
+    real captured page — used to add a clearly-synthetic decoy element next
+    to REAL BB markup, never to fabricate the real table's own content."""
+    idx = html.lower().index("<body")
+    end_tag = html.index(">", idx) + 1
+    return html[:end_tag] + snippet + html[end_tag:]
+
+
+def test_parser_ignores_a_decoy_table_with_a_mismatched_header(indicator, tmp_path: Path):
+    """Reviewer-proved failure mode: a decoy table sitting above the real
+    one has its OWN header row, picked up FIRST by a document-wide <tr>
+    scan; a document-wide row scan then finds "Current Account Balance" in
+    the REAL table below. Column selection ends up applying the DECOY's
+    column index to the REAL table's data — an in-range, validation-passing,
+    but WRONG value (proved: this exact decoy shape produces -1.229, the
+    Jul-Apr column, instead of -0.301). The fix requires header and data to
+    come from the same <table>; this must still return -0.301."""
+    decoy_table = (
+        "<table>"
+        "<tr><th>Items</th><th>2019-20RJuly-May</th><th>2021-22PJuly-Apr</th></tr>"
+        "<tr><td>Some Other Balance</td><td>111</td><td>222</td></tr>"
+        "</table>"
+    )
+    injected_html = _inject_after_body(_REAL_FIXTURE.read_text(), decoy_table)
+    p = tmp_path / "cab_decoy_table_test.html"
+    p.write_text(injected_html)
+    artifact = FetchResult(
+        indicator_id="current_account_balance", artifact_path=p, artifact_type="html",
+        fetched_at=datetime.now(timezone.utc),
+        source_url="https://www.bb.org.bd/en/index.php/econdata/bop",
+        sha256="x" * 64, cache_hit=False,
+    )
+    parser = get_parser("bb_bop_row")
+    result = parser.parse(artifact, instruction="row=Current Account Balance")
+    assert result.value == pytest.approx(_EXPECTED_VALUE_BN)
+    assert result.value != pytest.approx(_JUL_APR_VALUE_BN)  # the old crossover bug's answer
+
+
+def test_parser_ignores_a_decoy_tables_unit_label(indicator, tmp_path: Path):
+    """MED-2: a stray 'In billion US$' label OUTSIDE the real table (e.g. in
+    an unrelated decoy table or page furniture) must not rescale the real
+    table's value — the divisor must come from the SELECTED table's own
+    markup, not a page-wide first match. Without table scoping this would
+    silently produce -0.000301 instead of -0.301."""
+    decoy_with_wrong_unit = "<p>In billion US$</p><table><tr><td>Noise</td></tr></table>"
+    injected_html = _inject_after_body(_REAL_FIXTURE.read_text(), decoy_with_wrong_unit)
+    p = tmp_path / "cab_decoy_unit_test.html"
+    p.write_text(injected_html)
+    artifact = FetchResult(
+        indicator_id="current_account_balance", artifact_path=p, artifact_type="html",
+        fetched_at=datetime.now(timezone.utc),
+        source_url="https://www.bb.org.bd/en/index.php/econdata/bop",
+        sha256="x" * 64, cache_hit=False,
+    )
+    parser = get_parser("bb_bop_row")
+    result = parser.parse(artifact, instruction="row=Current Account Balance")
+    assert result.value == pytest.approx(_EXPECTED_VALUE_BN)  # NOT -0.000301
+
+
+# ---------------------------------------------------------------------------
+# source_as_of recovery — the selected column's real reporting period, not
+# today's run date.
+# ---------------------------------------------------------------------------
+
+
+def test_column_end_date_computes_the_real_reporting_period():
+    """'2025-26P July-May' covers July 2025 through May 2026 — the period
+    ends 2026-05-31, not 2026-06-30 (FY end) or today's run date."""
+    assert _column_end_date("2025-26PJuly-May") == date(2026, 5, 31)
+
+
+def test_column_end_date_none_for_a_non_fiscal_header():
+    assert _column_end_date("% Changes4 over 2") is None
+
+
+def test_parse_one_carries_the_real_reporting_period_as_source_as_of(indicator):
+    with patch("parsers.hybrid._sanity_check", return_value=_plausible_sanity()):
+        snapshot = parse_one(_real_artifact(), indicator, history=[])
+    assert snapshot.get("source_as_of") == "2026-05-31"
 
 
 # ---------------------------------------------------------------------------

@@ -121,11 +121,50 @@ def test_no_llm_prompt_and_deterministic_fails_uses_terminal_fallback(tmp_path):
     assert snapshot["value"] == 0.0
 
 
-def test_no_llm_prompt_and_sanity_check_disagrees_flags_needs_review_not_crash(tmp_path):
-    """Deterministic succeeds but the sanity check flags it implausible;
-    with no llm_prompt configured there is nothing to cross-check against —
-    must publish the deterministic value flagged for review, not raise
-    KeyError reaching for a missing 'llm_prompt' config key."""
+def test_no_llm_prompt_total_failure_on_money_metric_alerts_same_day(tmp_path):
+    """cab-memo review MED-1: a no-LLM money metric going completely dark
+    must not go quiet at INFO — logs ERROR and fires a Discord notify so a
+    human finds out same-day (Stage 3's own failure counter won't catch a
+    stale_fallback snapshot; it isn't 'bad' by _is_bad_snapshot's definition)."""
+    indicator = {
+        "id": "x", "name": "X", "domain": "macro", "cadence": "monthly",
+        "fetch": {"task": "Nonexistent"},
+        "parse": {"deterministic": "html_footer_ticker", "value_type": "amount_usd_bn",
+                  "valid_range": [-20.0, 20.0]},  # no llm_prompt key
+    }
+    with patch("parsers.hybrid.notify") as fake_notify:
+        snapshot = parse_one(_ticker_artifact(tmp_path), indicator, history=[], last_good=None)
+    assert snapshot["_provenance"] == "needs_review"
+    fake_notify.assert_called_once()
+    level, title, message = fake_notify.call_args.args[:3]
+    assert level == "warning"
+    assert "x" in title
+
+
+def test_no_llm_prompt_total_failure_on_non_money_metric_does_not_alert(tmp_path):
+    """The MED-1 escalation is scoped to money (amount_*) value types — a
+    percent/rate metric with no llm_prompt keeps the quieter INFO-level log
+    it already had; only money metrics get the same-day Discord alert."""
+    indicator = {
+        "id": "x", "name": "X", "domain": "money_market", "cadence": "daily",
+        "fetch": {"task": "Nonexistent"},
+        "parse": {"deterministic": "html_footer_ticker", "value_type": "percent",
+                  "valid_range": [0.0, 100.0]},  # no llm_prompt key
+    }
+    with patch("parsers.hybrid.notify") as fake_notify:
+        parse_one(_ticker_artifact(tmp_path), indicator, history=[], last_good=None)
+    fake_notify.assert_not_called()
+
+
+def test_no_llm_prompt_and_sanity_check_disagrees_flags_dont_veto(tmp_path):
+    """cab-memo review HIGH-2: a sanity-check 'implausible' with no
+    llm_prompt configured has no cross-check escape hatch. A false positive
+    on a genuine step-change month must not silently discard the (already
+    validated) deterministic value — needs_review would make Stage 3 drop
+    it, and _load_last_good skips needs_review snapshots, freezing the
+    metric forever. Must FLAG (publish as deterministic + note + alert),
+    never VETO (needs_review), and never raise KeyError reaching for a
+    missing 'llm_prompt' config key."""
     indicator = {
         "id": "policy_rate_repo", "name": "Policy Rate", "domain": "money_market",
         "cadence": "daily",
@@ -134,11 +173,17 @@ def test_no_llm_prompt_and_sanity_check_disagrees_flags_needs_review_not_crash(t
                   "valid_range": [0.5, 25.0]},  # no llm_prompt key
     }
     fake_sanity = type("R", (), {"parsed": {"plausible": False, "reason": "looks odd"}, "raw_text": ""})()
-    with patch("parsers.hybrid._sanity_check", return_value=fake_sanity):
+    with patch("parsers.hybrid._sanity_check", return_value=fake_sanity), \
+         patch("parsers.hybrid.notify") as fake_notify:
         snapshot = parse_one(_ticker_artifact(tmp_path), indicator, history=[])
     assert snapshot["value"] == 10.0
-    assert snapshot["_provenance"] == "needs_review"
+    assert snapshot["_provenance"] == "deterministic"
     assert snapshot["_parse_strategy"] == "html_footer_ticker"
+    assert "looks odd" in snapshot["sanity_note"]
+    fake_notify.assert_called_once()
+    level, title, message = fake_notify.call_args.args[:3]
+    assert level == "warning"
+    assert "policy_rate_repo" in title
 
 
 def test_terminal_fallback_holds_last_good_for_amount_value_type(tmp_path):
