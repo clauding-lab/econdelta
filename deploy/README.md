@@ -119,6 +119,87 @@ command="/home/adnan-local/econdelta/deploy/copotron-ops-ssh.sh",no-port-forward
 survive. Dispatch and refusal behaviour is covered by
 `tests/test_copotron_ops_ssh.py`.
 
+## Troubleshooting
+
+### A unit shows up in `systemctl --failed` but its own log says it worked as designed
+
+**Signature:** `systemctl --failed` (or `journalctl -u <unit>`) shows `status=3`
+and "Start request repeated too quickly" / the unit stuck in `failed`, while
+`logs/<name>-systemd.log` and the corresponding `run_logs` row (Supabase)
+show a clean, by-design skip — e.g. `econdelta-npl-structure.service` logging
+"FSR position ... already captured — skip" (`run_logs.status = 'skip'`).
+
+**Cause:** a handful of scrapers return a non-zero exit code for a condition
+that is a deliberate no-op, not a failure — see
+`utils/supabase_writer._STATUS_BY_EXIT` (`0` ok, `1` fail, `2` stale, `3`
+skip). Without telling systemd about it, `Restart=on-failure` treats that
+exit as a real failure: it restart-loops (re-running the full extraction
+attempt each time) until `StartLimitBurst` trips, and the unit is left in
+`failed` state — which pollutes exactly the `systemctl --failed` signal used
+to verify box health.
+
+**Fix:** the unit declares `SuccessExitStatus=<code>` for its documented
+no-op exit code, so systemd treats it as a clean exit (`inactive`, not
+`failed`) and `Restart=on-failure` never fires for it. Only
+`econdelta-npl-structure.service` currently has a documented **skip** (exit
+3) — audited across every scraper and the parse/aggregate orchestrators
+(`grep -n "return 3" scrapers/*.py parse_all.py aggregate_latest.py`), it is
+the only `main()` that returns 3. `bb_forex.service` and
+`briefing.service` separately use `RestartPreventExitStatus=2` for their
+documented **stale** exit (2) — that stops the retry loop but, unlike
+`SuccessExitStatus`, does **not** keep the unit out of `failed` state (see
+AGENTS.md landmine 47); those two are a pre-existing, differently-scoped
+design and were left untouched by this fix.
+
+**Verify:** `tests/test_deploy_units.py::test_npl_structure_treats_documented_skip_exit_as_success`
+pins this for the npl-structure unit.
+
+### Nightly logrotate fails: `error opening ".../logs/<name>-systemd.log": Permission denied`
+
+**Signature:** `/etc/logrotate.d/econdelta` fails around midnight with a
+permission-denied error opening one specific `*-systemd.log` file; every
+other econdelta log rotates fine that night (logrotate keeps processing the
+rest of the glob after one file errors, but exits non-zero overall).
+
+**Cause:** every unit writes its log via `StandardOutput=append:<path>` /
+`StandardError=append:<path>` running as `User=adnan-local`. If that log
+file is **absent** when the unit (re)starts, systemd creates the append
+target itself, as **root**, before `ExecStart` drops privileges to
+`User=`/`Group=` — the service still writes to it fine (it inherited the
+open file descriptor), but the file is now owned `root:root` on disk.
+`/etc/logrotate.d/econdelta` runs `su adnan-local adnan-local` (required
+because the parent `logs/` directory is user-owned) with `copytruncate`,
+which needs to open the file for reading *and* truncate it — a non-root
+`adnan-local` cannot do either to a root-owned file. A unit restart late at
+night (crash, manual `systemctl restart`, a fresh log after `deploy/uninstall.sh`
++ reinstall, etc.) is enough to reintroduce the trap before the next
+midnight run.
+
+**Fix:** every unit that appends to a persistent log carries a
+`+`-privileged `ExecStartPre` that touches and re-chowns its own log file
+immediately before `ExecStart` runs:
+
+```
+ExecStartPre=+/bin/sh -c 'touch <path> && chmod 0644 <path> && chown adnan-local:adnan-local <path>'
+```
+
+The leading `+` runs this specific command with full privileges and
+**outside** the unit's own sandboxing (`User=`, `Group=`, `ProtectHome=`,
+`ProtectSystem=`) regardless of how those are set for the main process —
+the standard systemd idiom for a privileged setup step ahead of an
+unprivileged `ExecStart`. `touch` never truncates an existing file, so a
+log that already has real content is untouched; `chown` then fixes
+ownership no matter who most recently (re)created the file. This closes
+the trap at its exact source, on every start, with no new unit, no new
+timer, and no race window (unlike a periodic sweep, which only chowns on
+its own schedule and can miss a restart that lands after the last sweep
+but before the next logrotate run).
+
+**Verify:** `tests/test_deploy_units.py::test_every_appended_log_has_a_privileged_ownership_guard`
+enforces every `StandardOutput=append:` target has a matching guard, so a
+future new unit (or an edit that drops this line) fails CI instead of
+surfacing as a 2 a.m. logrotate error.
+
 ## Notes
 
 - Scripts are invoked via `sudo bash deploy/install.sh` and do not require the executable bit.
@@ -126,3 +207,4 @@ survive. Dispatch and refusal behaviour is covered by
 - `/etc/econdelta.env` is owned `root:adnan-local` mode `0640`. The service user reads it at runtime.
 - Logs and data directories are preserved across uninstall runs. To fully reset, remove them manually.
 - Units that shell out to the `claude` CLI carry a `*.service.d/10-claude-json-writable.conf` drop-in adding `~/.claude.json` to `ReadWritePaths` — required because the CLI writes that state file each run while the services run under `ProtectHome=read-only` (see `AGENT_LEARNINGS.md`, 2026-05-29).
+- Every unit that appends stdout/stderr to a log file (`StandardOutput=append:.../logs/<name>-systemd.log`) carries a matching `+`-privileged `ExecStartPre` that touches and chowns that exact file to `adnan-local:adnan-local` before `ExecStart` runs — see Troubleshooting above. Adding a new unit with the same append pattern must copy this line too, or `tests/test_deploy_units.py::test_every_appended_log_has_a_privileged_ownership_guard` fails.

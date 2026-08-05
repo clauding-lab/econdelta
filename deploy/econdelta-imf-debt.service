@@ -15,6 +15,14 @@ User=adnan-local
 Group=adnan-local
 WorkingDirectory=/home/adnan-local/econdelta
 EnvironmentFile=/etc/econdelta.env
+# Log-file ownership guard (deploy/README.md Troubleshooting,
+# AGENT_LEARNINGS.md 2026-08-05): if this log is absent, systemd
+# creates the StandardOutput/StandardError append target as root
+# before ExecStart drops to User=/Group=, and nightly logrotate's
+# `su adnan-local adnan-local` then can't open a root-owned file.
+# '+' runs outside this unit's own sandboxing so the chown always
+# succeeds no matter who most recently (re)created the file.
+ExecStartPre=+/bin/sh -c 'touch /home/adnan-local/econdelta/logs/imf_debt_gdp-systemd.log && chmod 0644 /home/adnan-local/econdelta/logs/imf_debt_gdp-systemd.log && chown adnan-local:adnan-local /home/adnan-local/econdelta/logs/imf_debt_gdp-systemd.log'
 ExecStart=/home/adnan-local/econdelta/.venv/bin/python -m scrapers.imf_debt_gdp
 
 # Resource limits to protect Notifyr and Mission Control on the same VPS

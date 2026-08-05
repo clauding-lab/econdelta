@@ -106,3 +106,86 @@ def test_restart_cycle_fits_inside_start_limit_window():
         "StartLimitBurst, because StartLimitBurst retry cycles don't fit "
         "inside the start-limit window:\n" + "\n".join(violations)
     )
+
+
+def _values_for_key(text: str, key: str) -> list[str]:
+    """Return every value assigned to `key` in a unit file, in file order.
+
+    Systemd list-valued directives (like SuccessExitStatus=) can repeat or
+    hold multiple space-separated tokens on one line; this collects both.
+    """
+    values = []
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if line.startswith(f"{key}="):
+            _, _, value = line.partition("=")
+            values.append(value.strip())
+    return values
+
+
+def test_npl_structure_treats_documented_skip_exit_as_success():
+    """`scrapers/bb_npl_structure.py::main()` returns 3 for its documented
+    "already captured for this position date — skip" case (see
+    `utils/supabase_writer._STATUS_BY_EXIT`, which maps exit 3 to run_logs
+    status 'skip'). Without `SuccessExitStatus=3`, systemd's
+    `Restart=on-failure` treats that by-design skip as a failure: it
+    restart-loops (burning a real ~50s extraction attempt each time) until
+    `StartLimitBurst` trips, and the unit is left in 'failed' state — which
+    is exactly the signal `systemctl --failed` is relied on to surface real
+    box problems. See AGENT_LEARNINGS.md 2026-08-05.
+    """
+    text = (DEPLOY_DIR / "econdelta-npl-structure.service").read_text()
+    codes: set[str] = set()
+    for value in _values_for_key(text, "SuccessExitStatus"):
+        codes.update(value.split())
+    assert "3" in codes, (
+        "econdelta-npl-structure.service must declare SuccessExitStatus=3 "
+        "so the documented skip exit (bb_npl_structure.py main() `return 3`) "
+        "is not treated as a failure by Restart=on-failure / systemctl --failed."
+    )
+
+
+def _appended_log_path(text: str) -> str | None:
+    for value in _values_for_key(text, "StandardOutput"):
+        if value.startswith("append:"):
+            return value[len("append:") :]
+    return None
+
+
+def test_every_appended_log_has_a_privileged_ownership_guard():
+    """Every unit that appends stdout/stderr to a persistent log file must
+    also touch+chown that exact file to the service user via a
+    `+`-privileged ExecStartPre.
+
+    Why: if the log file is absent when the unit (re)starts, systemd
+    creates the `StandardOutput=append:`/`StandardError=append:` target as
+    root BEFORE ExecStart drops privileges to User=/Group= — so the file
+    is created root:root even though the service runs as adnan-local. The
+    nightly `su adnan-local adnan-local` in /etc/logrotate.d/econdelta then
+    cannot open that root-owned file, and the WHOLE logrotate run for
+    econdelta's logs fails with 'Permission denied'. The '+' prefix on
+    ExecStartPre runs outside the unit's own sandboxing (User=/Group=,
+    ProtectHome=, ProtectSystem=) so the chown can always succeed,
+    regardless of who most recently (re)created the file.
+    See AGENT_LEARNINGS.md 2026-08-05 and deploy/README.md Troubleshooting.
+    """
+    missing = []
+    for service_file in _all_service_files():
+        text = service_file.read_text()
+        log_path = _appended_log_path(text)
+        if log_path is None:
+            continue
+        guarded = any(
+            line.strip().startswith("ExecStartPre=+")
+            and log_path in line
+            and "chown" in line
+            for line in text.splitlines()
+        )
+        if not guarded:
+            missing.append(f"{service_file.name}: no privileged chown guard for {log_path}")
+
+    assert not missing, (
+        "Units below append to a log file with no privileged ownership "
+        "guard, so a root-recreated log file can silently break nightly "
+        "logrotate (AGENT_LEARNINGS.md 2026-08-05):\n" + "\n".join(missing)
+    )

@@ -17,6 +17,14 @@ User=adnan-local
 Group=adnan-local
 WorkingDirectory=/home/adnan-local/econdelta
 EnvironmentFile=/etc/econdelta.env
+# Log-file ownership guard (deploy/README.md Troubleshooting,
+# AGENT_LEARNINGS.md 2026-08-05): if this log is absent, systemd
+# creates the StandardOutput/StandardError append target as root
+# before ExecStart drops to User=/Group=, and nightly logrotate's
+# `su adnan-local adnan-local` then can't open a root-owned file.
+# '+' runs outside this unit's own sandboxing so the chown always
+# succeeds no matter who most recently (re)created the file.
+ExecStartPre=+/bin/sh -c 'touch /home/adnan-local/econdelta/logs/bb_npl_structure-systemd.log && chmod 0644 /home/adnan-local/econdelta/logs/bb_npl_structure-systemd.log && chown adnan-local:adnan-local /home/adnan-local/econdelta/logs/bb_npl_structure-systemd.log'
 ExecStart=/home/adnan-local/econdelta/.venv/bin/python -m scrapers.bb_npl_structure
 
 MemoryMax=1500M
@@ -31,6 +39,19 @@ ProtectHome=read-only
 ReadWritePaths=/home/adnan-local/econdelta/data /home/adnan-local/econdelta/logs /home/adnan-local/.claude
 
 TimeoutStartSec=2700
+# exit 3 = "already captured for this FSR position date — skip" (a by-design
+# no-op, see scrapers/bb_npl_structure.py main() and
+# utils/supabase_writer._STATUS_BY_EXIT, which maps it to run_logs status
+# 'skip'), not a failure. SuccessExitStatus=3 makes systemd treat it as a
+# CLEAN exit — the unit ends 'inactive', not 'failed', so it does not show
+# in `systemctl --failed` and Restart=on-failure never fires for it (a
+# restart would just re-run the ~50s extraction attempt and reach the exact
+# same skip). NOTE: RestartPreventExitStatus= only suppresses the retry —
+# it does NOT change whether the unit is reported as failed, so it would
+# not fix the `systemctl --failed` pollution this exists to prevent; see
+# AGENTS.md landmine 47. Retry only genuine failures (exit 1 / exit 2, both
+# unaffected by this line).
+SuccessExitStatus=3
 Restart=on-failure
 RestartSec=300
 
