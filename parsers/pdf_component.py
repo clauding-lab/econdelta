@@ -1,21 +1,41 @@
 """Parser for "Component <ID>" labeled values in BB Monthly Economic Indicators PDFs.
 
 Extended to extract ``source_as_of`` from the source document's own date idiom.
-Three phrasings are recognised, tried in this order:
-  - "Monthly Update (Month YYYY)" / "Volume MM/YYYY Month YYYY" — the BB
-    "Major Economic Indicators: Monthly Update" cover/header idiom (the same
-    report family ``pdf_table_row.py``'s ``_bb_report_date`` recognises).
-    Tried FIRST because it is the most specific: a structured cover phrase
-    that essentially never appears outside that one report.
-  - "Quarter ending DD Month YYYY"  (e.g. "Quarter ending 30 September 2025")
-    — BB FSAR / QFSAR cover page.
-  - "... as of end-Month YYYY"      (e.g. the QFSAR's "data and information
-    available as of end-September 2025") → maps to that month's quarter-end.
-    Tried LAST: this generic phrasing is the least specific of the three and
-    can false-positive-match an unrelated table header elsewhere in a
-    multi-topic document (found live: the MEI PDF's page-5 liquidity table
-    prints "As of end June 2025 / As of end May 2026P" as column headers,
-    which this idiom alone would misread as the WHOLE document's date).
+Two report families are recognised, gated by a CONTENT marker (never tried
+unconditionally — see the false-positive history below):
+
+  - BB "Major Economic Indicators: Monthly Update" — gated on the document's
+    own title marker (``_MEI_TITLE_MARK``), then reads the "Monthly Update
+    (Month YYYY)" / "Volume MM/YYYY Month YYYY" cover idiom (the same idiom
+    ``pdf_table_row.py``'s ``_bb_report_date`` recognises).
+  - BB FSAR / QFSAR — anything NOT gated into the MEI branch above falls to
+    "Quarter ending DD Month YYYY" (e.g. "Quarter ending 30 September 2025"),
+    then "... as of end-Month YYYY" (e.g. the QFSAR's "data and information
+    available as of end-September 2025").
+
+Two false positives, both found against REAL captured document text, drove
+this shape:
+
+1. The generic "as of end-Month YYYY" idiom alone can false-positive-match an
+   UNRELATED table header elsewhere in a multi-topic document — the MEI PDF's
+   page-5 liquidity table prints "As of end June 2025 / As of end May 2026P"
+   as column headers, which this idiom would misread as the WHOLE document's
+   date. Fix: only reachable when the MEI branch's own gate did NOT match.
+2. A short/loose MEI marker (mirroring ``pdf_table_row.py``'s bare
+   ``"major economic indicators" in text.lower()`` check) ALSO false-positive-
+   gates real FSAR/QFSAR documents: ``tests/fixtures/fsr_fixture_text.txt`` (a
+   live FSAR capture) contains the substring "major economic indicators" as a
+   SOURCE CITATION ("Source: Major Economic Indicators, January 2026 issue,
+   BB.") — not the FSAR's own title. Gating on that bare substring would route
+   a real FSAR document into the MEI branch, return None (no MEI cover idiom
+   present), and lose the correct FSAR date the QFSAR-idiom fallback would
+   otherwise have found. ``pdf_table_row.py``'s gate gets away with the loose
+   marker only because it's never fed FSAR text (a different parser handles
+   that report family there) — the SAME looseness is unsafe here because
+   ``pdf_component`` serves BOTH families. Fix: gate on the fuller title
+   phrase ``_MEI_TITLE_MARK`` ("major economic indicators: monthly update"),
+   verified present in the real MEI fixture and absent from the real FSAR
+   fixture's citation.
 
 ``recover_source_as_of`` exposes the same date recovery to ``parsers/hybrid.py``
 so the publication date survives even when value extraction falls through to the
@@ -43,6 +63,12 @@ logger = logging.getLogger(__name__)
 # two independently-registered parsers together.
 _MEI_MONTHLY_RE = re.compile(r"Monthly Update\s*\(\s*([A-Za-z]+)\s+(\d{4})\s*\)", re.IGNORECASE)
 _MEI_VOLUME_RE = re.compile(r"Volume\s+\d{1,2}/\d{4}\s+([A-Za-z]+)\s+(\d{4})", re.IGNORECASE)
+
+# Content gate for the MEI branch — the FULL title phrase, not the bare
+# "major economic indicators" substring (see module docstring point 2: that
+# shorter marker false-positive-matches a source citation inside real FSAR
+# text). Case-insensitive substring check against the whole document text.
+_MEI_TITLE_MARK = "major economic indicators: monthly update"
 
 # Matches "Quarter ending 30 September 2025" on the FSAR cover page.
 # Group 1: day (1-31), Group 2: month name, Group 3: 4-digit year.
@@ -100,12 +126,18 @@ def _mei_report_date(text: str) -> date | None:
 
 def _extract_quarter_end(text: str) -> date | None:
     """Return the reporting period-end date from the source document's own
-    date idiom, or None if no recognised phrasing is present. Tried in order
-    from most to least specific — see the module docstring."""
-    # 0. BB "Major Economic Indicators: Monthly Update" cover idiom.
-    mei = _mei_report_date(text)
-    if mei is not None:
-        return mei
+    date idiom, or None if no recognised phrasing is present. A CONTENT gate
+    picks the report family first — see the module docstring for why this is
+    not just priority-ordering (unconditionally trying the MEI idiom first
+    would still let its Volume-regex fire on some other document's
+    coincidental text; gating on the real family avoids that class of bug
+    entirely, not just the one instance already found)."""
+    # 0. BB "Major Economic Indicators: Monthly Update" — gated on its own
+    # title, so a document that ISN'T this report never reaches this idiom
+    # (whatever it would return, even None, is final — no fallthrough to the
+    # FSAR/QFSAR idioms below).
+    if _MEI_TITLE_MARK in text.lower():
+        return _mei_report_date(text)
     # 1. Explicit "Quarter ending DD Month YYYY".
     m = _QUARTER_END_RE.search(text)
     if m:

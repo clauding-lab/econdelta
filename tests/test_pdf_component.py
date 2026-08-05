@@ -11,6 +11,7 @@ from parsers.registry import get_parser
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 MEI_FIXTURE = REPO_ROOT / "tests" / "_pdfs" / "bb_mei_2026_june.pdf"
+FSAR_FIXTURE_TEXT = REPO_ROOT / "tests" / "fixtures" / "fsr_fixture_text.txt"
 
 
 @pytest.fixture
@@ -46,10 +47,18 @@ def test_raises_when_component_missing(pdf_artifact):
 # success path for the FIRST time in production (point_to_point_inflation) —
 # every prior pdf_component-declared config entry had a prose `fetch.task`
 # that never matched literally, so this code path had never actually run.
-# Doing so surfaced a real bug: _extract_quarter_end's FSAR/QFSAR-only idioms
-# have no report-type gating, so on a non-FSAR document (the MEI PDF) the
-# generic "as of end-Month YYYY" fallback can false-positive-match an
-# UNRELATED table header elsewhere in the doc. See module docstring.
+# Doing so surfaced two real bugs, both found against REAL captured document
+# text (never synthetic guesses) — see the module docstring for the full
+# account:
+#
+#   1. The generic "as of end-Month YYYY" fallback can false-positive-match
+#      an UNRELATED table header elsewhere in the doc (the MEI PDF's own
+#      page-5 liquidity table).
+#   2. A loose MEI marker (the bare "major economic indicators" substring,
+#      mirroring pdf_table_row.py's gate) ALSO false-positive-matches real
+#      FSAR text — tests/fixtures/fsr_fixture_text.txt cites "Major Economic
+#      Indicators" as a data SOURCE, not as its own title. Fixed by gating on
+#      the fuller title phrase instead (_MEI_TITLE_MARK).
 # ---------------------------------------------------------------------------
 
 class TestMeiReportDate:
@@ -75,18 +84,51 @@ class TestMeiReportDate:
         assert pc._mei_report_date(text) == date(2026, 6, 30)
 
 
-class TestExtractQuarterEndPriority:
-    def test_mei_idiom_tried_before_generic_end_month_fallback(self):
-        """Regression for the live false-positive: an MEI-titled document
-        containing an UNRELATED 'As of end <Month> <Year>' table header (BB's
-        own page-5 liquidity table) must be dated by the MEI cover, not by
-        that unrelated header."""
+class TestExtractQuarterEndGate:
+    """`_extract_quarter_end` gates on the REPORT FAMILY (a content marker),
+    not just idiom priority — see module docstring bugs 1 and 2 above for why
+    "try MEI first, fall through on failure" is not equivalent to a real gate.
+    """
+
+    def test_mei_gate_wins_over_coexisting_end_month_text(self):
+        """Regression for bug 1: an MEI-titled document (using the REAL full
+        title, as every real MEI page carries — not just the bare 'Monthly
+        Update (...)' fragment) containing an UNRELATED 'As of end <Month>
+        <Year>' table header (BB's own page-5 liquidity table) must be dated
+        by the MEI cover, not by that unrelated header."""
         text = (
-            "Monthly Update (June 2026)\n"
+            "Major Economic Indicators: Monthly Update (June 2026)\n"
             "3. Liquidity situation of the scheduled banks\n"
             "As of end As of end May 2026P\nJune 2025\n"
         )
         assert pc._extract_quarter_end(text) == date(2026, 6, 30)
+
+    def test_bare_monthly_update_without_full_title_does_not_gate(self):
+        """Precision check: the gate requires the FULL title phrase, not just
+        'Monthly Update (...)' in isolation — a fragment that could plausibly
+        appear elsewhere. Without the full title, the doc is NOT recognised
+        as MEI and falls through to the FSAR/QFSAR idioms (here, the generic
+        end-month fallback correctly fires on the only date-shaped text
+        present — demonstrating this is a real gate, not just a try-order)."""
+        text = "Monthly Update (June 2026)\nas of end-May 2026 for one series only"
+        assert pc._extract_quarter_end(text) == date(2026, 5, 31)
+
+    def test_bare_major_economic_indicators_phrase_alone_does_not_gate(self):
+        """Pins the exact distinction from pdf_table_row.py's looser marker:
+        the bare phrase (a plausible citation/reference, not a title) must
+        NOT trigger the MEI branch on its own."""
+        text = "Source: Major Economic Indicators, January 2026 issue, BB."
+        assert pc._MEI_TITLE_MARK not in text.lower()
+
+    def test_gate_is_noop_on_real_fsar_fixture(self):
+        """The critical regression: a REAL captured FSAR document (which DOES
+        contain the bare 'major economic indicators' substring as a source
+        citation) must still recover its own QFSAR date, not be misrouted
+        into the MEI branch and lose it."""
+        fsar_text = FSAR_FIXTURE_TEXT.read_text()
+        assert "major economic indicators" in fsar_text.lower()  # the citation is really there
+        assert pc._MEI_TITLE_MARK not in fsar_text.lower()  # but not the full title
+        assert pc._extract_quarter_end(fsar_text) == date(2025, 12, 31)
 
     def test_qfsar_idiom_still_works_when_no_mei_marker(self):
         text = "Quarter ending 30 September 2025"

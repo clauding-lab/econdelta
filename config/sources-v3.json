@@ -204,7 +204,7 @@
       "fetch": {
         "type": "pdf",
         "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
-        "task": "page=16 table=1 row=26 col=5",
+        "task": "page=16 table=1 header=\"1 2 3 4 = 2+3 5 6 = 4+5 7 8 9\" row=\"July-May of FY 26\" col=5",
         "discover": "latest_pdf_link"
       },
       "parse": {
@@ -231,7 +231,7 @@
       "fetch": {
         "type": "pdf",
         "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
-        "task": "page=16 table=1 row=26 col=4",
+        "task": "page=16 table=1 header=\"1 2 3 4 = 2+3 5 6 = 4+5 7 8 9\" row=\"July-May of FY 26\" col=4",
         "discover": "latest_pdf_link"
       },
       "parse": {
@@ -258,7 +258,7 @@
       "fetch": {
         "type": "pdf",
         "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
-        "task": "page=16 table=1 row=26 col=2",
+        "task": "page=16 table=1 header=\"1 2 3 4 = 2+3 5 6 = 4+5 7 8 9\" row=\"July-May of FY 26\" col=2",
         "discover": "latest_pdf_link"
       },
       "parse": {
@@ -285,7 +285,7 @@
       "fetch": {
         "type": "pdf",
         "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
-        "task": "page=16 table=1 row=26 col=3",
+        "task": "page=16 table=1 header=\"1 2 3 4 = 2+3 5 6 = 4+5 7 8 9\" row=\"July-May of FY 26\" col=3",
         "discover": "latest_pdf_link"
       },
       "parse": {
@@ -1031,7 +1031,7 @@
       "fetch": {
         "type": "pdf",
         "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
-        "task": "row=\"Deposits of the\" min=200000",
+        "task": "row=\"Deposits of the\" min=1000000 page=6",
         "discover": "latest_pdf_link"
       },
       "parse": {
@@ -1053,7 +1053,7 @@
       "fetch": {
         "type": "pdf",
         "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
-        "task": "row=\"Currency outside\" min=200000",
+        "task": "row=\"Currency outside\" min=250000 page=6",
         "discover": "latest_pdf_link"
       },
       "parse": {
@@ -1129,7 +1129,7 @@
       "fetch": {
         "type": "pdf",
         "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
-        "task": "row=\"Deposits held with BB\" min=50000",
+        "task": "row=\"Deposits held with BB\" min=60000 page=7",
         "discover": "latest_pdf_link"
       },
       "parse": {
@@ -1151,7 +1151,7 @@
       "fetch": {
         "type": "pdf",
         "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
-        "task": "row=\"Money multiplier\"",
+        "task": "row=\"Money multiplier\" page=7",
         "discover": "latest_pdf_link"
       },
       "parse": {

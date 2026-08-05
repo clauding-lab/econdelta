@@ -85,12 +85,25 @@ def test_fixture_sha256_matches_captured_sidecar():
 # for the SAME June-2026 edition (as_of=2026-06-30).
 # ---------------------------------------------------------------------------
 
+# All 9 now assert a real source_as_of=2026-06-30 — no None-skips. Review
+# finding H2: the 4 pdf_table_latest conversions (money_multiplier,
+# currency_outside_bank, deposits_of_the_system, deposits_held_with_bb_crr)
+# initially shipped WITHOUT source_as_of recovery — since their deterministic
+# parse now SUCCEEDS (that's the whole point of this batch), the old
+# LLM-fallback-only recovery path in hybrid.py never ran for them, so their
+# metric_history rows would have been silently stamped with today's run date
+# instead of the report's true June-2026 period, PLUS triggered a permanent
+# per-run WARNING (pdf_table_latest isn't in aggregate_latest.py's
+# _NEVER_DATED_PARSE_STRATEGIES allow-list, so a parser that's expected to
+# date itself but doesn't is treated as real signal, not an accepted gap).
+# Fixed by giving pdf_table_latest.py its own gated MEI-idiom recovery,
+# mirroring pdf_component.py's (see parsers/pdf_table_latest.py docstring).
 BATCH1_CASES = [
     # (indicator_id, expected_value, expected_source_as_of)
-    ("money_multiplier", 4.92, None),
-    ("currency_outside_bank", 349374.0, None),
-    ("deposits_of_the_system", 2041692.7, None),
-    ("deposits_held_with_bb_crr", 115326.7, None),
+    ("money_multiplier", 4.92, date(2026, 6, 30)),
+    ("currency_outside_bank", 349374.0, date(2026, 6, 30)),
+    ("deposits_of_the_system", 2041692.7, date(2026, 6, 30)),
+    ("deposits_held_with_bb_crr", 115326.7, date(2026, 6, 30)),
     ("bank_borrowing_for_deficit_financing", 94158.9, date(2026, 6, 30)),
     ("non_bank_borrowing_for_deficit_financing", -567.67, date(2026, 6, 30)),
     ("domestic_borrowing_for_budget_deficit", 93591.23, date(2026, 6, 30)),
@@ -105,19 +118,25 @@ def test_batch1_metric_parses_deterministically(indicator_id, expected_value, ex
     parser = get_parser(ind["parse"]["deterministic"])
     result = parser.parse(_artifact(indicator_id), ind["fetch"]["task"])
     assert result.value == pytest.approx(expected_value)
-    if expected_as_of is not None:
-        assert result.source_as_of == expected_as_of
+    assert result.source_as_of == expected_as_of
 
 
 @pytest.mark.parametrize("indicator_id,expected_value,_", BATCH1_CASES)
 def test_batch1_metric_value_passes_its_own_valid_range(indicator_id, expected_value, _):
     """Guards the non_bank_borrowing valid_range widening (was [0, 200000],
-    which would reject its real, legitimately-negative -567.67 reading)."""
+    which would reject its real, legitimately-negative -567.67 reading).
+
+    Validates the PARSER's actual live output against its own config
+    valid_range — not the hardcoded `expected_value` fixture constant, which
+    would only prove the test file's own numbers are internally consistent
+    with each other, not that the real parser call stays in range."""
     from claude_max.validators import validate_value
 
     ind = _indicator(indicator_id)
+    parser = get_parser(ind["parse"]["deterministic"])
+    result = parser.parse(_artifact(indicator_id), ind["fetch"]["task"])
     validate_value(
-        value=expected_value,
+        value=result.value,
         value_type=ind["parse"]["value_type"],
         valid_range=tuple(ind["parse"]["valid_range"]),
     )  # raises InvalidValueError on failure — the assertion IS "does not raise"
@@ -140,7 +159,13 @@ def test_deficit_financing_row_arithmetic_reconciles_against_report_prose():
     domestic exactly, per the table's own '4 = 2+3' column formula (and per
     the report's Executive Summary: 'total net domestic borrowing ... was
     BDT 93591.23 crore, which included net borrowing of BDT 94158.90 crore
-    from the banking system')."""
+    from the banking system').
+
+    Pinned against the Exec-Summary's LITERAL number (not just internal
+    self-consistency between the 4 parsed columns) — a bug that shifted all
+    4 columns by the same amount (e.g. a table-detection regression that
+    silently picked up a neighbouring row) could still satisfy
+    `bank + non_bank == domestic` while every value was wrong."""
     bank = _indicator("bank_borrowing_for_deficit_financing")
     non_bank = _indicator("non_bank_borrowing_for_deficit_financing")
     domestic = _indicator("domestic_borrowing_for_budget_deficit")
@@ -149,6 +174,7 @@ def test_deficit_financing_row_arithmetic_reconciles_against_report_prose():
     non_bank_v = get_parser("pdf_table_row").parse(_artifact("x"), non_bank["fetch"]["task"]).value
     domestic_v = get_parser("pdf_table_row").parse(_artifact("x"), domestic["fetch"]["task"]).value
 
+    assert domestic_v == pytest.approx(93591.23)  # the Exec-Summary's own literal figure
     assert bank_v + non_bank_v == pytest.approx(domestic_v)
 
 
