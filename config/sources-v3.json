@@ -1515,11 +1515,10 @@
       "fetch": {
         "type": "html",
         "url": "https://www.bb.org.bd/en/index.php/econdata/bop",
-        "task": "row=Current Account col=2 -- the Current Account Balance line of the BoP table, in USD billion; negative = deficit. NOT the Overall Balance row."
+        "task": "row=Current Account Balance -- select BB's current fiscal-year PROVISIONAL-period column by HEADER TEXT (fiscal year + month window), never by position; BB's column order is prior-FY, current-FY-revised, current-FY-provisional, left to right (NOT chronological). Source cells are in USD million on this page; the parser converts to USD billion. NOT the Overall Balance row."
       },
       "parse": {
-        "deterministic": "html_table_row",
-        "llm_prompt": "current_account_balance.txt",
+        "deterministic": "bb_bop_row",
         "value_type": "amount_usd_bn",
         "valid_range": [
           -20.0,

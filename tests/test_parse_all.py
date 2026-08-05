@@ -85,6 +85,44 @@ def test_load_artifact_falls_back_to_mtime_without_sidecars(tmp_path: Path):
     assert artifact.artifact_path.name == "2026_may.pdf"
 
 
+def _write_snapshot(
+    data_root: Path, indicator_id: str, filename: str, *, value, scraped_at: str,
+    provenance: str = "deterministic", parse_strategy: str = "bb_bop_row",
+) -> None:
+    d = data_root / indicator_id
+    d.mkdir(parents=True, exist_ok=True)
+    (d / filename).write_text(json.dumps({
+        "indicator_id": indicator_id, "value": value, "scraped_at": scraped_at,
+        "_provenance": provenance, "_parse_strategy": parse_strategy,
+    }))
+
+
+def test_load_last_good_excludes_todays_own_snapshot(tmp_path: Path):
+    """cab-memo review MED-3: a retry-timer run later the same day must not
+    relabel THIS MORNING's genuinely fresh value as stale_fallback just
+    because it is already sitting on disk. _load_last_good must skip a
+    snapshot scraped today and fall back to yesterday's real value."""
+    today = datetime.now(timezone.utc)
+    yesterday = today.replace(day=today.day - 1) if today.day > 1 else today
+    _write_snapshot(
+        tmp_path, "x", "today.json", value=999.0, scraped_at=today.isoformat(),
+    )
+    _write_snapshot(
+        tmp_path, "x", "yesterday.json", value=-0.301, scraped_at=yesterday.isoformat(),
+    )
+    result = parse_all._load_last_good("x", tmp_path)
+    assert result is not None
+    assert result["value"] == -0.301  # yesterday's, NOT today's 999.0
+
+
+def test_load_last_good_returns_none_when_only_todays_snapshot_exists(tmp_path: Path):
+    today = datetime.now(timezone.utc)
+    _write_snapshot(
+        tmp_path, "x", "today.json", value=999.0, scraped_at=today.isoformat(),
+    )
+    assert parse_all._load_last_good("x", tmp_path) is None
+
+
 def test_load_artifact_period_outranks_periodless_legacy_sibling(tmp_path: Path):
     """Transition case: a legacy period-less April file coexists with a fresh
     May file that recorded its period. The one WITH a period must win even if the

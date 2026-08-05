@@ -13,6 +13,7 @@ from claude_max.validators import InvalidValueError, validate_value, values_matc
 from fetchers.base import FetchResult
 from parsers.base import ParseError, ParseResult
 from parsers.registry import get_parser
+from utils.notifier import notify
 
 logger = logging.getLogger("hybrid")
 PROMPTS_DIR = Path(__file__).resolve().parent.parent / "claude_max" / "prompts"
@@ -251,11 +252,55 @@ def _recover_source_as_of(parser: Any, artifact: FetchResult) -> "date | None":
         return None
 
 
-def parse_one(artifact: FetchResult, indicator: dict, history: list[float]) -> dict:
+_HOLD_LAST_GOOD_VALUE_TYPES = frozenset({
+    "amount_bdt_crore", "amount_bdt_mn", "amount_usd_bn", "amount_usd_mn",
+})
+
+
+def _terminal_fallback(
+    *, indicator: dict, artifact: FetchResult, error: str, last_good: dict | None,
+) -> dict:
+    """Build the snapshot for a parse that failed on every available path
+    (deterministic, and — where configured — the LLM extract fallback).
+
+    For `amount_*` value types (money), publishing a synthesised 0.0 is
+    worse than publishing nothing new: 0.0 is a plausible-looking WRONG
+    number for a balance metric, unlike an obviously-broken one
+    (cab-memo-2026-08-05.md). When a last-good snapshot is available, hold
+    it forward instead — `_provenance="stale_fallback"` reuses the exact tag
+    aggregate_latest.py's own last-good mechanism already uses, so freshness
+    reporting downstream (`_is_fresh(...) and _provenance != "stale_fallback"`)
+    treats a held value as NOT fresh, same as that mechanism does. The held
+    snapshot keeps its ORIGINAL `scraped_at`/`source_url`/etc. — it is
+    yesterday's real reading, not stamped as if freshly parsed today.
+
+    Non-money value types, and any money metric with no last-good on record
+    (e.g. first-ever run), keep the original 0.0/needs_review behaviour —
+    there is nothing safe to hold forward.
+    """
+    value_type = indicator["parse"]["value_type"]
+    if value_type in _HOLD_LAST_GOOD_VALUE_TYPES and last_good is not None:
+        held = dict(last_good)
+        held["_provenance"] = "stale_fallback"
+        held["sanity_note"] = (
+            f"parse failed today ({error}); holding last-good value "
+            f"from {held.get('_stale_from', '?')}"
+        )
+        return held
+    return _build_snapshot(indicator=indicator, artifact=artifact, value=0.0,
+                           provenance="needs_review", parse_strategy="extract_failed",
+                           sanity_note=error)
+
+
+def parse_one(
+    artifact: FetchResult, indicator: dict, history: list[float],
+    last_good: dict | None = None,
+) -> dict:
     parse_block = indicator["parse"]
     instruction = indicator["fetch"].get("task", "")
     value_type = parse_block["value_type"]
     valid_range = tuple(parse_block["valid_range"])
+    has_llm_fallback = "llm_prompt" in parse_block
 
     parser = get_parser(parse_block["deterministic"])
     v_det: Any = None
@@ -299,6 +344,37 @@ def parse_one(artifact: FetchResult, indicator: dict, history: list[float]) -> d
             return _build_snapshot(indicator=indicator, artifact=artifact, value=v_det,
                                    provenance="deterministic", parse_strategy=parse_block["deterministic"],
                                    sanity_note=note, source_as_of=det_source_as_of)
+        if not has_llm_fallback:
+            # No LLM configured for this indicator (e.g. current_account_balance,
+            # where the extraction prompt was itself the source of a two-month
+            # alternation bug — cab-memo-2026-08-05.md) — there is nothing to
+            # cross-check against. FLAG, DON'T VETO: a sanity-check "implausible"
+            # here has no escape hatch. If it's a false positive on a genuine
+            # step-change month, publishing needs_review instead of the real
+            # (already-validated) deterministic value means Stage 3 discards
+            # it AND _load_last_good skips needs_review snapshots — the metric
+            # would freeze indefinitely on whatever value the sanity-check last
+            # happened to like. Publish the deterministic value (it already
+            # passed validate_value) with the concern recorded, and alert a
+            # human same-day instead of silently discarding a possibly-correct
+            # number.
+            logger.warning(
+                "sanity check flagged %s as implausible (%s) but no llm_prompt "
+                "is configured for cross-check — publishing the deterministic "
+                "value anyway to avoid a false-positive freeze",
+                indicator["id"], note,
+            )
+            notify(
+                "warning",
+                f"{indicator['id']}: sanity check flagged, no LLM cross-check available",
+                f"value={v_det} — {note}. Published as deterministic anyway (no "
+                f"llm_prompt configured for this indicator to cross-check "
+                f"against) — please eyeball today's reading.",
+            )
+            return _build_snapshot(indicator=indicator, artifact=artifact, value=v_det,
+                                   provenance="deterministic", parse_strategy=parse_block["deterministic"],
+                                   sanity_note=f"sanity flagged (no llm cross-check available): {note}",
+                                   source_as_of=det_source_as_of)
         # Disagreement: cross-check with extract
         try:
             extract = _llm_extract(indicator=indicator, artifact=artifact)
@@ -319,6 +395,35 @@ def parse_one(artifact: FetchResult, indicator: dict, history: list[float]) -> d
                                    provenance="needs_review", parse_strategy=parse_block["deterministic"],
                                    sanity_note=f"sanity flagged, extract errored: {e}",
                                    source_as_of=det_source_as_of)
+
+    # Deterministic parse failed outright. If no LLM is configured for this
+    # indicator, there is no extraction fallback left to try — go straight to
+    # the terminal fallback (hold-last-good for money metrics) rather than
+    # raising KeyError on the missing `llm_prompt` config key.
+    if not has_llm_fallback:
+        message = (
+            f"deterministic parse failed for {indicator['id']} and no llm_prompt "
+            f"is configured — no extraction fallback available"
+        )
+        if value_type in _HOLD_LAST_GOOD_VALUE_TYPES:
+            # A money metric going completely dark with no LLM safety net is
+            # exactly the case this ladder must not go quiet on: a
+            # stale_fallback snapshot isn't "bad" by _is_bad_snapshot's
+            # definition, so Stage 3's failure counter won't flag it either.
+            # This log line is the one place a human finds out same-day.
+            logger.error(message)
+            notify(
+                "warning",
+                f"{indicator['id']}: parse failed, no LLM fallback configured",
+                message,
+            )
+        else:
+            logger.info(message)
+        return _terminal_fallback(
+            indicator=indicator, artifact=artifact,
+            error="deterministic parse failed; no llm_prompt configured for this indicator",
+            last_good=last_good,
+        )
 
     # LLM extract path (deterministic failed). Recover the publication date
     # directly from the artifact so a slow-cadence metric (e.g. the quarterly
@@ -341,6 +446,4 @@ def parse_one(artifact: FetchResult, indicator: dict, history: list[float]) -> d
                                source_as_of=_recover_source_as_of(parser, artifact))
     except (MaxCallError, InvalidValueError) as e:
         logger.error("extract_failed for %s: %s", indicator["id"], e)
-        return _build_snapshot(indicator=indicator, artifact=artifact, value=0.0,
-                               provenance="needs_review", parse_strategy="extract_failed",
-                               sanity_note=str(e))
+        return _terminal_fallback(indicator=indicator, artifact=artifact, error=str(e), last_good=last_good)
