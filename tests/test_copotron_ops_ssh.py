@@ -13,6 +13,7 @@ exercised as shipped rather than mocked.
 """
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -219,10 +220,16 @@ def test_log_output_is_scrubbed_of_key_shaped_strings(fake_home):
     The script never loads /etc/econdelta.env, but other services write these
     logs, and a traceback or a debug line can carry a token. All fake values.
     """
+    discord_token = "FAKEtoken-ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789fake"
+    ghp_token = "ghp_" + "A" * 40
+    github_pat_token = "github_pat_" + "B" * 25
     (fake_home / "logs" / "parse-systemd.log").write_text(
         "ERROR calling supabase with key sb_secret_FAKEfakeFAKE0123456789\n"
         "auth header eyJhbGciOiJIUzI1NiJ9.eyJyb2xlIjoiZmFrZSJ9.FAKEsignature\n"
         "anthropic sk-ant-FAKEfakeFAKE0123456789 used\n"
+        f"discord alert failed for https://discord.com/api/webhooks/123456789012345678/{discord_token}\n"
+        f"github token leaked: {ghp_token}\n"
+        f"github fine-grained token leaked: {github_pat_token}\n"
         "harmless line about the parse run\n"
     )
     r = run("log parse 10", dryrun=False, home=fake_home)
@@ -230,9 +237,43 @@ def test_log_output_is_scrubbed_of_key_shaped_strings(fake_home):
     assert "sb_secret_FAKEfakeFAKE0123456789" not in r.stdout
     assert "eyJhbGciOiJIUzI1NiJ9" not in r.stdout
     assert "sk-ant-FAKEfakeFAKE0123456789" not in r.stdout
+    assert discord_token not in r.stdout
+    assert ghp_token not in r.stdout
+    assert github_pat_token not in r.stdout
     assert "REDACTED" in r.stdout
+    # The webhook ID is not the credential — it may stay visible for debugging.
+    assert "webhooks/123456789012345678" in r.stdout
     # Scrubbing must not eat ordinary log lines.
     assert "harmless line about the parse run" in r.stdout
+
+
+def test_scrubbing_applies_to_every_verb_not_only_log(tmp_path: Path):
+    """The header promises log output is scrubbed 'on the way out' generally,
+    but until now only the `log` verb was piped through `_scrub` — `head`'s
+    git-log output (or any other verb) passed a leaked secret straight
+    through. Plant one in a commit subject and confirm `head` redacts it too.
+    """
+    repo = tmp_path
+    git_env = {
+        **os.environ,
+        "GIT_AUTHOR_NAME": "t",
+        "GIT_AUTHOR_EMAIL": "t@example.com",
+        "GIT_COMMITTER_NAME": "t",
+        "GIT_COMMITTER_EMAIL": "t@example.com",
+    }
+    subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True, env=git_env)
+    (repo / "f.txt").write_text("x")
+    subprocess.run(["git", "-C", str(repo), "add", "."], check=True, env=git_env)
+    ghp_token = "ghp_" + "C" * 40
+    subprocess.run(
+        ["git", "-C", str(repo), "commit", "-q", "-m", f"leaked token {ghp_token} in subject"],
+        check=True,
+        env=git_env,
+    )
+    r = run("head", dryrun=False, home=repo)
+    assert r.returncode == 0, r.stderr
+    assert ghp_token not in r.stdout
+    assert "REDACTED" in r.stdout
 
 
 # --- the promise the key was granted on -----------------------------------
