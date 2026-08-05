@@ -1,9 +1,9 @@
 [Unit]
-Description=EconDelta aggregate retry — fires daily at 08:00 UTC (14:00 BDT), 1 h after primary aggregate, so any flaked aggregate at 13:00 gets a second chance before end-of-day
+Description=EconDelta aggregate retry — fires daily at 21:15 UTC (03:15 BDT), 20 min after the primary aggregate, so a flaked aggregate at 02:55 gets a second chance well before The Brief publishes at 08:00 BDT
 Requires=econdelta-aggregate.service
 
 [Timer]
-OnCalendar=*-*-* 08:00:00 UTC
+OnCalendar=*-*-* 21:15:00 UTC
 Unit=econdelta-aggregate.service
 Persistent=true
 RandomizedDelaySec=30

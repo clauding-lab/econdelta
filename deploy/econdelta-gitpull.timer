@@ -1,9 +1,9 @@
 [Unit]
-Description=Pull latest main at 22:50 UTC (04:50 BDT), 10 min before the 23:00 UTC (05:00 BDT) fetch cascade
+Description=Pull latest main at 19:00 UTC (01:00 BDT), 10 min before the 19:10 UTC (01:10 BDT) fetch cascade
 Requires=econdelta-gitpull.service
 
 [Timer]
-OnCalendar=*-*-* 22:50:00 UTC
+OnCalendar=*-*-* 19:00:00 UTC
 Persistent=true
 RandomizedDelaySec=30
 

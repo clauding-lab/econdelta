@@ -51,17 +51,33 @@ sudo bash deploy/uninstall.sh
 
 | Timer | UTC | BDT |
 |---|---|---|
-| econdelta-fetch           | 23:00 | 05:00 (+1) |
-| econdelta-forex           | 23:05 | 05:05 (+1) |
-| econdelta-commodity       | 23:08 | 05:08 (+1) |
-| econdelta-dse             | 23:11 | 05:11 (+1) |
-| econdelta-forex-retry     | 00:00 | 06:00 |
-| econdelta-parse           | 04:30 | 10:30 |
-| econdelta-parse-retry     | 05:55 | 11:55 |
-| econdelta-aggregate       | 07:00 | 13:00 |
-| econdelta-aggregate-retry | 08:00 | 14:00 |
+| econdelta-gitpull         | 19:00 | 01:00 (+1) |
+| econdelta-fetch           | 19:10 | 01:10 (+1) |
+| econdelta-forex           | 19:15 | 01:15 (+1) |
+| econdelta-commodity       | 19:18 | 01:18 (+1) |
+| econdelta-dse             | 19:21 | 01:21 (+1) |
+| econdelta-auction         | 19:24 | 01:24 (+1) |
+| econdelta-pink-sheet      | 19:27 | 01:27 (+1) |
+| econdelta-dse-dayend      | 19:30 | 01:30 (+1) |
+| econdelta-imf-eff         | Sun 19:33 | Mon 01:33 |
+| econdelta-imf-debt        | Sun 19:36 | Mon 01:36 |
+| econdelta-fiscal-gdp      | Sun 19:39 | Mon 01:39 |
+| econdelta-forex-retry     | 19:50 | 01:50 (+1) |
+| econdelta-parse           | 20:10 | 02:10 (+1) |
+| econdelta-parse-retry     | 20:35 | 02:35 (+1) |
+| econdelta-aggregate       | 20:55 | 02:55 (+1) |
+| econdelta-aggregate-retry | 21:15 | 03:15 (+1) |
+| econdelta-sentinel        | 21:35 | 03:35 (+1) |
+| econdelta-npl-structure   | Sun 23:29 | Mon 05:29 |
+| econdelta-briefing        | Mon 01:00 | Mon 07:00 |
+| econdelta-media-screen    | 15:30 | 21:30 |
 
-Pipeline order: fetch → forex/commodity/dse scrapers → parse (deterministic + Claude hybrid) → aggregate (writes `data/latest.json` + Supabase `metric_history`). The daily aggregate (including its retry) completes by ~08:00 UTC (14:00 BDT); The Brief reads the published data after that.
+Pipeline order: fetch → forex/commodity/dse/auction/pink-sheet scrapers → parse (deterministic + Claude hybrid) → aggregate (writes `data/latest.json` + Supabase `metric_history`). The daily aggregate (including its retry) completes by ~21:15 UTC (03:15 BDT).
+
+**Two constraints fix these times — do not move them casually.**
+
+1. **Downstream.** The Brief publishes at **08:00 BDT** and reads what this chain wrote. The aggregate landing at 02:55 BDT gives it ~5 h of headroom. Until 2026-08-04 the aggregate ran at 13:00 BDT while The Brief fired at 06:30, so every brief was built on an aggregate **~17 h old** and a fix landing here in the morning could not reach the next morning's issue. If either side moves, re-check the other.
+2. **Upstream.** `parse` calls the Claude CLI. It must stay clear of **05:00–06:00 BDT** — that is 16:00–17:00 US Pacific, Anthropic's peak, where the preflight failed 12 consecutive times over two days in May 2026 (commit `28bcb3d`). 02:10 BDT is 13:10 Pacific, comfortably outside it. This is the binding limit on how late the chain can start.
 
 ## Restricted SSH keys
 
