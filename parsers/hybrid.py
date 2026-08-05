@@ -267,7 +267,12 @@ def parse_one(artifact: FetchResult, indicator: dict, history: list[float]) -> d
             validate_value(value=det_result.value, value_type=value_type, valid_range=valid_range)
         v_det = det_result.value
         det_source_as_of = det_result.source_as_of
-    except (ParseError, InvalidValueError) as e:
+    except (ParseError, InvalidValueError, ValueError) as e:
+        # ValueError: a deterministic parser's own number-cleaning helper
+        # (e.g. _to_number) can raise bare ValueError on unparseable residue
+        # that doesn't hit its ParseError branch. Catching it here keeps
+        # every parse failure on the ladder's designed fallback path instead
+        # of escaping parse_one and silently dropping the day's snapshot.
         logger.info("deterministic parse failed for %s: %s", indicator["id"], e)
 
     if v_det is not None:
@@ -324,8 +329,13 @@ def parse_one(artifact: FetchResult, indicator: dict, history: list[float]) -> d
         v_llm = (extract.parsed or {}).get("value")
         if v_llm is None:
             raise MaxCallError(f"llm extract returned no value: {extract.raw_text[:200]}")
-        if isinstance(v_llm, (int, float)):
-            validate_value(value=float(v_llm), value_type=value_type, valid_range=valid_range)
+        # Reject bool before the isinstance(..., (int, float)) check below —
+        # bool is an int subclass, and float(True) == 1.0 would silently
+        # strip the type info that validate_value's own bool guard checks,
+        # letting a boolean sneak into the snapshot as a valid number.
+        if isinstance(v_llm, bool) or not isinstance(v_llm, (int, float)):
+            raise InvalidValueError(f"llm extract returned non-numeric value: {v_llm!r}")
+        validate_value(value=float(v_llm), value_type=value_type, valid_range=valid_range)
         return _build_snapshot(indicator=indicator, artifact=artifact, value=v_llm,
                                provenance="llm_extracted", parse_strategy=parse_block["deterministic"],
                                source_as_of=_recover_source_as_of(parser, artifact))

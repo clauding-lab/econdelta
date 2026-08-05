@@ -47,3 +47,38 @@ def test_raises_on_row_not_found(fixture_artifact):
     p = get_parser("html_table_row")
     with pytest.raises(ParseError):
         p.parse(fixture_artifact, instruction="row=Nope col=2")
+
+
+# _to_number cell-value regression cases (audit E23 defects A/B): a bare
+# ValueError escaping _to_number skips both the LLM fallback and the
+# extract_failed sentinel in hybrid.py's parse ladder, so every non-numeric
+# residue must surface as ParseError, and accounting-style parenthesized
+# negatives must be interpreted as negative rather than stripped to positive.
+@pytest.mark.parametrize(
+    "text",
+    [
+        "-",
+        "2025-26",
+        "5.00-5.50",
+        "n/a",
+    ],
+)
+def test_to_number_raises_parse_error_on_non_numeric_residue(text):
+    from parsers.html_table_row import _to_number
+
+    with pytest.raises(ParseError):
+        _to_number(text)
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("(1,234.56)", -1234.56),
+        ("(5.2)", -5.2),
+        ("100,000", 100_000.0),
+    ],
+)
+def test_to_number_handles_parens_and_plain_numeric(text, expected):
+    from parsers.html_table_row import _to_number
+
+    assert _to_number(text) == expected
