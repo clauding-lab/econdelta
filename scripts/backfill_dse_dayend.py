@@ -455,6 +455,8 @@ def run_backfill(
                 source=SOURCE_LABEL,
                 source_as_of_map=as_of_map,
                 ingested_at=write_ts,
+                # Regex/table-column parse of the DSE Day End Archive HTML — no LLM call.
+                provenance="deterministic",
             )
             total += n
             logger.info("upserted %d rows for %s", n, trading_day.isoformat())

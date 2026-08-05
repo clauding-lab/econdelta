@@ -291,3 +291,103 @@ def test_ingested_at_defaults_to_now_when_unset():
     assert len(rows) == 1
     stamped = datetime.fromisoformat(rows[0]["ingested_at"])
     assert before <= stamped <= after
+
+
+# ---------------------------------------------------------------------------
+# Provenance (extraction method) — migration 0013 / ECONDELTA_PROVENANCE_ENABLED.
+#
+# The column does not exist in the live DB until the owner applies the
+# migration by hand, so the payload must stay merge-safe (no `provenance` key
+# sent) until BOTH a caller passes provenance= AND the env flag is set.
+# ---------------------------------------------------------------------------
+
+
+def test_provenance_omitted_from_payload_when_flag_unset(monkeypatch):
+    """Default state (flag unset): passing provenance= must NOT add the key —
+    merge-safe against the pre-migration schema."""
+    monkeypatch.delenv("ECONDELTA_PROVENANCE_ENABLED", raising=False)
+    rows = _rows_from_data(
+        {"policy_rate_repo": 10.0}, date(2026, 8, 5), "EconDelta",
+        provenance="deterministic",
+    )
+    assert len(rows) == 1
+    assert "provenance" not in rows[0]
+
+
+def test_provenance_omitted_from_payload_when_flag_off(monkeypatch):
+    """Flag explicitly set to something other than '1' is still OFF."""
+    monkeypatch.setenv("ECONDELTA_PROVENANCE_ENABLED", "0")
+    rows = _rows_from_data(
+        {"policy_rate_repo": 10.0}, date(2026, 8, 5), "EconDelta",
+        provenance="deterministic",
+    )
+    assert "provenance" not in rows[0]
+
+
+def test_provenance_included_when_flag_on_and_value_passed(monkeypatch):
+    """Flag ON + provenance= passed: the key lands in the row with that value."""
+    monkeypatch.setenv("ECONDELTA_PROVENANCE_ENABLED", "1")
+    rows = _rows_from_data(
+        {"policy_rate_repo": 10.0}, date(2026, 8, 5), "EconDelta",
+        provenance="deterministic",
+    )
+    assert len(rows) == 1
+    assert rows[0]["provenance"] == "deterministic"
+
+
+def test_provenance_stays_omitted_when_flag_on_but_no_value_passed(monkeypatch):
+    """Flag ON but caller passed no provenance= (ambiguous call site, e.g. the
+    aggregate's mixed-batch upsert): still no key — None is never guessed at."""
+    monkeypatch.setenv("ECONDELTA_PROVENANCE_ENABLED", "1")
+    rows = _rows_from_data({"policy_rate_repo": 10.0}, date(2026, 8, 5), "EconDelta")
+    assert "provenance" not in rows[0]
+
+
+def test_provenance_rejects_unknown_value(monkeypatch):
+    monkeypatch.setenv("ECONDELTA_PROVENANCE_ENABLED", "1")
+    with pytest.raises(ValueError, match="provenance must be one of"):
+        _rows_from_data(
+            {"x": 1.0}, date(2026, 8, 5), "EconDelta", provenance="scraped_maybe",
+        )
+
+
+@pytest.mark.parametrize("value", ["deterministic", "llm", "hybrid", "manual"])
+def test_provenance_accepts_all_four_allowed_values(monkeypatch, value):
+    monkeypatch.setenv("ECONDELTA_PROVENANCE_ENABLED", "1")
+    rows = _rows_from_data({"x": 1.0}, date(2026, 8, 5), "EconDelta", provenance=value)
+    assert rows[0]["provenance"] == value
+
+
+def test_upsert_metric_history_posts_provenance_when_flag_enabled(monkeypatch):
+    """End-to-end: upsert_metric_history threads provenance= through to the
+    actual PostgREST payload when the flag is on."""
+    monkeypatch.setenv("ECONDELTA_PROVENANCE_ENABLED", "1")
+    sess = _make_session()
+    upsert_metric_history(
+        data={"npl": 35.73},
+        as_of=date(2026, 8, 5),
+        url="https://example.supabase.co",
+        service_key="sk_test_123",
+        session=sess,
+        provenance="llm",
+    )
+    payload = sess.post.call_args[1]["json"]
+    assert payload[0]["provenance"] == "llm"
+
+
+def test_upsert_metric_history_omits_provenance_when_flag_disabled(monkeypatch):
+    """End-to-end: same call, flag off (or unset) — payload has NO provenance
+    key at all, so a pre-migration Supabase schema is never sent an unknown
+    column."""
+    monkeypatch.delenv("ECONDELTA_PROVENANCE_ENABLED", raising=False)
+    sess = _make_session()
+    upsert_metric_history(
+        data={"npl": 35.73},
+        as_of=date(2026, 8, 5),
+        url="https://example.supabase.co",
+        service_key="sk_test_123",
+        session=sess,
+        provenance="llm",
+    )
+    payload = sess.post.call_args[1]["json"]
+    assert "provenance" not in payload[0]

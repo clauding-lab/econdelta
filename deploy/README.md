@@ -15,6 +15,9 @@ python -m playwright install chromium
 # As root:
 sudo bash deploy/install.sh
 sudo vim /etc/econdelta.env   # set DISCORD_WEBHOOK_URL, MEDIA_SCREEN_WEBHOOK_URL (#thebrief), Supabase creds, CLAUDE_CODE_OAUTH_TOKEN
+                               # (leave ECONDELTA_PROVENANCE_ENABLED at its 0 default here — only
+                               #  flip to 1 after supabase/migrations/0013_provenance.sql is applied,
+                               #  see AGENTS.md landmine 43)
 ```
 
 ## Verify
