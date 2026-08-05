@@ -6,9 +6,11 @@ systemd.unit(5)). For a unit that fails at every attempt, consecutive starts
 are spaced one retry cycle apart (TimeoutStartSec + RestartSec), so the
 (StartLimitBurst + 1)-th start — the one that must land inside the window
 for the limiter to trip — occurs StartLimitBurst * cycle after the first
-start. The trip condition is therefore:
+start. On a start timeout systemd also sends SIGTERM and waits up to
+TimeoutStopSec before RestartSec starts counting, so the real cycle
+includes that stop phase too. The trip condition is therefore:
 
-    StartLimitBurst * (TimeoutStartSec + RestartSec) <= StartLimitIntervalSec
+    StartLimitBurst * (TimeoutStartSec + RestartSec + TIMEOUT_STOP_DEFAULT) <= StartLimitIntervalSec
 
 Sizing the window to fit only ONE cycle (the earlier, weaker form of this
 check) merely guarantees two starts land in a window — never "more than
@@ -20,6 +22,10 @@ alert. See AGENT_LEARNINGS.md / ops audit item #4.
 from pathlib import Path
 
 DEPLOY_DIR = Path(__file__).parent.parent / "deploy"
+
+# No unit in deploy/ sets TimeoutStopSec, so a start-timeout's SIGTERM wait
+# falls back to systemd's DefaultTimeoutStopSec (90s) before RestartSec starts.
+TIMEOUT_STOP_DEFAULT = 90
 
 
 def _parse_service_ints(path: Path) -> dict[str, int]:
@@ -61,7 +67,8 @@ def test_deploy_dir_has_service_files():
 
 def test_restart_cycle_fits_inside_start_limit_window():
     """For every unit that retries on failure, StartLimitBurst retry cycles
-    (TimeoutStartSec + RestartSec each) must fit inside StartLimitIntervalSec.
+    (TimeoutStartSec + RestartSec + TIMEOUT_STOP_DEFAULT each) must fit
+    inside StartLimitIntervalSec.
 
     systemd only refuses to restart a unit once it has started *more than*
     StartLimitBurst times inside one StartLimitIntervalSec window — so the
@@ -84,12 +91,13 @@ def test_restart_cycle_fits_inside_start_limit_window():
         burst = values.get("StartLimitBurst")
         if None in (timeout_start, restart_sec, interval, burst):
             continue  # unit doesn't declare the full quartet; nothing to check
-        cycle = timeout_start + restart_sec
+        cycle = timeout_start + restart_sec + TIMEOUT_STOP_DEFAULT
         required = burst * cycle
         if required > interval:
             violations.append(
                 f"{service_file.name}: StartLimitBurst({burst}) * "
-                f"(TimeoutStartSec({timeout_start}) + RestartSec({restart_sec})) "
+                f"(TimeoutStartSec({timeout_start}) + RestartSec({restart_sec}) + "
+                f"TIMEOUT_STOP_DEFAULT({TIMEOUT_STOP_DEFAULT})) "
                 f"= {required} > StartLimitIntervalSec({interval})"
             )
 

@@ -7,7 +7,12 @@ Wants=network-online.target
 # Retry on transient failures (e.g. BB.org.bd 45s timeout under bank-opening
 # load). Allow up to 3 starts per 30-min window — the initial fire plus 2
 # retries. Beyond that, give up until the next scheduled fire.
-StartLimitIntervalSec=1800
+# systemd only trips the limiter on the (burst+1)-th start, which lands
+# burst * cycle after the first — not one cycle. StartLimitBurst(3) *
+# (TimeoutStartSec(300)+RestartSec(300)) = 1800 sat exactly on the old
+# window with no margin for the untimed SIGTERM/SIGKILL stop phase between
+# retries, so a unit failing every attempt never tripped the limiter.
+StartLimitIntervalSec=2700
 StartLimitBurst=3
 
 [Service]
