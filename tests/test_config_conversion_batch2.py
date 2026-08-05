@@ -31,8 +31,8 @@ which reconciles EXACTLY against Overall Balance's own printed 4019 for that
 column (`test_overall_balance_reconciles_against_bop_identity` pins this).
 
 **Parity vs production**: `metric_history.bop_summary` (queried via the
-anon key, 2026-08-05) has held `4.019` for 8 consecutive days
-(2026-07-29..2026-08-05) via the LLM path currently in place — an exact
+anon key, 2026-08-05) has held `4.019` for 12 consecutive days
+(2026-07-25..2026-08-05) via the LLM path currently in place — an exact
 match to this deterministic value. No published figure changes; this
 conversion is parity-clean, not a HOLD MERGE case (contrast with
 `non_bank_borrowing_for_deficit_financing` in batch 1, which WAS a real
