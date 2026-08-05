@@ -37,6 +37,18 @@ When something ships broken, when a methodology gap is exposed, or when a smoke 
 
 ## Entries (most recent first)
 
+## 2026-08-05 — The NPL unit's memory ceiling was copied from a small scraper; the first live run would have been OOM-killed silently
+
+**Trigger:** final whole-branch review of the bb_npl_structure branch (PR #104), after nine task-scoped reviews had all passed. The reviewer ran the actual whole-PDF extraction against the committed real 192-page FSR fixture and measured ~1,109 MB peak RSS against the unit's `MemoryMax=500M`.
+
+**What went wrong:** the plan's Task 8 said "mirror `deploy/econdelta-fiscal-gdp.service` verbatim except names/paths and TimeoutStartSec" — fiscal-gdp is a small JSON-API scraper, and its 500M ceiling travelled with the mirror. Task 2 had separately chosen whole-document pdfplumber extraction (`page_hint=None`, unavoidable — the position date and table marker can sit anywhere in the FSR). Each task-scoped review saw only its own half; the defect lived in the seam. Worse, the failure would have been *silent by composition*: a cgroup OOM SIGKILL bypasses `wrap_run`'s `except` (no Discord notify, no `run_logs` end row), and the 22 new ids had no history rows yet, so the freshness sentinel — whose universe is built from rows — could not see them either. A permanently dead weekly scraper, invisible to every alarm. Same review also caught the position date being derived from the whole 397 KB document with its sanity check *after* the paid LLM call (the PR #97 as_of-misdating class, plus wasted Opus calls on stale documents).
+
+**Lesson:** a resource limit is a workload claim — verify it by measuring the real artifact through the real code path (`MemoryMax` vs measured peak RSS, `TimeoutStartSec` vs retry-count × per-attempt timeout), never by mirroring a sibling unit whose workload differs; and for any new pipeline ask "if this dies before its first write, what tells us?" — pre-first-write death is invisible to row-based monitoring.
+
+**Prevention:** (a) whole-branch final review includes one measured run of the heaviest path against the real fixture, checked against the unit's limits (this is what caught it — keep doing it); (b) when a plan says "mirror X verbatim", diff the workloads, not just the fields; (c) fix shipped as 1500M/1200M (parse.service precedent, same pdfplumber call path) plus window-scoped pre-LLM date sanity with age-breach → exit 2 `stale`. Verified live 2026-08-05: first run ok in 121.8 s with 22 rows landed; second run skip exit 3 with zero LLM spend.
+
+**Cross-references:** AGENTS.md landmine 41; fix commit `1bf4d66` in PR #104; global rulebook 2026-08-05 entry; auto-memory `project_econdelta_npl_structure_build`.
+
 ## 2026-08-03 — The policy rate was read from a monthly bulletin, so it could not move on the day the MPC moved it
 
 **Trigger:** Adnan, reading The Brief issue #184: "policy rate still showing 10%." Bangladesh Bank had cut the repo rate 10.00% → 9.50% on 2026-07-30 (13th MPC meeting, first cut in six years), and SLF 11.50% → 11.00%.
