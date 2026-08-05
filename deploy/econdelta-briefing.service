@@ -3,7 +3,12 @@ Description=EconDelta — Weekly ALCO briefing (Opus 4.8 1M, xhigh)
 Documentation=https://github.com/clauding-lab/econdelta
 After=network-online.target
 Wants=network-online.target
-StartLimitIntervalSec=3600
+# systemd only trips the limiter on the (burst+1)-th start, which lands
+# burst * cycle after the first — not one cycle. Minimum here is exactly
+# StartLimitBurst(2) * (TimeoutStartSec(3600)+RestartSec(600)) = 8400, which
+# is on the boundary (systemd resets only when elapsed > interval — no
+# margin against the untimed SIGTERM/SIGKILL stop phase between retries).
+StartLimitIntervalSec=9000
 StartLimitBurst=2
 
 [Service]

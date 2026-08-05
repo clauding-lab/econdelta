@@ -5,8 +5,12 @@ After=network-online.target
 Wants=network-online.target
 
 # Retry on transient failures (BB CAPTCHA/render hiccups). Up to 3 starts per
-# 30-min window — initial fire plus 2 retries.
-StartLimitIntervalSec=1800
+# window — initial fire plus 2 retries. systemd only trips the limiter on
+# the (burst+1)-th start, which lands burst * cycle after the first — not
+# one cycle. Window sized to StartLimitBurst(3) *
+# (TimeoutStartSec(900)+RestartSec(300)) = 3600, plus margin for the
+# untimed SIGTERM/SIGKILL stop phase between retries.
+StartLimitIntervalSec=4200
 StartLimitBurst=3
 
 [Service]

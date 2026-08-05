@@ -4,7 +4,11 @@ Documentation=https://github.com/clauding-lab/econdelta
 After=network-online.target
 Wants=network-online.target
 
-StartLimitIntervalSec=1800
+# systemd only trips the limiter on the (burst+1)-th start, which lands
+# burst * cycle after the first — not one cycle. Window sized to
+# StartLimitBurst(3) * (TimeoutStartSec(2700)+RestartSec(300)) = 9000,
+# plus margin for the untimed SIGTERM/SIGKILL stop phase between retries.
+StartLimitIntervalSec=9600
 StartLimitBurst=3
 
 [Service]
