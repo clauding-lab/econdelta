@@ -1,10 +1,21 @@
 """Parser for "Component <ID>" labeled values in BB Monthly Economic Indicators PDFs.
 
-Extended to extract ``source_as_of`` from BB FSAR / QFSAR cover-page text. Two
-phrasings are recognised:
+Extended to extract ``source_as_of`` from the source document's own date idiom.
+Three phrasings are recognised, tried in this order:
+  - "Monthly Update (Month YYYY)" / "Volume MM/YYYY Month YYYY" — the BB
+    "Major Economic Indicators: Monthly Update" cover/header idiom (the same
+    report family ``pdf_table_row.py``'s ``_bb_report_date`` recognises).
+    Tried FIRST because it is the most specific: a structured cover phrase
+    that essentially never appears outside that one report.
   - "Quarter ending DD Month YYYY"  (e.g. "Quarter ending 30 September 2025")
+    — BB FSAR / QFSAR cover page.
   - "... as of end-Month YYYY"      (e.g. the QFSAR's "data and information
     available as of end-September 2025") → maps to that month's quarter-end.
+    Tried LAST: this generic phrasing is the least specific of the three and
+    can false-positive-match an unrelated table header elsewhere in a
+    multi-topic document (found live: the MEI PDF's page-5 liquidity table
+    prints "As of end June 2025 / As of end May 2026P" as column headers,
+    which this idiom alone would misread as the WHOLE document's date).
 
 ``recover_source_as_of`` exposes the same date recovery to ``parsers/hybrid.py``
 so the publication date survives even when value extraction falls through to the
@@ -25,6 +36,13 @@ from parsers.base import ParseError, ParseResult
 from parsers.registry import register
 
 logger = logging.getLogger(__name__)
+
+# BB "Major Economic Indicators: Monthly Update" cover/header idiom — mirrors
+# pdf_table_row.py's _BB_MONTHLY_RE / _BB_VOLUME_RE. Kept as a local copy
+# (rather than importing the private helper cross-module) to avoid coupling
+# two independently-registered parsers together.
+_MEI_MONTHLY_RE = re.compile(r"Monthly Update\s*\(\s*([A-Za-z]+)\s+(\d{4})\s*\)", re.IGNORECASE)
+_MEI_VOLUME_RE = re.compile(r"Volume\s+\d{1,2}/\d{4}\s+([A-Za-z]+)\s+(\d{4})", re.IGNORECASE)
 
 # Matches "Quarter ending 30 September 2025" on the FSAR cover page.
 # Group 1: day (1-31), Group 2: month name, Group 3: 4-digit year.
@@ -55,9 +73,39 @@ _END_MONTH_RE = re.compile(
 )
 
 
+def _mei_report_date(text: str) -> date | None:
+    """BB "Monthly Update" idiom → the LATEST month named, mapped to month-end.
+
+    Mirrors pdf_table_row._bb_report_date exactly (same idiom, same report
+    family) — the latest match wins so a prior-edition mention elsewhere in
+    the doc ("Revised since Monthly Update (December 2025)") can't win over
+    the current cover date.
+    """
+    for rx in (_MEI_MONTHLY_RE, _MEI_VOLUME_RE):
+        dates: list[date] = []
+        for m in rx.finditer(text):
+            # _MONTH_NAMES (this module) is keyed by FULL month name, unlike
+            # pdf_table_row._MONTHS (3-letter keys) — don't truncate here.
+            month = _MONTH_NAMES.get(m.group(1).lower())
+            if month is None:
+                continue
+            try:
+                dates.append(date(int(m.group(2)), month, calendar.monthrange(int(m.group(2)), month)[1]))
+            except ValueError:
+                continue
+        if dates:
+            return max(dates)
+    return None
+
+
 def _extract_quarter_end(text: str) -> date | None:
-    """Return the quarter-end (reporting period-end) date from FSAR cover text,
-    or None if no recognised phrasing is present."""
+    """Return the reporting period-end date from the source document's own
+    date idiom, or None if no recognised phrasing is present. Tried in order
+    from most to least specific — see the module docstring."""
+    # 0. BB "Major Economic Indicators: Monthly Update" cover idiom.
+    mei = _mei_report_date(text)
+    if mei is not None:
+        return mei
     # 1. Explicit "Quarter ending DD Month YYYY".
     m = _QUARTER_END_RE.search(text)
     if m:
@@ -104,13 +152,14 @@ class PdfComponentParser:
         )
 
     def recover_source_as_of(self, artifact: FetchResult) -> date | None:
-        """Recover the FSAR reporting period-end date from the cover, even when
+        """Recover the reporting period-end date from the cover, even when
         value extraction fails and the LLM path supplies the value.
 
-        Scans only the first two pages: the report states its own reference date
-        on the cover ("... available as of end-September 2025"), away from the
-        comparison-quarter mentions deeper in the document. Best-effort — any
-        read error yields None rather than breaking the parse.
+        Scans only the first two pages: every recognised report (BB MEI's
+        "Monthly Update (Month YYYY)" cover, or the FSAR/QFSAR's "... available
+        as of end-September 2025") states its own reference date on the cover,
+        away from the comparison-quarter mentions deeper in the document.
+        Best-effort — any read error yields None rather than breaking the parse.
         """
         try:
             with pdfplumber.open(artifact.artifact_path) as pdf:

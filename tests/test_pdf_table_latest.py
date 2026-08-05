@@ -107,3 +107,60 @@ def test_parser_registered():
     import parsers.pdf_table_latest  # noqa: F401  triggers registration
     from parsers.registry import REGISTRY
     assert "pdf_table_latest" in REGISTRY
+
+
+# ---------------------------------------------------------------------------
+# Config-conversion batch 1 (2026-08-05): real text as extracted by pdfplumber
+# from tests/_pdfs/bb_mei_2026_june.pdf, pages 3 and 4 ("Money and credit
+# developments" / "Reserve money developments"). Pins the exact `min=` value
+# each new config entry needs to skip the trailing y-o-y FLOW columns (which,
+# unlike WSEI Item 11's small pct-change columns above, are themselves
+# BDT-crore-scale numbers — a plain min=1000 would NOT separate them from the
+# level columns here; see the PR body for the full reasoning).
+# ---------------------------------------------------------------------------
+
+# Page 3, "1. Money and credit developments" — currency_outside_bank / deposits_of_the_system.
+MEI_PAGE3_MONEY_CREDIT = """
+Particulars June, 2024R May, 2025R June, 2025R May, 2026P FY25R FY26P
+1 2 3 4 5 6=3-2 7=5-4
+A. Currency outside 290436.50 293778.60 296451.90 349374.00 3342.10 52922.10
+banks (-0.51) (+8.54) (+2.07) (+18.92) (+3424.63) (+103.45)
+B. Deposits of the 1742797.50 1832572.00 1878169.80 2041692.70 89774.50 163522.90
+banking system (+9.25) (+7.73) (+7.77) (+11.41) (-55.05) (-55.19)
+""".strip()
+
+# Page 4, "2. Reserve money developments" — deposits_held_with_bb_crr / money_multiplier.
+MEI_PAGE4_RESERVE_MONEY = """
+B. Deposits held with BB* 93338.10 78899.40 86482.40 115326.70 -14438.70 28844.30
+(+30.29) (+18.35) (-7.35) (+46.17) (+56.70) (-365.63)
+Money multiplier 4.92 5.33 5.26 4.92 N/A N/A
+""".strip()
+
+
+def test_currency_outside_bank_latest_value_skips_flow_columns(mod):
+    """Without min=200000, the naive "last number" would be the FY26P flow
+    column (52922.10), not the May-2026 level (349374.00)."""
+    v_no_min = mod._find_latest_in_text(MEI_PAGE3_MONEY_CREDIT, "Currency outside", min_value=0.0)
+    assert v_no_min == 52922.10
+    v_with_min = mod._find_latest_in_text(MEI_PAGE3_MONEY_CREDIT, "Currency outside", min_value=200000.0)
+    assert v_with_min == 349374.00
+
+
+def test_deposits_of_the_system_latest_value_skips_flow_columns(mod):
+    v = mod._find_latest_in_text(MEI_PAGE3_MONEY_CREDIT, "Deposits of the", min_value=200000.0)
+    assert v == 2041692.70
+
+
+def test_deposits_held_with_bb_crr_latest_value_skips_negative_flow_column(mod):
+    """The trailing flow figures include a NEGATIVE one (-14438.70); min=
+    filters by abs(value), so it must still be excluded, not accidentally
+    kept because "negative < min" reads as false only for the raw value."""
+    v = mod._find_latest_in_text(MEI_PAGE4_RESERVE_MONEY, "Deposits held with BB", min_value=50000.0)
+    assert v == 115326.70
+
+
+def test_money_multiplier_latest_value_needs_no_min(mod):
+    """Money multiplier has no trailing flow columns (ratios aren't
+    flow-summed) — the default min=0 already returns the right value."""
+    v = mod._find_latest_in_text(MEI_PAGE4_RESERVE_MONEY, "Money multiplier", min_value=0.0)
+    assert v == 4.92

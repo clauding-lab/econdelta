@@ -10,12 +10,12 @@
       "fetch": {
         "type": "pdf",
         "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
-        "task": "Go to page 15 of the doc, first table",
+        "task": "Headline point-to-point inflation",
         "discover": "latest_pdf_link"
       },
       "parse": {
-        "deterministic": "pdf_table_row",
-        "llm_prompt": "pdf_table_row.txt",
+        "deterministic": "pdf_component",
+        "llm_prompt": "pdf_component.txt",
         "value_type": "percent",
         "valid_range": [
           0.0,
@@ -204,7 +204,7 @@
       "fetch": {
         "type": "pdf",
         "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
-        "task": "Page 14 of doc, first table",
+        "task": "page=16 table=1 row=26 col=5",
         "discover": "latest_pdf_link"
       },
       "parse": {
@@ -231,7 +231,7 @@
       "fetch": {
         "type": "pdf",
         "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
-        "task": "Page 14 of doc, first table",
+        "task": "page=16 table=1 row=26 col=4",
         "discover": "latest_pdf_link"
       },
       "parse": {
@@ -258,7 +258,7 @@
       "fetch": {
         "type": "pdf",
         "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
-        "task": "Page 14 of doc, first table",
+        "task": "page=16 table=1 row=26 col=2",
         "discover": "latest_pdf_link"
       },
       "parse": {
@@ -285,7 +285,7 @@
       "fetch": {
         "type": "pdf",
         "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
-        "task": "Page 14 of doc, first table",
+        "task": "page=16 table=1 row=26 col=3",
         "discover": "latest_pdf_link"
       },
       "parse": {
@@ -293,7 +293,7 @@
         "llm_prompt": "pdf_table_row.txt",
         "value_type": "amount_bdt_crore",
         "valid_range": [
-          0.0,
+          -50000.0,
           200000.0
         ]
       },
@@ -1031,12 +1031,12 @@
       "fetch": {
         "type": "pdf",
         "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
-        "task": "Go to page 3 of the doc, first table",
+        "task": "row=\"Deposits of the\" min=200000",
         "discover": "latest_pdf_link"
       },
       "parse": {
-        "deterministic": "pdf_table_row",
-        "llm_prompt": "pdf_table_row.txt",
+        "deterministic": "pdf_table_latest",
+        "llm_prompt": "pdf_component.txt",
         "value_type": "amount_bdt_crore",
         "valid_range": [
           0.0,
@@ -1053,12 +1053,12 @@
       "fetch": {
         "type": "pdf",
         "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
-        "task": "Go to page 3 of the doc, first table",
+        "task": "row=\"Currency outside\" min=200000",
         "discover": "latest_pdf_link"
       },
       "parse": {
-        "deterministic": "pdf_table_row",
-        "llm_prompt": "pdf_table_row.txt",
+        "deterministic": "pdf_table_latest",
+        "llm_prompt": "pdf_component.txt",
         "value_type": "amount_bdt_crore",
         "valid_range": [
           0.0,
@@ -1129,12 +1129,12 @@
       "fetch": {
         "type": "pdf",
         "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
-        "task": "Go to page 4 of the doc, first table",
+        "task": "row=\"Deposits held with BB\" min=50000",
         "discover": "latest_pdf_link"
       },
       "parse": {
-        "deterministic": "pdf_table_row",
-        "llm_prompt": "pdf_table_row.txt",
+        "deterministic": "pdf_table_latest",
+        "llm_prompt": "pdf_component.txt",
         "value_type": "amount_bdt_crore",
         "valid_range": [
           0.0,
@@ -1151,12 +1151,12 @@
       "fetch": {
         "type": "pdf",
         "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
-        "task": "Go to page 4 of the doc, first table",
+        "task": "row=\"Money multiplier\"",
         "discover": "latest_pdf_link"
       },
       "parse": {
-        "deterministic": "pdf_table_row",
-        "llm_prompt": "pdf_table_row.txt",
+        "deterministic": "pdf_table_latest",
+        "llm_prompt": "pdf_component.txt",
         "value_type": "ratio",
         "valid_range": [
           1.0,
