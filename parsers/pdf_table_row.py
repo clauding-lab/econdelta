@@ -27,6 +27,35 @@ recovery selects the LATEST date among ALL idiom matches, never the first. Any
 unrecognised report / missing idiom yields None — caught by the slow-cadence
 guard in aggregate_latest, the safe failure (no wrong date is ever fabricated).
 Date recovery is best-effort and isolated so it can never break value extraction.
+
+Instruction grammar: ``page=<int> table=<int> row=<label>|row="<label>" col=<int>``.
+
+  - ``row=<label>`` (bare, no quotes) is a SINGLE whitespace-free token — the
+    instruction is tokenized by plain ``.split()``, so anything after the
+    first space is silently dropped, not an error. That truncated token is
+    matched as a case-insensitive SUBSTRING against a table row's first
+    cell, first-match-wins in table row order. This is fine for a genuinely
+    unique one-word anchor (``row=Total``), but a token chosen to be "the
+    shortest unique substring THIS EDITION" (e.g. a bare fiscal-year suffix
+    digit) is not future-proof: BB's deficit-financing table lists annual
+    rows ("FY20".."FY25") ABOVE the current fiscal year's cumulative
+    "July-May of FY 26" row, in that document order — so a bare-digit token
+    like ``row=25`` matches the FY25 ANNUAL row's cell (`"FY25"`) before it
+    ever reaches "July-May of FY 25", returning the wrong (much larger,
+    full-year) figure. This is real, not hypothetical: proved live against
+    the committed fixture (``row=25`` today returns 44137.95 — the FY25
+    annual figure, and the exact wrong number a prior version of this
+    parser's caller had to fix). The failure mode here is SILENT — the row
+    is found, a number is returned, nothing raises.
+  - ``row="<label>"`` (quoted, may contain spaces) is preferred whenever the
+    unique anchor is naturally multi-word — it matches the FULL quoted string
+    as a substring, so ``row="July-May of FY 26"`` cannot collide with
+    ``"FY26"`` or ``"July-May of FY 25"`` the way a bare fragment can. Once
+    the row's own label changes (next fiscal year), the quoted anchor simply
+    stops matching ANYTHING and the parser raises ``ParseError`` — THIS is
+    the shape that actually fails closed (falls through to the LLM path)
+    rather than silently reading a neighbouring row. Prefer the quoted form
+    for any row whose only stable anchor is more than one word.
 """
 from __future__ import annotations
 
@@ -145,16 +174,65 @@ def _safe_recover(text: str, indicator_id: str) -> date | None:
         return None
 
 
+# Quoted multi-word row form: row="July-May of FY 26". Preferred over the
+# legacy bare single-token form below — see the module docstring's grammar
+# note for why the bare form is a real landmine, not just an inconvenience.
+_QUOTED_ROW_RE = re.compile(r'row="([^"]+)"')
+
+# Optional header= guard: header="<exact literal line>". Checked verbatim
+# against the target page's raw text BEFORE the row/col lookup runs — see
+# _check_header's docstring for what this closes.
+_QUOTED_HEADER_RE = re.compile(r'header="([^"]+)"')
+
+
 def _parse_instruction(instruction: str) -> dict:
     out = {}
     for token in instruction.split():
         if "=" in token:
             k, v = token.split("=", 1)
             out[k] = v
+    # Quoted row="..." (if present) OVERRIDES whatever the naive whitespace
+    # tokenizer above put in out["row"] — that loop sees a token like
+    # 'row="July-May' (contains "=", so it's captured) and would otherwise
+    # leave a truncated, quote-mangled value in place.
+    quoted = _QUOTED_ROW_RE.search(instruction)
+    if quoted:
+        out["row"] = quoted.group(1)
+    # header="..." is quoted-only (no bare single-token form — a header line
+    # is never one word) and OPTIONAL, so it's set only when present rather
+    # than merged into the generic tokenizer loop above.
+    header = _QUOTED_HEADER_RE.search(instruction)
+    if header:
+        out["header"] = header.group(1)
     for k in ("page", "table", "row", "col"):
         if k not in out:
             raise ParseError(f"instruction missing {k}: {instruction!r}")
     return out
+
+
+def _check_header(page_text: str, expected_header: str, *, page_label: str) -> None:
+    """Verify the table's own column-numbering header line is still exactly
+    what it was when the `header=` anchor was written, BEFORE any positional
+    `col=` selection runs.
+
+    Closes a silent-corruption class distinct from the row=/FY-rollover one:
+    a positional `col=N` is only correct as long as the report's column
+    ORDER doesn't change. If BB inserts a new column (e.g. a mid-year
+    methodology note splits one figure into two), every `col=` downstream of
+    the insertion point silently shifts to the WRONG value — the row is
+    still found, a number is still returned, nothing raises. Requiring the
+    exact header line (e.g. "1 2 3 4 = 2+3 5 6 = 4+5 7 8 9" — BB's own
+    column-numbering/formula row) to still be present turns that silent
+    shift into a loud ParseError (safe fallback to the LLM path) instead.
+    Optional: only enforced when the config's `header=` anchor is present —
+    existing entries without one are unaffected.
+    """
+    if expected_header not in page_text:
+        raise ParseError(
+            f"expected header line {expected_header!r} not found on {page_label} — "
+            "the table's column layout may have changed; refusing to trust "
+            "positional col= selection rather than risk a silently shifted column"
+        )
 
 
 @register("pdf_table_row")
@@ -174,6 +252,8 @@ class PdfTableRowParser:
                 raise ParseError(f"page {ins['page']} > {len(pdf.pages)} pages")
             full_text = "\n".join((p.extract_text() or "") for p in pdf.pages)
             page = pdf.pages[page_idx]
+            if "header" in ins:
+                _check_header(page.extract_text() or "", ins["header"], page_label=f"page {ins['page']}")
             tables = []
             for settings in _TABLE_SETTINGS:
                 tables = page.extract_tables(settings) if settings else page.extract_tables()
