@@ -21,7 +21,8 @@ Schema assumed:
 never conflate them. It's written only when a caller passes ``provenance=``
 AND ``ECONDELTA_PROVENANCE_ENABLED=1`` is set, because the column does not
 exist in the live DB until the owner applies
-``supabase/migrations/0013_provenance.sql`` by hand.
+``supabase/migrations/0013_provenance.sql`` (see that file's header for the
+two supported apply routes).
 
 Failure semantics: best-effort. ``upsert_metric_history`` raises
 ``SupabaseWriteError`` on network or auth failure; the caller (
@@ -57,7 +58,7 @@ _DEFAULT_SOURCE = "EconDelta"
 #
 #   reserves_date           — ISO date string from bb_forex.reserves
 #   trading_day             — date label string from dse_market
-#   nbr_fytd_cross_check    — provenance tag ("single_source_tax_revenue")
+#   nbr_fytd_cross_check    — source tag ("single_source_tax_revenue")
 #   commodity_change_pct    — dict of {commodity_key: pct}; per-commodity
 #                             prices are already in ``data`` as scalars
 _KNOWN_NON_HISTORY_KEYS = frozenset({
@@ -77,9 +78,11 @@ _KNOWN_NON_HISTORY_KEYS = frozenset({
 # conflate the two.
 #
 # The column does not exist in the live DB until the owner applies migration
-# 0013 by hand in the Supabase dashboard SQL editor (no psql access there).
-# Until then, a payload carrying a `provenance` key would 400 the WHOLE batch
-# (PostgREST rejects an unrecognised column on every row, not just its own).
+# 0013 — via `supabase db query --linked -f` (db/README.md's canonical route)
+# or a Supabase dashboard SQL-editor paste (see that migration file's header
+# for both routes). Until then, a payload carrying a `provenance` key would
+# 400 the WHOLE batch (PostgREST rejects an unrecognised column on every row,
+# not just its own).
 # So this is gated behind an explicit env flag that defaults OFF:
 #   - merge-safe BEFORE the DDL lands (flag unset -> key never sent, writes
 #     keep working against the pre-migration schema)

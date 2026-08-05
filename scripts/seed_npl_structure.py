@@ -5,7 +5,7 @@ One-shot static seed of the Mar-2026 band-wise + CMSME NPL figures.
 Source: Bangladesh Bank data as reported by Prothom Alo, 1 August 2026
 (position end-March 2026), hand-transcribed from the owner's deck "Small
 Loans Big Numbers" (slides 5, 6, 9) and cross-checked against the deck's
-reference table. Provenance "bb_via_press_static" (precedent:
+reference table. Source "bb_via_press_static" (precedent:
 mof_mfr_static in scripts/backfill_fiscal.py). These series have NO
 scheduled BB source (verified 2026-08-03: absent from both QFSAR and FSR)
 — they update only if a future press-capture decision lands.

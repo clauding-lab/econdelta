@@ -12,10 +12,15 @@
 --                     'deterministic' — regex / table parser, no LLM call
 --                     'llm'           — Claude extraction pass (e.g. the FSR
 --                                       NPL-structure LLM extraction)
---                     'hybrid'        — deterministic parse with an
---                                       LLM-recovered field (e.g. date
---                                       recovery on the pdf_component /
---                                       hybrid.parse_one fallback path)
+--                     'hybrid'        — a mix of both methods in ONE row,
+--                                       either direction: a deterministic
+--                                       parse with an LLM-recovered field
+--                                       (e.g. date recovery on the
+--                                       pdf_component / hybrid.parse_one
+--                                       fallback path), OR an LLM-extracted
+--                                       value with a deterministically-
+--                                       recovered field (e.g. a regex-parsed
+--                                       date attached to an LLM-read number)
 --                     'manual'        — hand-transcribed / one-off seed
 --                                       (e.g. scripts/seed_npl_structure.py)
 -- These answer two different questions ("whose number is this" vs. "how did
@@ -44,12 +49,18 @@
 --
 -- Idempotent (ADD COLUMN IF NOT EXISTS + a guarded ADD CONSTRAINT — Postgres
 -- has no "ADD CONSTRAINT IF NOT EXISTS"), so re-running this whole file is a
--- safe no-op. Single self-contained statement block — paste-and-run in the
--- Supabase dashboard SQL editor (no psql access there).
+-- safe no-op no matter which of the two routes below applies it.
 --
--- Apply via: paste this whole file into the Supabase SQL editor and run it.
---   (Or, from a linked Mac checkout:
---     supabase db query --linked -f supabase/migrations/0013_provenance.sql)
+-- Apply via (db/README.md's canonical mechanism — this DB is shared with The
+-- Brief, so `supabase db push` does NOT work; see "Applying migrations" in
+-- that file):
+--   supabase db query --linked -f supabase/migrations/0013_provenance.sql
+-- from a linked Mac checkout (one-time `supabase link --project-ref <ref>`).
+--
+-- Alternate, explicitly supported: paste this whole file into the Supabase
+-- dashboard SQL editor and run it (no psql on that surface) — the owner may
+-- prefer this route on a box with no linked checkout; the statement block is
+-- self-contained either way.
 -- ============================================================================
 
 alter table public.metric_history
@@ -71,12 +82,23 @@ end $$;
 comment on column public.metric_history.provenance is
   'Extraction method used to pull this value out of its source document: '
   '''deterministic'' (regex/table parser), ''llm'' (Claude extraction '
-  'fallback), ''hybrid'' (deterministic parse + LLM-recovered field, e.g. '
-  'date recovery), or ''manual'' (hand-transcribed / one-off seed). '
-  'NULLABLE. Distinct from `source` (migration 0001, NOT NULL), which '
+  'fallback), ''hybrid'' (a mix of both methods in ONE row, either '
+  'direction — a deterministic parse with an LLM-recovered field, e.g. '
+  'date recovery, OR an LLM-extracted value with a deterministically-'
+  'recovered field), or ''manual'' (hand-transcribed / one-off seed). '
+  'NULLABLE (migration 0013). Distinct from ``source`` above, which '
   'records the ORIGINATING ORGANIZATION (e.g. BB, DSE, EconDelta) — never '
   'conflate the two. Populated only when the writer passes provenance= AND '
-  'ECONDELTA_PROVENANCE_ENABLED=1 is set (see utils/supabase_writer.py).';
+  'ECONDELTA_PROVENANCE_ENABLED=1 is set (see utils/supabase_writer.py). '
+  'metric_history_monthly does NOT get this column — its writers are '
+  'separate one-off/backfill scripts this change does not touch.';
+
+-- PostgREST caches the schema and only reloads it on its own poll interval or
+-- a DDL event trigger — neither is guaranteed to fire promptly for a manual
+-- dashboard/db-query apply. Ask it to reload NOW so the API layer (what the
+-- writer and the anon-read consumers actually talk to) sees the new column
+-- immediately rather than 404/ignoring it until the next poll.
+notify pgrst, 'reload schema';
 
 -- ===========================================================================
 -- VERIFICATION (run after applying):
@@ -84,6 +106,17 @@ comment on column public.metric_history.provenance is
 --     from information_schema.columns
 --    where table_schema='public' and table_name='metric_history'
 --      and column_name='provenance';                          -- expect 1 row, YES, text
+--
+--   -- information_schema only proves the DDL landed — it says nothing about
+--   -- whether PostgREST's schema CACHE has picked it up. Confirm the API
+--   -- layer separately (this is what the writer actually hits):
+--   --   curl -s -o /dev/null -w '%{http_code}\n' \
+--   --     "$SUPABASE_URL/rest/v1/metric_history?select=provenance&limit=1" \
+--   --     -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" \
+--   --     -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY"
+--   -- Expect 200. A stale schema cache (the notify above didn't take, or
+--   -- fired before the DDL committed) returns PGRST204 "Column not found in
+--   -- schema cache" even though the information_schema query above is clean.
 --
 --   select conname from pg_constraint
 --    where conname = 'metric_history_provenance_check';        -- expect 1 row

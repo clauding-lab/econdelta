@@ -30,6 +30,11 @@ CREATE TABLE IF NOT EXISTS public.metric_history (
     PRIMARY KEY (metric_id, as_of)
 );
 
+-- 0013: add the column for real (the CREATE TABLE above is a no-op against
+-- the live DB — the table already exists, so IF NOT EXISTS skips the whole
+-- statement and never adds this column). Re-runnable.
+ALTER TABLE public.metric_history ADD COLUMN IF NOT EXISTS provenance text;
+
 -- 0013: extraction-method CHECK. Guarded (Postgres has no ADD CONSTRAINT IF
 -- NOT EXISTS) so this snapshot stays safe to re-apply, matching the DO-block
 -- pattern used for policies below.
@@ -128,8 +133,10 @@ COMMENT ON COLUMN public.metric_history.ingested_at IS
 COMMENT ON COLUMN public.metric_history.provenance IS
     'Extraction method used to pull this value out of its source document: '
     '''deterministic'' (regex/table parser), ''llm'' (Claude extraction '
-    'fallback), ''hybrid'' (deterministic parse + LLM-recovered field, e.g. '
-    'date recovery), or ''manual'' (hand-transcribed / one-off seed). '
+    'fallback), ''hybrid'' (a mix of both methods in ONE row, either '
+    'direction — a deterministic parse with an LLM-recovered field, e.g. '
+    'date recovery, OR an LLM-extracted value with a deterministically-'
+    'recovered field), or ''manual'' (hand-transcribed / one-off seed). '
     'NULLABLE (migration 0013). Distinct from ``source`` above, which '
     'records the ORIGINATING ORGANIZATION (e.g. BB, DSE, EconDelta) — never '
     'conflate the two. Populated only when the writer passes provenance= AND '
