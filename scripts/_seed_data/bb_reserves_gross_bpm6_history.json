@@ -1,10 +1,10 @@
 {
   "_meta": {
-    "description": "BB Foreign Exchange Reserve (Monthly) -- Gross + BPM6 columns, in million USD. Sourced from tests/fixtures/bb_forex_reserves.html, the repo's own committed, test-suite-verified snapshot of https://www.bb.org.bd/en/index.php/econdata/intreserve -- NOT hand-transcribed (the D5 reserves-memo, 2026-08-05, explicitly warns against hand-entering its own LLM-extracted tail table).",
+    "description": "BB Foreign Exchange Reserve (Monthly) -- Gross + BPM6 columns, in million USD. Merged from TWO real, committed sources: (a) tests/fixtures/bb_forex_reserves.html (2024-04..2026-03, the repo's own test-suite-verified snapshot), and (b) a fresh live capture of https://www.bb.org.bd/en/index.php/econdata/intreserve taken 2026-08-05 (scripts/_seed_data/bb_intreserve_live_2026-08-05.html, 2024-07..2026-06 -- BB's page shows a rolling ~24-month window, so the live capture no longer carries 2024-04..2024-06, which is why both sources are kept and merged rather than the live one replacing the old one). Zero revisions found on the 21 overlapping months between the two captures. June 2026 (37578.0m gross) matches the D5 reserves-memo's independent BB citation exactly.",
     "source_url": "https://www.bb.org.bd/en/index.php/econdata/intreserve",
-    "coverage": "2024-04 .. 2026-03 (24 months)",
-    "known_gap": "BB has published BPM6 on this page since ~2021 (per scripts/seed_macro_monthly.py's KEY_MAP note on fxBPM6), but this fixture only covers what's in the repo's committed test HTML -- extending back to ~2021 needs a fresh BB fetch, deferred (see scripts/seed_reserves_monthly_bpm6.py's module docstring).",
-    "generated_by": "one-off extraction for scripts/seed_reserves_monthly_bpm6.py, 2026-08-05"
+    "coverage": "2024-04 .. 2026-06 (27 months)",
+    "known_gap": "BB has published BPM6 on this page since ~2021 (per scripts/seed_macro_monthly.py's KEY_MAP note on fxBPM6), but this fixture only reaches back to 2024-04, as far as the two committed captures go. Extending further back to ~2021 needs an archived/historical BB page capture (BB's live page itself only ever shows a rolling ~24-month window, so a live fetch alone can never reach 2021) -- deferred as a follow-up.",
+    "generated_by": "merge of tests/fixtures/bb_forex_reserves.html + a fresh live capture (scripts/_seed_data/bb_intreserve_live_2026-08-05.html) for scripts/seed_reserves_monthly_bpm6.py, 2026-08-05 (2026-08-05 Opus review M6)"
   },
   "rows": [
     {
@@ -126,6 +126,21 @@
       "period": "2026-03",
       "gross_usd_mn": 34116.6,
       "bpm6_usd_mn": 29501.2
+    },
+    {
+      "period": "2026-04",
+      "gross_usd_mn": 35108.4,
+      "bpm6_usd_mn": 30451.6
+    },
+    {
+      "period": "2026-05",
+      "gross_usd_mn": 34476.6,
+      "bpm6_usd_mn": 29815.1
+    },
+    {
+      "period": "2026-06",
+      "gross_usd_mn": 37578.0,
+      "bpm6_usd_mn": 32930.3
     }
   ]
 }

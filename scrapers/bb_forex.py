@@ -36,6 +36,35 @@ _FISCAL_YEAR_RE = re.compile(r"^\s*(\d{4})\s*-\s*(\d{4})\s*$")
 _RESERVES_ADVANCE_DROP_DEFAULT = 0.10
 _RESERVES_ADVANCE_JUMP_DEFAULT = 0.25
 
+# Reserves table header-row label, accepted case-insensitively -- BB has used
+# "Period" historically; "Month" / "End Period" are tolerated in case the
+# label text drifts (2026-08-05 review finding M4).
+_RESERVES_PERIOD_HEADER_LABELS = frozenset({"period", "month", "end period"})
+
+# Tolerant BPM6 header match -- catches "BPM6", "BPM 6", "BPM-6" case-
+# insensitively (2026-08-05 review finding H1: the previous exact "bpm6"
+# substring match silently failed on "BPM 6"/"BPM-6" spellings, leaving
+# bpm6_col=None and quietly disarming the cross-column invariant below).
+_BPM6_HEADER_RE = re.compile(r"bpm[ -]?6", re.IGNORECASE)
+
+# Cross-column sanity band for bpm6/gross (2026-08-05 review finding H2).
+# BB's BPM6 methodology excludes items gross includes, so bpm6 is always
+# BELOW gross -- but a same-direction magnitude/unit corruption (e.g. a
+# decimal-place or million/billion mixup on just one of the two columns)
+# would still pass a bare "bpm6 < gross" check while landing far outside any
+# plausible reserves relationship. Verified against the full committed
+# 27-month fixture history (scripts/_seed_data/bb_reserves_gross_bpm6_history.json,
+# 2024-04..2026-06): the real observed ratio ranges 0.7643 (2024-11) to
+# 0.8763 (2026-06) -- BPM6's share of gross has trended up over that window,
+# it is NOT a tight constant ~0.876 (that figure reflects only the memo's
+# narrow Nov-2025..Jun-2026 tail, not the fuller history). [0.70, 0.95] keeps
+# ~6pp of margin below the lowest real observation while still catching
+# order-of-magnitude corruption by a wide margin (a 122x-scaled column, the
+# review's reproduced case, lands the ratio near 0.007 or above 100 -- nowhere
+# close to this band either direction).
+_BPM6_GROSS_RATIO_MIN = 0.70
+_BPM6_GROSS_RATIO_MAX = 0.95
+
 logger = logging.getLogger("bb_forex")
 
 # ParseError re-exported from scrapers.bb_forex_captcha so existing callers
@@ -237,13 +266,26 @@ def parse_reserves(html: str) -> ForexReserves:
     Table: #sortableTable
     Column layout: Period | Foreign Exchange Reserves(Gross) | Foreign Exchange Reserves(as per BPM6)
 
-    The Gross/BPM6 column INDEX is identified by HEADER TEXT (matching
-    "gross" / "bpm6" case-insensitively in the header row), never by fixed
+    The Gross/BPM6 column INDEX is identified by HEADER TEXT, never by fixed
     position — a BB column reorder would otherwise silently swap the two
-    figures with no error (the exact failure mode this PR's invariant below
-    exists to catch). The header row must be seen before any data row is
-    accepted; a table with no recognisable Gross/BPM6 headers raises
-    ParseError rather than guessing cells[1]/cells[2].
+    figures with no error (the exact failure mode the invariants below exist
+    to catch). The header row must be seen before any data row is accepted;
+    a table with no recognisable header row raises ParseError rather than
+    guessing cells[1]/cells[2].
+
+    Header matching (2026-08-05 review finding H1 -- ambiguity, not just
+    absence, must be caught): BPM6 is matched FIRST with a tolerant token
+    (``bpm[ -]?6``, case-insensitive -- catches "BPM6"/"BPM 6"/"BPM-6"; the
+    previous exact-substring match silently missed the space/dash spellings
+    and left bpm6_col=None, quietly disarming the invariant below). Any cell
+    matched as BPM6 is EXCLUDED from the Gross scan, which then requires
+    "gross" (case-insensitive) to appear in EXACTLY ONE remaining cell.
+    Zero or multiple Gross candidates both raise ParseError -- a second
+    unrelated column that happens to contain the word "gross" must not
+    silently win by virtue of being scanned last (the review reproduced
+    exactly this: a stray "gross"-labelled BDT column got selected over the
+    real one, and the bpm6<gross direction check alone did not catch it
+    because the wrong column's value still happened to exceed BPM6's).
 
     The table groups rows by fiscal year with a spanning header row.
     The first data row after the header group (row with 2 numeric columns) is the most recent.
@@ -253,16 +295,20 @@ def parse_reserves(html: str) -> ForexReserves:
     the fiscal year header (e.g. "2025-2026").  We derive the date from the most recent
     fiscal year header + month name, resolving to the first day of that month.
 
-    Cross-column invariant: BPM6 reserves are always BELOW gross reserves
-    (BB's BPM6 methodology excludes items gross includes — observed gap
-    ~12-13% of gross). If bpm6 >= gross for the same row, that's not a data
-    quality issue to warn about -- it's proof the Gross/BPM6 columns were
-    misidentified (e.g. a reordered table BB never announced), so BOTH
-    figures from this parse are untrustworthy. Raises ParseError rather than
-    writing either value; the caller's existing except-ParseError path
-    already refuses the whole run's write (rates included) on a parse
-    failure, so this closes the "column swap reads a corrupt gross value"
-    hole described in AGENTS.md landmine 38 / the D5 reserves-memo (2026-08-05).
+    Cross-column invariants (both raise ParseError, refusing to write either
+    figure -- the caller's existing except-ParseError path already refuses
+    the whole run's write, rates included, on any parse failure, closing the
+    "column swap reads a corrupt value" hole in AGENTS.md landmine 38):
+
+      1. Direction: BPM6 reserves are always BELOW gross reserves (BB's BPM6
+         methodology excludes items gross includes). bpm6 >= gross means the
+         columns were misidentified (e.g. an unannounced reorder).
+      2. Magnitude band (2026-08-05 review finding H2, memo §3.3): even with
+         the direction right, bpm6/gross must fall in [0.70, 0.95] (see
+         ``_BPM6_GROSS_RATIO_MIN/MAX`` for how that band was calibrated
+         against real history). This catches a same-direction magnitude/unit
+         corruption on just one column (e.g. a decimal or million/billion
+         mixup) that the direction check alone cannot see.
 
     import_cover_months is NOT published on this page — set to None.
     """
@@ -287,6 +333,7 @@ def parse_reserves(html: str) -> ForexReserves:
     most_recent_bpm6_mn: float | None = None
     gross_col: int | None = None
     bpm6_col: int | None = None
+    header_row_seen = False
 
     for row in rows:
         cells = row.find_all(["td", "th"])
@@ -306,22 +353,43 @@ def parse_reserves(html: str) -> ForexReserves:
 
         label = cells[0].get_text(strip=True)
 
-        if label.strip().lower() == "period":
-            # Column-header row -- identify Gross / BPM6 by TEXT, not position.
+        if label.strip().lower() in _RESERVES_PERIOD_HEADER_LABELS:
+            # Column-header row -- identify Gross / BPM6 by TEXT, not
+            # position. BPM6 matched first (tolerant token) and excluded
+            # from the Gross scan; Gross must match exactly once.
+            bpm6_candidates: list[int] = []
+            gross_candidates: list[int] = []
+            header_texts: list[str] = []
             for i, cell in enumerate(cells):
-                header_text = cell.get_text(strip=True).lower()
-                if "gross" in header_text:
-                    gross_col = i
-                elif "bpm6" in header_text:
-                    bpm6_col = i
+                header_text = cell.get_text(strip=True)
+                header_texts.append(header_text)
+                if _BPM6_HEADER_RE.search(header_text):
+                    bpm6_candidates.append(i)
+                    continue
+                if "gross" in header_text.lower():
+                    gross_candidates.append(i)
+
+            if len(gross_candidates) != 1:
+                raise ParseError(
+                    "header identification failed: expected exactly one "
+                    f"column matching 'gross', found {len(gross_candidates)} "
+                    f"in header row {header_texts!r}"
+                )
+            if len(bpm6_candidates) > 1:
+                raise ParseError(
+                    "header identification failed: expected at most one "
+                    f"column matching a BPM6 pattern, found "
+                    f"{len(bpm6_candidates)} in header row {header_texts!r}"
+                )
+
+            gross_col = gross_candidates[0]
+            bpm6_col = bpm6_candidates[0] if bpm6_candidates else None
+            header_row_seen = True
             continue
 
         if gross_col is None:
             # Haven't seen a usable header row yet -- can't trust position.
             continue
-
-        if most_recent_month is not None:
-            continue  # already captured the newest row
 
         gross = parse_number(cells[gross_col].get_text(strip=True))
         if gross is None:
@@ -338,18 +406,35 @@ def parse_reserves(html: str) -> ForexReserves:
         break  # First data row is most recent
 
     if most_recent_gross_mn is None or most_recent_month is None:
+        if not header_row_seen:
+            raise ParseError(
+                "header identification failed: no Period/Month/End Period "
+                "header row with a recognisable Gross column was found in "
+                "#sortableTable"
+            )
         raise ParseError("Could not find any reserves data rows in #sortableTable")
 
     gross_bn = most_recent_gross_mn / 1000.0
     bpm6_bn = most_recent_bpm6_mn / 1000.0 if most_recent_bpm6_mn is not None else None
 
-    if bpm6_bn is not None and bpm6_bn >= gross_bn:
-        raise ParseError(
-            f"BPM6 reserves ({bpm6_bn:.4f}bn) >= Gross reserves ({gross_bn:.4f}bn) "
-            f"for {most_recent_month!r} -- BPM6 must be strictly below Gross by "
-            "construction, so this looks like a Gross/BPM6 column identification "
-            "failure; refusing to write either figure"
-        )
+    if bpm6_bn is not None:
+        if bpm6_bn >= gross_bn:
+            raise ParseError(
+                f"BPM6 reserves ({bpm6_bn:.4f}bn) >= Gross reserves ({gross_bn:.4f}bn) "
+                f"for {most_recent_month!r} -- BPM6 must be strictly below Gross by "
+                "construction, so this looks like a Gross/BPM6 column identification "
+                "failure; refusing to write either figure"
+            )
+        ratio = bpm6_bn / gross_bn
+        if not (_BPM6_GROSS_RATIO_MIN <= ratio <= _BPM6_GROSS_RATIO_MAX):
+            raise ParseError(
+                f"BPM6/Gross ratio {ratio:.4f} for {most_recent_month!r} is outside "
+                f"the expected band [{_BPM6_GROSS_RATIO_MIN}, {_BPM6_GROSS_RATIO_MAX}] "
+                f"(bpm6={bpm6_bn:.4f}bn, gross={gross_bn:.4f}bn) -- this looks like "
+                "magnitude/unit corruption on one column (e.g. a decimal or "
+                "million/billion mixup), not a column swap; refusing to write "
+                "either figure"
+            )
 
     # Derive reserves_date: first of month, in current_year (second half = calendar year of end)
     reserves_date = _parse_reserves_date(most_recent_month, current_year)

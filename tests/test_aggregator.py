@@ -735,6 +735,7 @@ def test_main_alerts_on_swallowed_supabase_write_failure(
     assert exit_code == 0  # swallow-and-continue is correct; local archive is the fallback
     error_calls = [c for c in notify_calls if c[0] == "error"]
     assert error_calls, "expected an error notify on swallowed Supabase write failure"
+    assert any("Supabase write failed" in c[1] for c in error_calls)
 
 
 # ---------------------------------------------------------------------------
@@ -763,36 +764,16 @@ class TestReservesMonthlyDefinitions:
             assert d["domain"] == "external"
             assert d["unit"] == "USD bn"
 
+    def test_grace_days_is_45(self):
+        """2026-08-05 review M5: v_metric_freshness COALESCEs grace_days from
+        metric_definitions_monthly -- a NULL there makes is_fresh
+        permanently unknown for these two ids, not merely wrong."""
+        for d in agg._reserves_monthly_definitions():
+            assert d["grace_days"] == 45
+
 
 class TestWriteReservesMonthlySplit:
-    def test_none_reserves_returns_zero(self):
-        assert agg._write_reserves_monthly_split(None) == 0
-
-    def test_missing_bpm6_returns_zero(self):
-        reserves = ForexReserves(
-            gross_reserves_usd_bn=34.1166,
-            import_cover_months=None,
-            reserves_date=date(2026, 3, 1),
-            source_url="https://example.com/reserves",
-        )
-        assert agg._write_reserves_monthly_split(reserves) == 0
-
-    def test_invariant_violation_skips_write_without_raising(self, monkeypatch):
-        """Defense-in-depth: bpm6 >= gross must never reach here in practice
-        (scrapers.bb_forex.parse_reserves already raises ParseError at parse
-        time), but if it somehow did, this must skip cleanly -- not crash the
-        aggregate and not upsert either series."""
-        import utils.supabase_writer as sw
-
-        calls: list[str] = []
-        monkeypatch.setattr(sw, "upsert_metric_history_monthly", lambda *a, **k: calls.append("history"))
-        monkeypatch.setattr(sw, "upsert_metric_definitions_monthly", lambda *a, **k: calls.append("defs"))
-
-        bad = _reserves_with_bpm6(gross=29.5012, bpm6=34.1166)  # swapped
-        assert agg._write_reserves_monthly_split(bad) == 0
-        assert calls == []
-
-    def test_valid_reserves_writes_both_series(self, monkeypatch):
+    def _patch_monthly_writers(self, monkeypatch):
         import utils.supabase_writer as sw
 
         captured_rows: list[dict] = []
@@ -805,6 +786,70 @@ class TestWriteReservesMonthlySplit:
             sw, "upsert_metric_definitions_monthly",
             lambda definitions, **k: (captured_defs.extend(definitions), len(definitions))[1],
         )
+        return captured_rows, captured_defs
+
+    def test_none_reserves_returns_zero_and_warns(self, caplog):
+        assert agg._write_reserves_monthly_split(None) == 0
+        assert "reserves is None" in caplog.text
+
+    def test_missing_bpm6_writes_gross_alone(self, monkeypatch, caplog):
+        """2026-08-05 review M1: gross does not depend on bpm6 being present
+        -- an older/partial reserves read still writes
+        gross_reserves_usd_bn_monthly, only the BPM6 row is withheld, and
+        the reason is logged (H4)."""
+        captured_rows, _ = self._patch_monthly_writers(monkeypatch)
+        reserves = ForexReserves(
+            gross_reserves_usd_bn=34.1166,
+            import_cover_months=None,
+            reserves_date=date(2026, 3, 1),
+            source_url="https://example.com/reserves",
+        )
+        n = agg._write_reserves_monthly_split(reserves)
+        assert n == 1
+        ids = {r["metric_id"] for r in captured_rows}
+        assert ids == {agg.RESERVES_MONTHLY_GROSS_ID}
+        assert "bpm6_reserves_usd_bn is None" in caplog.text
+        assert "withholding" in caplog.text
+
+    def test_missing_bpm6_gross_row_uses_month_end_as_of(self, monkeypatch):
+        captured_rows, _ = self._patch_monthly_writers(monkeypatch)
+        reserves = ForexReserves(
+            gross_reserves_usd_bn=34.1166,
+            import_cover_months=None,
+            reserves_date=date(2026, 3, 1),
+            source_url="https://example.com/reserves",
+        )
+        agg._write_reserves_monthly_split(reserves)
+        assert captured_rows[0]["as_of"] == "2026-03-31"
+
+    def test_invariant_violation_skips_both_writes_and_warns(self, monkeypatch, caplog):
+        """Defense-in-depth: bpm6 >= gross must never reach here in practice
+        (scrapers.bb_forex.parse_reserves already raises ParseError at parse
+        time), but if it somehow did, this must skip cleanly -- not crash the
+        aggregate and not upsert either series."""
+        captured_rows, captured_defs = self._patch_monthly_writers(monkeypatch)
+
+        bad = _reserves_with_bpm6(gross=29.5012, bpm6=34.1166)  # swapped
+        assert agg._write_reserves_monthly_split(bad) == 0
+        assert captured_rows == []
+        assert captured_defs == []
+        assert "column-identification failure" in caplog.text
+
+    def test_ratio_band_violation_skips_both_writes_and_warns(self, monkeypatch, caplog):
+        """2026-08-05 review H2/M1: a same-direction magnitude corruption
+        (bpm6 < gross but wildly out of ratio) signals corruption, not
+        absence -- it must block BOTH series, unlike bpm6=None."""
+        captured_rows, captured_defs = self._patch_monthly_writers(monkeypatch)
+
+        corrupted = _reserves_with_bpm6(gross=3611.66, bpm6=29.5012)  # ~122x magnitude
+        assert agg._write_reserves_monthly_split(corrupted) == 0
+        assert captured_rows == []
+        assert captured_defs == []
+        assert "ratio" in caplog.text
+        assert "outside" in caplog.text
+
+    def test_valid_reserves_writes_both_series(self, monkeypatch):
+        captured_rows, captured_defs = self._patch_monthly_writers(monkeypatch)
 
         n = agg._write_reserves_monthly_split(_reserves_with_bpm6())
         assert n == 2
@@ -813,11 +858,29 @@ class TestWriteReservesMonthlySplit:
         assert set(by_id) == {agg.RESERVES_MONTHLY_GROSS_ID, agg.RESERVES_MONTHLY_BPM6_ID}
         assert by_id[agg.RESERVES_MONTHLY_GROSS_ID]["value"] == pytest.approx(34.1166)
         assert by_id[agg.RESERVES_MONTHLY_BPM6_ID]["value"] == pytest.approx(29.5012)
-        assert by_id[agg.RESERVES_MONTHLY_GROSS_ID]["as_of"] == "2026-03-01"
         assert by_id[agg.RESERVES_MONTHLY_GROSS_ID]["source"] == "bb_forex"
         assert {d["metric_id"] for d in captured_defs} == {
             agg.RESERVES_MONTHLY_GROSS_ID, agg.RESERVES_MONTHLY_BPM6_ID,
         }
+
+    def test_as_of_is_month_end_not_month_start(self, monkeypatch):
+        """2026-08-05 review H3: as_of must be _month_end(reserves_date), not
+        reserves_date itself -- matches
+        scripts/seed_reserves_monthly_bpm6.py's own switch to month-end so
+        seeded history and live rows land in the SAME (metric_id, as_of) row
+        for a given month, not two ~30-days-apart rows in one series."""
+        captured_rows, _ = self._patch_monthly_writers(monkeypatch)
+
+        agg._write_reserves_monthly_split(_reserves_with_bpm6(reserves_date=date(2026, 3, 1)))
+        by_id = {r["metric_id"]: r for r in captured_rows}
+        assert by_id[agg.RESERVES_MONTHLY_GROSS_ID]["as_of"] == "2026-03-31"
+        assert by_id[agg.RESERVES_MONTHLY_BPM6_ID]["as_of"] == "2026-03-31"
+        assert by_id[agg.RESERVES_MONTHLY_GROSS_ID]["source_as_of"] == "2026-03-31"
+
+    def test_as_of_handles_leap_february_month_end(self, monkeypatch):
+        captured_rows, _ = self._patch_monthly_writers(monkeypatch)
+        agg._write_reserves_monthly_split(_reserves_with_bpm6(reserves_date=date(2024, 2, 1)))
+        assert captured_rows[0]["as_of"] == "2024-02-29"  # 2024 is a leap year
 
 
 def test_main_writes_reserves_monthly_split_when_bb_forex_fresh(
@@ -857,6 +920,105 @@ def test_main_writes_reserves_monthly_split_when_bb_forex_fresh(
     assert monthly_calls, "expected the reserves monthly split to be written"
     ids = {r["metric_id"] for r in monthly_calls[0]}
     assert ids == {agg.RESERVES_MONTHLY_GROSS_ID, agg.RESERVES_MONTHLY_BPM6_ID}
+    by_id = {r["metric_id"]: r for r in monthly_calls[0]}
+    assert by_id[agg.RESERVES_MONTHLY_GROSS_ID]["as_of"] == "2026-03-31"  # H3: month-end
+
+
+def test_main_warns_when_monthly_split_writes_zero_rows_despite_fresh_forex(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """2026-08-05 review H4: bb_forex fresh + forex.reserves present, but the
+    monthly split writes 0 rows (here: a ratio-band violation) -- the
+    aggregate's top-level run log must surface a warning, not stay silent.
+    The monthly-namespace upserts must not even be attempted -- a ratio-band
+    violation refuses BOTH series before any Supabase call."""
+    data_dir, cfg_path = _build_data_tree(tmp_path)
+    latest_path = data_dir / "latest.json"
+
+    corrupted_forex = _forex_snapshot().model_copy(
+        update={"reserves": _reserves_with_bpm6(
+            gross=3611.66, bpm6=29.5012, reserves_date=date(2026, 3, 1),
+        )}
+    )
+    _write_snapshot(data_dir / "bb_forex" / "2026-04-20.json", corrupted_forex)
+
+    monkeypatch.setattr(agg, "DATA_DIR", data_dir)
+    monkeypatch.setattr(agg, "LATEST_PATH", latest_path)
+    monkeypatch.setattr(agg, "CONFIG_PATH", cfg_path)
+    monkeypatch.setenv("ECONDELTA_DRY_RUN", "1")
+    monkeypatch.setenv("ECONDELTA_SKIP_SUPABASE", "0")
+
+    import utils.supabase_writer as sw
+
+    monkeypatch.setattr(sw, "upsert_metric_history", lambda **k: len(k.get("data", {})))
+    monkeypatch.setattr(sw, "upsert_metric_definitions_seed", lambda *a, **k: 0)
+    monkeypatch.setattr(
+        sw, "upsert_metric_history_monthly",
+        lambda *a, **k: pytest.fail("ratio-band violation must refuse before any upsert call"),
+    )
+    monkeypatch.setattr(
+        sw, "upsert_metric_definitions_monthly",
+        lambda *a, **k: pytest.fail("ratio-band violation must refuse before any upsert call"),
+    )
+
+    with caplog.at_level("WARNING"):
+        exit_code = agg.main()
+
+    assert exit_code == 0
+    assert "0 rows written this run" in caplog.text
+    assert "ratio" in caplog.text
+
+
+def test_main_notifies_distinctly_on_monthly_write_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """2026-08-05 review L3: a SupabaseWriteError from the MONTHLY writer
+    must notify with a message distinguishable from the daily
+    metric_history failure notify -- a responder needs to know which table
+    to check."""
+    data_dir, cfg_path = _build_data_tree(tmp_path)
+    latest_path = data_dir / "latest.json"
+
+    fresh_forex = _forex_snapshot().model_copy(
+        update={"reserves": _reserves_with_bpm6(reserves_date=date(2026, 3, 1))}
+    )
+    _write_snapshot(data_dir / "bb_forex" / "2026-04-20.json", fresh_forex)
+
+    monkeypatch.setattr(agg, "DATA_DIR", data_dir)
+    monkeypatch.setattr(agg, "LATEST_PATH", latest_path)
+    monkeypatch.setattr(agg, "CONFIG_PATH", cfg_path)
+    monkeypatch.setenv("ECONDELTA_DRY_RUN", "1")
+    monkeypatch.setenv("ECONDELTA_SKIP_SUPABASE", "0")
+
+    import utils.supabase_writer as sw
+
+    # Daily write succeeds cleanly...
+    monkeypatch.setattr(sw, "upsert_metric_history", lambda **k: len(k.get("data", {})))
+    monkeypatch.setattr(sw, "upsert_metric_definitions_seed", lambda *a, **k: 0)
+
+    # ...but the monthly-namespace write fails.
+    def _raise_monthly(*a, **k):
+        raise sw.SupabaseWriteError("simulated metric_history_monthly outage")
+
+    monkeypatch.setattr(sw, "upsert_metric_definitions_monthly", _raise_monthly)
+
+    notify_calls: list[tuple] = []
+
+    def _fake_notify(level, title, message, fields=None):
+        notify_calls.append((level, title, message))
+        return True
+
+    monkeypatch.setattr(agg, "notify", _fake_notify)
+
+    exit_code = agg.main()
+    assert exit_code == 0  # swallow-and-continue, same as the daily-write failure path
+
+    error_calls = [c for c in notify_calls if c[0] == "error"]
+    monthly_failures = [c for c in error_calls if "monthly" in c[1].lower()]
+    daily_failures = [c for c in error_calls if c[1] == "aggregate — Supabase write failed"]
+    assert monthly_failures, "expected a distinct notify for the monthly write failure"
+    assert not daily_failures, "the daily write succeeded -- it must not also fire"
+    assert "metric_history_monthly" in monthly_failures[0][2]
 
 
 def test_main_skips_reserves_monthly_split_when_bb_forex_stale(
