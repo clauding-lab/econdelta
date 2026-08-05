@@ -155,6 +155,8 @@ def upsert_history(series: dict[int, float]) -> int:
             source="IMF DataMapper",
             source_as_of_map={METRIC_ID: as_of},
             ingested_at=write_ts,
+            # Plain JSON API parse — no LLM call.
+            provenance="deterministic",
         )
     verify_landed_count(total, since=write_ts, metric_ids=[METRIC_ID], source_label="imf_debt_gdp")
     return total

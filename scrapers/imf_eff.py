@@ -176,6 +176,8 @@ def upsert_eff(value: float, as_of: date) -> int:
         source="IMF Financial Position in the Fund",
         source_as_of_map={METRIC_ID: as_of},
         ingested_at=write_ts,
+        # Regex extraction of a single labelled HTML table cell — no LLM call.
+        provenance="deterministic",
     )
     verify_landed_count(n, since=write_ts, metric_ids=[METRIC_ID], source_label="imf_eff")
     return n
