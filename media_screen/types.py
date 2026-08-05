@@ -41,7 +41,15 @@ class Candidate:
 
 @dataclass(frozen=True)
 class Skip:
-    """A tracked figure the screen saw but did NOT raise as a candidate, with why."""
+    """A tracked figure the screen saw but did NOT raise as a candidate, with why.
+
+    metric_id is normally a real EconDelta indicator id -- EXCEPT for
+    reason="no-catalog-match", where the extractor's finding matched no
+    catalog spec at all, so there is no real metric_id to attach. In that one
+    case metric_id carries the raw, free-text Extracted.indicator_hint the
+    LLM returned instead (see scrapers/media_screen.py's run_screen) -- don't
+    assume metric_id is always a lookup-able catalog id.
+    """
     metric_id: str
     value: float
     period: date | None

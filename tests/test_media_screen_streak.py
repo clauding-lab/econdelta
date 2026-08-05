@@ -92,4 +92,28 @@ def test_state_persists_across_calls_reading_the_same_path(tmp_path):
     assert path.exists()
     import json
     blob = json.loads(path.read_text())
-    assert blob["consecutive_zero_insert_nights"] == 1
+    assert blob["consecutive_zero_insert_runs"] == 1
+
+
+def test_alert_threshold_is_seven():
+    """Pin the literal value -- a change here is a real behavior change (how
+    many silent runs before someone gets paged), not a refactor."""
+    assert ALERT_THRESHOLD == 7
+
+
+def test_write_failure_fires_a_warning_notify(tmp_path):
+    """The tripwire's own persistence failure must not be silent -- unlike
+    utils/staleness.py's log-only write-failure handling, this counter IS the
+    alarm, so a failed write gets its own notify, not just a log line."""
+    calls = []
+
+    def notifier(level, title, message, **k):
+        calls.append((level, title))
+
+    # tmp_path is itself a directory: _write_streak's os.replace(tmp, path)
+    # onto an existing directory reliably raises OSError.
+    streak = update_zero_insert_streak(0, today=date(2026, 8, 1), state_path=tmp_path, notifier=notifier)
+    assert streak == 1  # in-memory streak still computed even though persistence failed
+    assert len(calls) == 1
+    level, title = calls[0]
+    assert level == "warning" and "write failed" in title

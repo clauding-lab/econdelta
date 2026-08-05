@@ -63,8 +63,17 @@ _TRADING_DAY_SOURCES = frozenset({"dse_market"})
 # doesn't turn into daily noise for indicators nothing currently dates (see
 # feedback_observability_allow_list_pattern.md: warn-on-X needs an allow-list
 # of by-design non-X shapes first). Parsers NOT listed here (dam_ticker,
-# html_footer_ticker, every PDF parser) DO already attempt source_as_of
-# recovery, so a miss from them is real signal.
+# html_footer_ticker, pdf_table_row, pdf_table_latest, pdf_component) DO
+# already attempt source_as_of recovery, so a miss from them is real signal
+# -- BUT NOT "every PDF parser": pdf_table_column_latest, pdf_mfr_row, and
+# pdf_table_total emit no source_as_of at all and are NOT in this allow-list
+# either (a genuine, currently-undocumented gap, not a by-design exemption --
+# see AGENTS.md landmine 47). Being absent from this allow-list only means
+# "the undated-metric warning fires for this strategy" -- it does NOT mean
+# metric_history.as_of stops being stamped with the run date; that fallback
+# in upsert_metric_history fires identically whether or not the strategy is
+# listed here. Adding a strategy to this set silences the warning; it never
+# fixes the underlying as_of forgery.
 _NEVER_DATED_PARSE_STRATEGIES = frozenset({
     "html_table_row",
     "html_call_money",

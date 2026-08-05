@@ -330,4 +330,4 @@ def test_run_screen_wires_real_streak_tracker_on_zero_insert(monkeypatch, tmp_pa
     assert ms.run_screen(dry_run=False) == 0
     assert captured == [0, 0]
     import json
-    assert json.loads(state_path.read_text())["consecutive_zero_insert_nights"] == 2
+    assert json.loads(state_path.read_text())["consecutive_zero_insert_runs"] == 2

@@ -14,6 +14,7 @@ import os
 import re
 import sys
 from datetime import date as _date
+from datetime import timedelta as _timedelta
 from urllib.parse import urljoin, urlparse
 from urllib.request import Request, urlopen
 
@@ -33,17 +34,35 @@ from utils.supabase_writer import SupabaseWriteError, insert_media_review_rows
 logger = logging.getLogger("media_screen")
 
 # Catalog metric_ids whose backing parse strategy never recovers a true
-# source_as_of (parsers/html_labeled_value.py's own docstring: "No
-# recover_source_as_of"; html_call_money is in aggregate_latest.py's
-# _NEVER_DATED_PARSE_STRATEGIES allow-list). For these, metric_history.as_of
-# is the aggregate run's OWN calendar date every night, not the metric's real
-# reporting/announcement date -- a press article citing an actual past date
-# will then always compare as "older" than that forged same-day stamp in
-# media_screen/filter.py::classify()'s Rule 2, permanently masking real
+# source_as_of. policy_rate_repo has had NO real source_as_of across the
+# entire 62-night incident window: parsers/pdf_table_column_latest.py fed it
+# (BB's monthly MEI bulletin) for roughly the first 60 nights and emits no
+# source_as_of at all; parsers/html_labeled_value.py (PR #100, 2026-08-03)
+# took over for the last ~2 nights and ALSO never emits one -- a deliberate
+# choice this time (its own docstring: BB's homepage "Last update" stamp is
+# unmaintained). call_money_rate is in aggregate_latest.py's
+# _NEVER_DATED_PARSE_STRATEGIES allow-list, an accepted, equally-exposed gap.
+# For all of these, metric_history.as_of is the aggregate run's OWN calendar
+# date, not the metric's real reporting/announcement date -- a press article
+# citing an actual past date will then compare as "older" than that forged
+# stamp in media_screen/filter.py::classify()'s Rule 2, masking real
 # fresher-period candidates. Diagnosed, not fixed here -- see AGENTS.md
-# landmine 47. This set only annotates the disposition log so the next person
-# (or agent) doesn't have to re-derive it from scratch.
+# landmine 47 (which also corrects a false "every PDF parser recovers
+# source_as_of" comment in aggregate_latest.py that this set's own history
+# contradicts). This set only annotates the disposition log so the next
+# person (or agent) doesn't have to re-derive it from scratch.
 _UNDATED_PARSED_AS_OF_METRIC_IDS = frozenset({"policy_rate_repo", "call_money_rate"})
+
+# How stale a forged as_of can look and still plausibly be "today's stamp,
+# read back a bit later." aggregate_latest.py stamps as_of from an explicit
+# datetime.now(timezone.utc).date() at ~02:55 BDT (~20:55 UTC the PRIOR UTC
+# calendar day); media_screen runs at 21:30 BDT the same BDT evening (~15:30
+# UTC, the NEXT UTC calendar day relative to that stamp) and reads "today" via
+# a bare date.today(). The two are therefore consistently one UTC day apart --
+# an exact `parsed_as_of == today` check is dead code that never fires. This
+# window catches the real forged-then-read pattern without hardcoding which
+# side of midnight either process lands on.
+_FORGED_AS_OF_WINDOW_DAYS = 1
 
 # (outlet_label, listing_url, article_pattern). Daily Star + TBS only at this
 # stage. Patterns match these sites' real article hrefs (section path + a
@@ -164,21 +183,57 @@ def _parsed_for(metric_id: str) -> tuple[float | None, _date | None]:
 
 def _dedup_candidates(candidates: list[Candidate]) -> list[Candidate]:
     """Collapse the same (metric_id, press_as_of) seen in multiple articles;
-    prefer the one carrying a source_quote."""
+    prefer the one carrying a source_quote.
+
+    Every drop is logged (this was itself an unlogged sink before this PR --
+    the 2026-08-02 rate-cut headline was collected from BOTH tbsnews and
+    thedailystar the same night; one silently vanished here with no trace).
+    The final candidate/inserted counts are POST-dedup -- one dropped article
+    here means one fewer disposition line reaches "candidate"/"inserted" even
+    though it WAS classified as a candidate upstream.
+    """
     best: dict[tuple, Candidate] = {}
     for c in candidates:
         key = (c.metric_id, c.press_as_of)
         cur = best.get(key)
-        if cur is None or (c.source_quote and not cur.source_quote):
+        if cur is None:
             best[key] = c
+            continue
+        if c.source_quote and not cur.source_quote:
+            logger.info(
+                "media_screen: disposition dedup-drop-candidate metric=%s period=%s "
+                "url=%s (superseded by url=%s, which carries a source_quote)",
+                cur.metric_id, cur.press_as_of, cur.source_url, c.source_url,
+            )
+            best[key] = c
+        else:
+            logger.info(
+                "media_screen: disposition dedup-drop-candidate metric=%s period=%s "
+                "url=%s (kept url=%s)", c.metric_id, c.press_as_of, c.source_url,
+                cur.source_url,
+            )
     return list(best.values())
 
 
 def _dedup_skips(skips: list[Skip]) -> list[Skip]:
-    """Collapse duplicate (metric_id, period, reason) skips."""
+    """Collapse duplicate (metric_id, period, reason) skips.
+
+    Every drop is logged for the same reason as _dedup_candidates above --
+    the digest's final "N skip(s)" count, and this module's own
+    "media screen: N candidate(s) inserted, N skip(s)" summary line, are both
+    POST-dedup; this log line is what lets a post-merge night's disposition
+    lines reconcile against those summary counts.
+    """
     best: dict[tuple, Skip] = {}
     for s in skips:
-        best.setdefault((s.metric_id, s.period, s.reason), s)
+        key = (s.metric_id, s.period, s.reason)
+        if key in best:
+            logger.info(
+                "media_screen: disposition dedup-drop-skip metric=%s period=%s reason=%s",
+                s.metric_id, s.period, s.reason,
+            )
+            continue
+        best[key] = s
     return list(best.values())
 
 
@@ -226,10 +281,12 @@ def run_screen(*, dry_run: bool, urls=None) -> int:
                 note = ""
                 if (result.metric_id in _UNDATED_PARSED_AS_OF_METRIC_IDS
                         and result.reason in ("older-period", "matches-current-data")
-                        and parsed_as_of == _date.today()):
-                    note = (" [parsed_as_of == today for an undated-strategy metric -- "
-                            "likely a forged run-date stamp, not the metric's true "
-                            "reporting date; see AGENTS.md landmine 47]")
+                        and parsed_as_of is not None
+                        and parsed_as_of >= _date.today() - _timedelta(days=_FORGED_AS_OF_WINDOW_DAYS)):
+                    note = (" [parsed_as_of is within a day of today for an "
+                            "undated-strategy metric -- likely a forged run-date "
+                            "stamp, not the metric's true reporting date; see "
+                            "AGENTS.md landmine 47]")
                 logger.info(
                     "media_screen: disposition skip metric=%s value=%s period=%s "
                     "reason=%s url=%s%s", result.metric_id, result.value, result.period,
@@ -273,27 +330,15 @@ def run_screen(*, dry_run: bool, urls=None) -> int:
             logger.exception("media screen: insert into media_review failed")
             notify("error", "media screen failed", f"media_review insert failed: {e}")
             return 1
-        if len(ids) != len(candidates):
-            # PostgREST returned a 2xx with fewer ids than rows posted -- a
-            # partial write (e.g. a conflicting unique constraint silently
-            # dropping rows) that a bare status-code check would miss and log
-            # as success. Never let this exit 0.
-            logger.error(
-                "media screen: insert returned %d id(s) for %d candidate(s) — partial write",
-                len(ids), len(candidates),
-            )
-            notify(
-                "error", "media screen failed",
-                f"media_review insert returned {len(ids)} id(s) for {len(candidates)} "
-                "candidate(s) — partial write, not all candidates landed",
-            )
-            return 1
         for rid, c in zip(ids, candidates):
             logger.info(
                 "media_screen: disposition inserted id=%s metric=%s press=%s@%s",
                 rid, c.metric_id, c.press_value, c.press_as_of,
             )
 
+    # zip() truncates to len(ids), so a partial write (below) still shows every
+    # candidate that DID land, with its real approve/reject id -- landmine 28's
+    # always-post contract means a human must see those even on a failing run.
     title, message, fields = format_report(list(zip(ids, candidates)), skips, n_tbs, n_ds)
     level = "warning" if candidates else "info"
     webhook = os.environ.get("MEDIA_SCREEN_WEBHOOK_URL", "").strip()
@@ -303,9 +348,33 @@ def run_screen(*, dry_run: bool, urls=None) -> int:
         logger.warning("MEDIA_SCREEN_WEBHOOK_URL not set — skipping #thebrief report")
     logger.info("media screen: %d candidate(s) inserted, %d skip(s)", len(candidates), len(skips))
 
+    if candidates and len(ids) != len(candidates):
+        # PostgREST returned a 2xx with fewer ids than rows posted -- a partial
+        # write (e.g. a conflicting unique constraint silently dropping rows)
+        # that a bare status-code check would miss and log as success. Coupled
+        # to insert_media_review_rows' `Prefer: return=representation` header
+        # (utils/supabase_writer.py) actually returning one row per landed
+        # insert, in POST order -- if that header is ever dropped, this length
+        # check silently stops meaning anything. Checked AFTER the digest post
+        # above (not before) so the ids that DID land still get their
+        # approve/reject message; never let this exit 0.
+        not_landed = candidates[len(ids):]
+        not_landed_desc = "; ".join(f"{c.metric_id}@{c.press_as_of}" for c in not_landed)
+        logger.error(
+            "media screen: insert returned %d id(s) for %d candidate(s) — partial write "
+            "(not landed: %s)", len(ids), len(candidates), not_landed_desc,
+        )
+        notify(
+            "error", "media screen failed",
+            f"media_review insert returned {len(ids)} id(s) for {len(candidates)} "
+            f"candidate(s) — partial write. Landed candidates are in the digest "
+            f"above with approve/reject ids; NOT landed: {not_landed_desc}",
+        )
+        return 1
+
     streak = update_zero_insert_streak(len(ids), today=_date.today())
     if streak > 0:
-        logger.info("media screen: %d consecutive zero-insert night(s)", streak)
+        logger.info("media screen: %d consecutive zero-insert run(s)", streak)
     return 0
 
 
