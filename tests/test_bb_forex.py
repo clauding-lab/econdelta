@@ -213,6 +213,94 @@ class TestParseReserves:
         assert reserves.import_cover_months is None
         assert reserves.reserves_date == date(2026, 3, 1)
 
+    def test_bpm6_extracted_alongside_gross(self):
+        """The BPM6 column is extracted into bpm6_reserves_usd_bn, mn->bn
+        converted just like gross (D5 reserves split, 2026-08-05 memo)."""
+        html = _read_fixture("bb_forex_reserves.html")
+        reserves = parse_reserves(html)
+        # Fixture shows March 2026 BPM6 = 29501.2 million -> 29.5012 billion
+        assert reserves.bpm6_reserves_usd_bn == pytest.approx(29.5012, abs=0.001)
+
+    def test_bpm6_is_strictly_below_gross_on_real_fixture(self):
+        html = _read_fixture("bb_forex_reserves.html")
+        reserves = parse_reserves(html)
+        assert reserves.bpm6_reserves_usd_bn < reserves.gross_reserves_usd_bn
+
+    def test_columns_identified_by_header_text_not_position(self):
+        """BB reordering the Gross/BPM6 columns (without warning) must not
+        silently swap the two values -- the parser locates each column by
+        its header TEXT ('gross' / 'bpm6'), not by cells[1]/cells[2]."""
+        html = (
+            "<html><body>"
+            "<table id='sortableTable'>"
+            "<tr><td>(In million US $)</td></tr>"
+            "<tr><td>Period</td>"
+            "<td>Foreign Exchange Reserves(as per BPM6)</td>"
+            "<td>Foreign Exchange Reserves(Gross)</td></tr>"
+            "<tr><td>2025-2026</td></tr>"
+            "<tr><td>March</td><td>29501.2</td><td>34116.6</td></tr>"
+            "</table>"
+            "</body></html>"
+        )
+        reserves = parse_reserves(html)
+        assert reserves.gross_reserves_usd_bn == pytest.approx(34.1166, abs=0.0001)
+        assert reserves.bpm6_reserves_usd_bn == pytest.approx(29.5012, abs=0.0001)
+
+    def test_bpm6_col_missing_leaves_bpm6_none(self):
+        """A 3-column table whose third header doesn't say 'BPM6' at all
+        (e.g. a genuine future BB layout change replacing that column)
+        degrades gracefully -- gross still parses, bpm6_reserves_usd_bn is
+        None, no error. Distinct from the invariant-violation case below,
+        which DOES raise (a value present in the wrong place, not a column
+        that's genuinely absent)."""
+        html = (
+            "<html><body>"
+            "<table id='sortableTable'>"
+            "<tr><td>(In million US $)</td></tr>"
+            "<tr><td>Period</td><td>Foreign Exchange Reserves(Gross)</td><td>Import Cover (Months)</td></tr>"
+            "<tr><td>2025-2026</td></tr>"
+            "<tr><td>March</td><td>34116.6</td><td>4.2</td></tr>"
+            "</table>"
+            "</body></html>"
+        )
+        reserves = parse_reserves(html)
+        assert reserves.gross_reserves_usd_bn == pytest.approx(34.1166, abs=0.0001)
+        assert reserves.bpm6_reserves_usd_bn is None
+
+    def test_bpm6_gte_gross_raises_column_identification_parse_error(self):
+        """The cross-column invariant: BPM6 must be strictly below Gross by
+        construction. A row where the parsed 'BPM6' value is >= the parsed
+        'Gross' value means the columns were misidentified -- refuse BOTH
+        figures rather than write a corrupted gross value (closes the
+        column-slip hole flagged in the D5 reserves-memo, 2026-08-05)."""
+        html = (
+            "<html><body>"
+            "<table id='sortableTable'>"
+            "<tr><td>(In million US $)</td></tr>"
+            "<tr><td>Period</td><td>Foreign Exchange Reserves(Gross)</td><td>Foreign Exchange Reserves(as per BPM6)</td></tr>"
+            "<tr><td>2025-2026</td></tr>"
+            "<tr><td>March</td><td>29501.2</td><td>34116.6</td></tr>"
+            "</table>"
+            "</body></html>"
+        )
+        with pytest.raises(ParseError, match="column identification failure"):
+            parse_reserves(html)
+
+    def test_bpm6_equal_to_gross_also_raises(self):
+        """Boundary: bpm6 == gross is also invalid (must be STRICTLY below)."""
+        html = (
+            "<html><body>"
+            "<table id='sortableTable'>"
+            "<tr><td>(In million US $)</td></tr>"
+            "<tr><td>Period</td><td>Foreign Exchange Reserves(Gross)</td><td>Foreign Exchange Reserves(as per BPM6)</td></tr>"
+            "<tr><td>2025-2026</td></tr>"
+            "<tr><td>March</td><td>34116.6</td><td>34116.6</td></tr>"
+            "</table>"
+            "</body></html>"
+        )
+        with pytest.raises(ParseError, match="column identification failure"):
+            parse_reserves(html)
+
     def test_reserves_date_uses_fiscal_header_unlike_current_year(self):
         """A fiscal header year that does NOT match whatever year the suite
         happens to run in must still win — the dead isdigit() check this PR

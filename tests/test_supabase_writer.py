@@ -19,7 +19,9 @@ import requests
 from utils.supabase_writer import (
     SupabaseWriteError,
     _rows_from_data,
+    upsert_metric_definitions_monthly,
     upsert_metric_history,
+    upsert_metric_history_monthly,
 )
 
 
@@ -291,3 +293,142 @@ def test_ingested_at_defaults_to_now_when_unset():
     assert len(rows) == 1
     stamped = datetime.fromisoformat(rows[0]["ingested_at"])
     assert before <= stamped <= after
+
+
+# ---------------------------------------------------------------------------
+# MONTHLY namespace (metric_history_monthly / metric_definitions_monthly) --
+# D5 reserves split, mirrors scripts/seed_macro_monthly.py's private
+# `_upsert` convention (merge-duplicates, no ingested_at posted).
+# AGENTS.md landmine 20: this is a SEPARATE namespace from metric_history
+# above -- these tests must never touch the daily table's endpoint.
+# ---------------------------------------------------------------------------
+
+
+def test_history_monthly_posts_to_correct_table_and_conflict_key():
+    sess = _make_session()
+    n = upsert_metric_history_monthly(
+        rows=[{
+            "metric_id": "gross_reserves_usd_bn_monthly",
+            "as_of": date(2026, 3, 1),
+            "value": 34.1166,
+            "source": "bb_forex",
+            "source_as_of": date(2026, 3, 1),
+        }],
+        url="https://example.supabase.co",
+        service_key="sk_test_123",
+        session=sess,
+    )
+    assert n == 1
+    args, kwargs = sess.post.call_args
+    url = args[0]
+    assert url == (
+        "https://example.supabase.co/rest/v1/metric_history_monthly"
+        "?on_conflict=metric_id,as_of"
+    )
+    assert "merge-duplicates" in kwargs["headers"]["Prefer"]
+    row = kwargs["json"][0]
+    assert row["as_of"] == "2026-03-01"
+    assert row["source_as_of"] == "2026-03-01"
+    # Unlike the daily upsert_metric_history, no ingested_at is posted --
+    # matches scripts/seed_macro_monthly.py's convention exactly.
+    assert "ingested_at" not in row
+
+
+def test_history_monthly_accepts_iso_string_dates_unchanged():
+    """Rows built with ISO strings (not date objects) for as_of/source_as_of
+    must pass through untouched -- normalisation is only for date objects."""
+    sess = _make_session()
+    upsert_metric_history_monthly(
+        rows=[{
+            "metric_id": "net_reserves_bpm6_usd_bn_monthly",
+            "as_of": "2026-03-01",
+            "value": 29.5012,
+            "source": "bb_forex",
+            "source_as_of": "2026-03-01",
+        }],
+        url="https://example.supabase.co",
+        service_key="sk",
+        session=sess,
+    )
+    row = sess.post.call_args[1]["json"][0]
+    assert row["as_of"] == "2026-03-01"
+
+
+def test_history_monthly_empty_rows_returns_zero_without_posting():
+    sess = _make_session()
+    n = upsert_metric_history_monthly(
+        rows=[], url="https://example.supabase.co", service_key="sk", session=sess,
+    )
+    assert n == 0
+    sess.post.assert_not_called()
+
+
+def test_history_monthly_raises_on_non_2xx():
+    sess = _make_session(status=500, text="internal error")
+    with pytest.raises(SupabaseWriteError, match="HTTP 500"):
+        upsert_metric_history_monthly(
+            rows=[{"metric_id": "x_monthly", "as_of": date(2026, 3, 1), "value": 1.0, "source": "s"}],
+            url="https://example.supabase.co",
+            service_key="sk",
+            session=sess,
+        )
+
+
+def test_history_monthly_raises_on_network_error():
+    sess = MagicMock(spec=requests.Session)
+    sess.post.side_effect = requests.exceptions.ConnectionError("dns lookup failed")
+    with pytest.raises(SupabaseWriteError, match="network error"):
+        upsert_metric_history_monthly(
+            rows=[{"metric_id": "x_monthly", "as_of": date(2026, 3, 1), "value": 1.0, "source": "s"}],
+            url="https://example.supabase.co",
+            service_key="sk",
+            session=sess,
+        )
+
+
+def test_definitions_monthly_posts_to_correct_table_and_conflict_key():
+    sess = _make_session()
+    n = upsert_metric_definitions_monthly(
+        definitions=[{
+            "metric_id": "gross_reserves_usd_bn_monthly",
+            "display_name": "FX reserves (gross)",
+            "unit": "USD bn",
+            "domain": "external",
+        }],
+        url="https://example.supabase.co",
+        service_key="sk_test_123",
+        session=sess,
+    )
+    assert n == 1
+    args, kwargs = sess.post.call_args
+    url = args[0]
+    assert url == (
+        "https://example.supabase.co/rest/v1/metric_definitions_monthly"
+        "?on_conflict=metric_id"
+    )
+    # Monthly definitions are merge-duplicates -- unlike upsert_metric_definitions_seed
+    # (daily namespace, ignore-duplicates/first-insert-wins).
+    assert "merge-duplicates" in kwargs["headers"]["Prefer"]
+
+
+def test_definitions_monthly_empty_list_returns_zero_without_posting():
+    sess = _make_session()
+    n = upsert_metric_definitions_monthly(
+        definitions=[], url="https://example.supabase.co", service_key="sk", session=sess,
+    )
+    assert n == 0
+    sess.post.assert_not_called()
+
+
+def test_history_and_definitions_monthly_share_batching_behavior():
+    """500-row batch limit applies to the monthly tables too."""
+    rows = [
+        {"metric_id": f"m_{i:04d}_monthly", "as_of": date(2026, 3, 1), "value": float(i), "source": "s"}
+        for i in range(1200)
+    ]
+    sess = _make_session()
+    n = upsert_metric_history_monthly(
+        rows=rows, url="https://example.supabase.co", service_key="sk", session=sess,
+    )
+    assert n == 1200
+    assert sess.post.call_count == 3

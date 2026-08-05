@@ -232,10 +232,18 @@ def parse_exchange_rates(html: str) -> ForexRates:
 
 
 def parse_reserves(html: str) -> ForexReserves:
-    """Extract gross reserves from BB intreserve page.
+    """Extract gross + BPM6 reserves from BB intreserve page.
 
     Table: #sortableTable
     Column layout: Period | Foreign Exchange Reserves(Gross) | Foreign Exchange Reserves(as per BPM6)
+
+    The Gross/BPM6 column INDEX is identified by HEADER TEXT (matching
+    "gross" / "bpm6" case-insensitively in the header row), never by fixed
+    position — a BB column reorder would otherwise silently swap the two
+    figures with no error (the exact failure mode this PR's invariant below
+    exists to catch). The header row must be seen before any data row is
+    accepted; a table with no recognisable Gross/BPM6 headers raises
+    ParseError rather than guessing cells[1]/cells[2].
 
     The table groups rows by fiscal year with a spanning header row.
     The first data row after the header group (row with 2 numeric columns) is the most recent.
@@ -244,6 +252,17 @@ def parse_reserves(html: str) -> ForexReserves:
     The period label is the month name only (e.g. "March") in the row immediately after
     the fiscal year header (e.g. "2025-2026").  We derive the date from the most recent
     fiscal year header + month name, resolving to the first day of that month.
+
+    Cross-column invariant: BPM6 reserves are always BELOW gross reserves
+    (BB's BPM6 methodology excludes items gross includes — observed gap
+    ~12-13% of gross). If bpm6 >= gross for the same row, that's not a data
+    quality issue to warn about -- it's proof the Gross/BPM6 columns were
+    misidentified (e.g. a reordered table BB never announced), so BOTH
+    figures from this parse are untrustworthy. Raises ParseError rather than
+    writing either value; the caller's existing except-ParseError path
+    already refuses the whole run's write (rates included) on a parse
+    failure, so this closes the "column swap reads a corrupt gross value"
+    hole described in AGENTS.md landmine 38 / the D5 reserves-memo (2026-08-05).
 
     import_cover_months is NOT published on this page — set to None.
     """
@@ -257,7 +276,7 @@ def parse_reserves(html: str) -> ForexReserves:
     # Skip header rows until we find the first fiscal year group
     # Structure:
     #   row: [(In million US $)]
-    #   row: [Period, Gross, BPM6]   <- column headers
+    #   row: [Period, Gross, BPM6]   <- column headers (index captured by TEXT)
     #   row: [2025-2026]              <- fiscal year header (colspan)
     #   row: [March, 34116.6, 29501.2] <- data
     #   row: [February, ...]
@@ -265,6 +284,9 @@ def parse_reserves(html: str) -> ForexReserves:
     current_year: str | None = None
     most_recent_month: str | None = None
     most_recent_gross_mn: float | None = None
+    most_recent_bpm6_mn: float | None = None
+    gross_col: int | None = None
+    bpm6_col: int | None = None
 
     for row in rows:
         cells = row.find_all(["td", "th"])
@@ -279,28 +301,62 @@ def parse_reserves(html: str) -> ForexReserves:
                 current_year = text
             continue
 
-        if len(cells) >= 3:
-            label = cells[0].get_text(strip=True)
-            gross_str = cells[1].get_text(strip=True)
-            gross = parse_number(gross_str)
+        if len(cells) < 3:
+            continue
 
-            if gross is not None and label not in ("Period", "Foreign Exchange Reserves(Gross)"):
-                # This is a data row
-                if most_recent_month is None:
-                    most_recent_month = label
-                    most_recent_gross_mn = gross
-                    break  # First data row is most recent
+        label = cells[0].get_text(strip=True)
+
+        if label.strip().lower() == "period":
+            # Column-header row -- identify Gross / BPM6 by TEXT, not position.
+            for i, cell in enumerate(cells):
+                header_text = cell.get_text(strip=True).lower()
+                if "gross" in header_text:
+                    gross_col = i
+                elif "bpm6" in header_text:
+                    bpm6_col = i
+            continue
+
+        if gross_col is None:
+            # Haven't seen a usable header row yet -- can't trust position.
+            continue
+
+        if most_recent_month is not None:
+            continue  # already captured the newest row
+
+        gross = parse_number(cells[gross_col].get_text(strip=True))
+        if gross is None:
+            continue
+        bpm6 = (
+            parse_number(cells[bpm6_col].get_text(strip=True))
+            if bpm6_col is not None
+            else None
+        )
+
+        most_recent_month = label
+        most_recent_gross_mn = gross
+        most_recent_bpm6_mn = bpm6
+        break  # First data row is most recent
 
     if most_recent_gross_mn is None or most_recent_month is None:
         raise ParseError("Could not find any reserves data rows in #sortableTable")
 
     gross_bn = most_recent_gross_mn / 1000.0
+    bpm6_bn = most_recent_bpm6_mn / 1000.0 if most_recent_bpm6_mn is not None else None
+
+    if bpm6_bn is not None and bpm6_bn >= gross_bn:
+        raise ParseError(
+            f"BPM6 reserves ({bpm6_bn:.4f}bn) >= Gross reserves ({gross_bn:.4f}bn) "
+            f"for {most_recent_month!r} -- BPM6 must be strictly below Gross by "
+            "construction, so this looks like a Gross/BPM6 column identification "
+            "failure; refusing to write either figure"
+        )
 
     # Derive reserves_date: first of month, in current_year (second half = calendar year of end)
     reserves_date = _parse_reserves_date(most_recent_month, current_year)
 
     return ForexReserves(
         gross_reserves_usd_bn=gross_bn,
+        bpm6_reserves_usd_bn=bpm6_bn,
         import_cover_months=None,
         reserves_date=reserves_date,
         source_url="",  # caller sets this via model_copy
