@@ -103,6 +103,7 @@ TIMERS=(
   econdelta-media-screen
   econdelta-sentinel
   econdelta-gitpull
+  econdelta-npl-structure
 )
 for t in "${TIMERS[@]}"; do
   systemctl enable --now "${t}.timer"
