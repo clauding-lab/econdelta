@@ -281,6 +281,9 @@ def _upsert_year_series(
             source=source,
             source_as_of_map={metric_id: as_of},
             ingested_at=write_ts,
+            # Both callers (IMF DataMapper, World Bank API) are plain JSON
+            # parses — no LLM call.
+            provenance="deterministic",
         )
     verify_landed_count(
         total, since=write_ts, metric_ids=[metric_id], source_label=source_label

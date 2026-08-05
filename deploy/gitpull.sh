@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 # EconDelta — ordered pre-fetch deploy pull (E2.3).
 #
-# Runs ~04:50 BDT (22:50 UTC) as the service user, BEFORE the 05:00 BDT fetch
-# cascade (econdelta-fetch @ 23:00 UTC), so a merged fix is live for that day's
-# run instead of drifting until a manual `ssh git pull` (merge != deploy — the
-# the-brief landmine-21 class). ONE ordered pull, not 16 per-unit ExecStartPre
-# pulls that could swap code mid-cascade.
+# Runs ~01:00 BDT (19:00 UTC) as the service user, BEFORE the 01:10 BDT fetch
+# cascade (econdelta-fetch @ 19:10 UTC) — the first link in the #103 nightly
+# chain (gitpull 01:00 -> fetch 01:10 -> parse 02:10 -> aggregate 02:55 ->
+# sentinel 03:35 BDT; full table in deploy/README.md) — so a merged fix is
+# live for that day's run instead of drifting until a manual `ssh git pull`
+# (merge != deploy — the the-brief landmine-21 class). ONE ordered pull, not
+# 16 per-unit ExecStartPre pulls that could swap code mid-cascade.
 #
 # Deliberately UNPRIVILEGED and ff-only:
 #   * branch guard — refuses unless the checkout is on main, so an automated

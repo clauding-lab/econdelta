@@ -12,8 +12,17 @@ Schema assumed:
         value      numeric
         source     text
         ingested_at timestamptz default now()
+        provenance text   nullable, migration 0013 — see _provenance_enabled()
     )
     on conflict (metric_id, as_of) do update.
+
+``provenance`` (extraction method: 'deterministic' | 'llm' | 'hybrid' |
+'manual') is a DIFFERENT concept from ``source`` (originating organization) —
+never conflate them. It's written only when a caller passes ``provenance=``
+AND ``ECONDELTA_PROVENANCE_ENABLED=1`` is set, because the column does not
+exist in the live DB until the owner applies
+``supabase/migrations/0013_provenance.sql`` (see that file's header for the
+two supported apply routes).
 
 Failure semantics: best-effort. ``upsert_metric_history`` raises
 ``SupabaseWriteError`` on network or auth failure; the caller (
@@ -49,7 +58,7 @@ _DEFAULT_SOURCE = "EconDelta"
 #
 #   reserves_date           — ISO date string from bb_forex.reserves
 #   trading_day             — date label string from dse_market
-#   nbr_fytd_cross_check    — provenance tag ("single_source_tax_revenue")
+#   nbr_fytd_cross_check    — source tag ("single_source_tax_revenue")
 #   commodity_change_pct    — dict of {commodity_key: pct}; per-commodity
 #                             prices are already in ``data`` as scalars
 _KNOWN_NON_HISTORY_KEYS = frozenset({
@@ -58,6 +67,37 @@ _KNOWN_NON_HISTORY_KEYS = frozenset({
     "nbr_fytd_cross_check",
     "commodity_change_pct",
 })
+
+# ----------------------------------------------------------------------------
+# Provenance (extraction method) — see supabase/migrations/0013_provenance.sql.
+#
+# `provenance` records HOW a value was pulled out of its source document
+# ('deterministic' regex/table parser | 'llm' Claude extraction | 'hybrid'
+# deterministic-parse-plus-LLM-recovered-field | 'manual' hand-transcribed).
+# This is NOT `source`, which records the ORIGINATING ORGANIZATION — never
+# conflate the two.
+#
+# The column does not exist in the live DB until the owner applies migration
+# 0013 — via `supabase db query --linked -f` (db/README.md's canonical route)
+# or a Supabase dashboard SQL-editor paste (see that migration file's header
+# for both routes). Until then, a payload carrying a `provenance` key would
+# 400 the WHOLE batch (PostgREST rejects an unrecognised column on every row,
+# not just its own).
+# So this is gated behind an explicit env flag that defaults OFF:
+#   - merge-safe BEFORE the DDL lands (flag unset -> key never sent, writes
+#     keep working against the pre-migration schema)
+#   - opt-in AFTER the DDL lands (owner sets ECONDELTA_PROVENANCE_ENABLED=1
+#     in /etc/econdelta.env on the box once the migration is confirmed
+#     applied — see that file's VERIFICATION block)
+# A caller passing `provenance=` while the flag is unset is a no-op, not an
+# error: the column simply isn't populated yet.
+_VALID_PROVENANCE = frozenset({"deterministic", "llm", "hybrid", "manual"})
+_PROVENANCE_ENV_FLAG = "ECONDELTA_PROVENANCE_ENABLED"
+
+
+def _provenance_enabled() -> bool:
+    """True once the owner has applied migration 0013 and flipped the flag."""
+    return os.environ.get(_PROVENANCE_ENV_FLAG) == "1"
 
 
 class SupabaseWriteError(Exception):
@@ -88,6 +128,7 @@ def _rows_from_data(
     source: str,
     source_as_of_map: Mapping[str, date] | None = None,
     ingested_at: datetime | None = None,
+    provenance: str | None = None,
 ) -> list[dict]:
     """Build PostgREST row dicts from ``data``.
 
@@ -103,6 +144,13 @@ def _rows_from_data(
         ingested_at: The write timestamp posted on EVERY row so a merge-upsert
             (ON CONFLICT DO UPDATE) BUMPS ``metric_history.ingested_at``. Defaults
             to now (UTC). See below for why this matters.
+        provenance: Optional extraction-method tag — one of 'deterministic',
+            'llm', 'hybrid', 'manual' (see supabase/migrations/0013_provenance.sql).
+            Included in every row's payload ONLY when this is not None AND
+            ECONDELTA_PROVENANCE_ENABLED=1 is set in the environment; otherwise
+            the key is omitted entirely so the payload stays compatible with a
+            pre-migration schema (the column may not exist in the live DB yet).
+            Raises ValueError if set to anything outside the four allowed values.
 
     ``ingested_at`` is posted explicitly (not left to the column's ``default now()``)
     because that default only fires on INSERT, never on the UPDATE half of the
@@ -115,6 +163,12 @@ def _rows_from_data(
     Posting a fresh ``ingested_at`` each run makes write-liveness observable even
     when ``as_of`` correctly stalls. (E1.1)
     """
+    if provenance is not None and provenance not in _VALID_PROVENANCE:
+        raise ValueError(
+            f"provenance must be one of {sorted(_VALID_PROVENANCE)}, got {provenance!r}"
+        )
+    include_provenance = provenance is not None and _provenance_enabled()
+
     rows: list[dict] = []
     overrides = source_as_of_map or {}
     stamp = (ingested_at or datetime.now(timezone.utc)).isoformat()
@@ -128,13 +182,16 @@ def _rows_from_data(
             continue
         if isinstance(value, (int, float)):
             effective_as_of = overrides.get(metric_id, as_of)
-            rows.append({
+            row = {
                 "metric_id": metric_id,
                 "as_of": effective_as_of.isoformat(),
                 "value": value,
                 "source": source,
                 "ingested_at": stamp,
-            })
+            }
+            if include_provenance:
+                row["provenance"] = provenance
+            rows.append(row)
         else:
             # Genuinely unexpected non-scalar shape (dict, list, str, None, ...)
             # for a key that ISN'T in ``_KNOWN_NON_HISTORY_KEYS``. PR #31 traced
@@ -158,6 +215,7 @@ def upsert_metric_history(
     source: str = _DEFAULT_SOURCE,
     source_as_of_map: Mapping[str, date] | None = None,
     ingested_at: datetime | None = None,
+    provenance: str | None = None,
     url: str | None = None,
     service_key: str | None = None,
     timeout: int = _DEFAULT_TIMEOUT,
@@ -172,7 +230,8 @@ def upsert_metric_history(
             per-metric dates for slow-cadence sources (quarterly FSAR, monthly
             news articles).
         source: Default "EconDelta"; per-row override not supported (one
-                aggregator run = one source label).
+                aggregator run = one source label). Records the ORIGINATING
+                ORGANIZATION — do not conflate with ``provenance`` below.
         source_as_of_map: Optional mapping of metric_id → true publication date.
             Overrides ``as_of`` for those specific metrics. Metrics absent from
             this map use the global ``as_of`` fallback. Pass None (default) for
@@ -180,6 +239,16 @@ def upsert_metric_history(
         ingested_at: Explicit write timestamp posted on every row. Pass the same
             value to ``verify_landed_count(since=...)`` so the post-write read-back
             counts exactly this run's rows (E2.2). Defaults to now (UTC).
+        provenance: Optional extraction-method tag — one of 'deterministic',
+            'llm', 'hybrid', 'manual'. Records HOW the value was pulled out of
+            its source document (never the organization — that's ``source``).
+            One call = one provenance label for every row in this batch, same
+            as ``source``. Only actually written to Supabase when
+            ECONDELTA_PROVENANCE_ENABLED=1 is ALSO set — see
+            ``supabase/migrations/0013_provenance.sql`` and
+            ``_provenance_enabled()`` for why the flag exists. Leave unset
+            (None, the default) when a call site's extraction method is mixed
+            or ambiguous rather than guessing.
         url, service_key: Override for SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY
                 env vars. Tests pass these directly.
         timeout: Per-request timeout seconds.
@@ -192,9 +261,11 @@ def upsert_metric_history(
     Raises:
         SupabaseWriteError: On missing creds, network failure, or non-2xx
             response. Caller decides whether to abort or continue.
+        ValueError: ``provenance`` is set to something other than one of the
+            four allowed values.
     """
     base_url, key = _resolve_credentials(url, service_key)
-    rows = _rows_from_data(data, as_of, source, source_as_of_map, ingested_at)
+    rows = _rows_from_data(data, as_of, source, source_as_of_map, ingested_at, provenance)
     if not rows:
         logger.info("no scalar values to upsert (snapshot empty or non-numeric only)")
         return 0

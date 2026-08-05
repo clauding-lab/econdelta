@@ -92,8 +92,10 @@ systemctl daemon-reload
 # The live --dry-run on the box, fed the two NPL articles, produced a clean result
 # post precision-fix (NPL 32.26% @ 2026-03-31, one per outlet, zero junk), so the
 # daily timer (21:30 BDT) is now on. Schedule/units: deploy/econdelta-media-screen.*.
-# econdelta-sentinel: freshness sentinel (E2.1), daily 07:30 UTC (13:30 BDT).
-# econdelta-gitpull: ordered deploy pull (E2.3), daily 22:50 UTC (04:50 BDT).
+# econdelta-sentinel: freshness sentinel (E2.1), daily 21:35 UTC (03:35 BDT +1),
+# the last link in the #103 nightly chain (see deploy/README.md Schedule table).
+# econdelta-gitpull: ordered deploy pull (E2.3), daily 19:00 UTC (01:00 BDT +1),
+# the FIRST link in that same chain (see deploy/README.md).
 # Added to this list per landmine 19 — copied by the glob above but only
 # ENABLED because they appear here.
 TIMERS=(
