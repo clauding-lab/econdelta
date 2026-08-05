@@ -22,11 +22,17 @@ EnvironmentFile=/etc/econdelta.env
 # Log-file ownership guard (deploy/README.md Troubleshooting,
 # AGENT_LEARNINGS.md 2026-08-05): if this log is absent, systemd
 # creates the StandardOutput/StandardError append target as root
-# before ExecStart drops to User=/Group=, and nightly logrotate's
-# `su adnan-local adnan-local` then can't open a root-owned file.
-# '+' runs outside this unit's own sandboxing so the chown always
-# succeeds no matter who most recently (re)created the file.
-ExecStartPre=+/bin/sh -c 'touch /home/adnan-local/econdelta/logs/fetch-systemd.log && chmod 0644 /home/adnan-local/econdelta/logs/fetch-systemd.log && chown adnan-local:adnan-local /home/adnan-local/econdelta/logs/fetch-systemd.log'
+# before ExecStart drops to User=/Group=. The file is world-readable
+# (0644) either way; the break is the WRITE side — nightly logrotate's
+# `su adnan-local adnan-local` + copytruncate opens O_RDWR to truncate,
+# which a non-root adnan-local can't do to a root-owned file. '+' runs
+# outside this unit's own sandboxing so the chown always succeeds no
+# matter who most recently (re)created the file; the leading
+# `[ -L ... ] && exit 1` refuses (aborts the whole start) instead of
+# chowning/chmoding through a symlink if the path is ever swapped for
+# one (CWE-59). chmod 0644 here is deliberately this guard's mode
+# authority for the log file, not just a touch side effect.
+ExecStartPre=+/bin/sh -c '[ -L /home/adnan-local/econdelta/logs/fetch-systemd.log ] && exit 1; touch /home/adnan-local/econdelta/logs/fetch-systemd.log && chmod 0644 /home/adnan-local/econdelta/logs/fetch-systemd.log && chown adnan-local:adnan-local /home/adnan-local/econdelta/logs/fetch-systemd.log'
 ExecStart=/home/adnan-local/econdelta/.venv/bin/python -m fetch_all
 
 # Resource limits — playwright Chromium peaks ~700M
