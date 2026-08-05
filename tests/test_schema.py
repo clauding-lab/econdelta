@@ -51,6 +51,48 @@ class TestForexSnapshot:
         assert snapshot.reserves is not None
         assert snapshot.reserves.gross_reserves_usd_bn == 21.5
 
+    def test_bpm6_defaults_to_none(self):
+        """bpm6_reserves_usd_bn is additive (2026-08 D5 split) -- reserves
+        blocks that don't set it (older snapshots, or a page read with no
+        BPM6 column) must still validate, with the field defaulting to None."""
+        data = self._valid_snapshot()
+        data["reserves"] = {
+            "gross_reserves_usd_bn": 21.5,
+            "import_cover_months": 4.2,
+            "reserves_date": _TODAY,
+            "source_url": "https://bb.org.bd/reserves",
+        }
+        snapshot = ForexSnapshot(**data)
+        assert snapshot.reserves.bpm6_reserves_usd_bn is None
+
+    def test_accepts_explicit_bpm6(self):
+        data = self._valid_snapshot()
+        data["reserves"] = {
+            "gross_reserves_usd_bn": 34.1166,
+            "bpm6_reserves_usd_bn": 29.5012,
+            "import_cover_months": None,
+            "reserves_date": _TODAY,
+            "source_url": "https://bb.org.bd/reserves",
+        }
+        snapshot = ForexSnapshot(**data)
+        assert snapshot.reserves.bpm6_reserves_usd_bn == pytest.approx(29.5012)
+
+    def test_old_snapshot_json_without_bpm6_field_still_parses(self):
+        """Simulates re-loading a snapshot file written BEFORE this PR --
+        the JSON literally has no bpm6_reserves_usd_bn key at all (not even
+        null). Must still validate under extra='forbid' since the field is
+        optional with a default, not required."""
+        data = self._valid_snapshot()
+        data["reserves"] = {
+            "gross_reserves_usd_bn": 34.1166,
+            "import_cover_months": None,
+            "reserves_date": _TODAY,
+            "source_url": "https://bb.org.bd/reserves",
+        }
+        assert "bpm6_reserves_usd_bn" not in data["reserves"]
+        snapshot = ForexSnapshot(**data)
+        assert snapshot.reserves.bpm6_reserves_usd_bn is None
+
     def test_rejects_extra_fields(self):
         data = self._valid_snapshot()
         data["unexpected_field"] = "should fail"
