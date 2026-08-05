@@ -99,3 +99,80 @@ def test_llm_extract_bool_value_is_rejected_not_cast_to_float(tmp_path):
         snapshot = parse_one(_ticker_artifact(tmp_path), indicator, history=[])
     assert snapshot["_provenance"] == "needs_review"
     assert snapshot["_parse_strategy"] == "extract_failed"
+
+
+# ---------------------------------------------------------------------------
+# No llm_prompt configured (cab-memo-2026-08-05.md D2 bundle): the ladder
+# must degrade gracefully to the terminal fallback, never raise KeyError on
+# the missing config key.
+# ---------------------------------------------------------------------------
+
+
+def test_no_llm_prompt_and_deterministic_fails_uses_terminal_fallback(tmp_path):
+    indicator = {
+        "id": "x", "name": "X", "domain": "money_market", "cadence": "daily",
+        "fetch": {"task": "Nonexistent"},
+        "parse": {"deterministic": "html_footer_ticker", "value_type": "amount_usd_bn",
+                  "valid_range": [-20.0, 20.0]},  # no llm_prompt key
+    }
+    snapshot = parse_one(_ticker_artifact(tmp_path), indicator, history=[], last_good=None)
+    assert snapshot["_provenance"] == "needs_review"
+    assert snapshot["_parse_strategy"] == "extract_failed"
+    assert snapshot["value"] == 0.0
+
+
+def test_no_llm_prompt_and_sanity_check_disagrees_flags_needs_review_not_crash(tmp_path):
+    """Deterministic succeeds but the sanity check flags it implausible;
+    with no llm_prompt configured there is nothing to cross-check against —
+    must publish the deterministic value flagged for review, not raise
+    KeyError reaching for a missing 'llm_prompt' config key."""
+    indicator = {
+        "id": "policy_rate_repo", "name": "Policy Rate", "domain": "money_market",
+        "cadence": "daily",
+        "fetch": {"task": "Policy Rate"},
+        "parse": {"deterministic": "html_footer_ticker", "value_type": "percent",
+                  "valid_range": [0.5, 25.0]},  # no llm_prompt key
+    }
+    fake_sanity = type("R", (), {"parsed": {"plausible": False, "reason": "looks odd"}, "raw_text": ""})()
+    with patch("parsers.hybrid._sanity_check", return_value=fake_sanity):
+        snapshot = parse_one(_ticker_artifact(tmp_path), indicator, history=[])
+    assert snapshot["value"] == 10.0
+    assert snapshot["_provenance"] == "needs_review"
+    assert snapshot["_parse_strategy"] == "html_footer_ticker"
+
+
+def test_terminal_fallback_holds_last_good_for_amount_value_type(tmp_path):
+    indicator = {
+        "id": "x", "name": "X", "domain": "macro", "cadence": "monthly",
+        "fetch": {"task": "Nonexistent"},
+        "parse": {"deterministic": "html_footer_ticker", "value_type": "amount_usd_bn",
+                  "valid_range": [-20.0, 20.0]},
+    }
+    last_good = {
+        "indicator_id": "x", "value": -0.301, "scraped_at": "2026-08-04T08:00:59+00:00",
+        "_provenance": "deterministic", "_parse_strategy": "html_footer_ticker",
+        "_stale_from": "2026-08-04",
+    }
+    snapshot = parse_one(_ticker_artifact(tmp_path), indicator, history=[], last_good=last_good)
+    assert snapshot["value"] == -0.301
+    assert snapshot["_provenance"] == "stale_fallback"
+    assert snapshot["scraped_at"] == "2026-08-04T08:00:59+00:00"  # ORIGINAL date, not today
+
+
+def test_terminal_fallback_does_not_hold_last_good_for_non_amount_value_type(tmp_path):
+    """Hold-last-good is scoped to amount_* value types (money) per the memo
+    bundle — a percent/rate/ratio metric keeps the original 0.0/needs_review
+    sentinel even when a last_good value is available."""
+    indicator = {
+        "id": "x", "name": "X", "domain": "money_market", "cadence": "daily",
+        "fetch": {"task": "Nonexistent"},
+        "parse": {"deterministic": "html_footer_ticker", "value_type": "percent",
+                  "valid_range": [0.0, 100.0]},
+    }
+    last_good = {
+        "indicator_id": "x", "value": 9.5, "scraped_at": "2026-08-04T08:00:59+00:00",
+        "_provenance": "deterministic", "_parse_strategy": "html_footer_ticker",
+    }
+    snapshot = parse_one(_ticker_artifact(tmp_path), indicator, history=[], last_good=last_good)
+    assert snapshot["value"] == 0.0
+    assert snapshot["_provenance"] == "needs_review"

@@ -11,6 +11,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+import parsers.bb_bop_row  # noqa: F401
 import parsers.dam_ticker  # noqa: F401
 import parsers.dse_sector_heat  # noqa: F401
 import parsers.html_call_money  # noqa: F401
@@ -142,6 +143,46 @@ def _load_history(indicator_id: str, data_root: Path, n: int = 3) -> list[float]
     return out
 
 
+def _load_last_good(indicator_id: str, data_root: Path, *, max_days_back: int = 60) -> dict | None:
+    """Most recent snapshot for `indicator_id` that was NOT itself a failed
+    parse — used by hybrid.py's terminal fallback to hold a real number
+    forward instead of publishing a synthesised 0.0 (cab-memo-2026-08-05.md).
+
+    Mirrors aggregate_latest.py's `_load_last_good_snapshot` (same notion of
+    'bad', same 60-day lookback window) but reads independently at this
+    stage rather than sharing a module — Stage 2 (parse) and Stage 3
+    (aggregate) already keep separate concerns throughout this codebase.
+    Returns the full original snapshot dict (so the caller can carry its
+    real `scraped_at`/`source_url`/etc. forward, not fabricate new ones) or
+    None if nothing usable exists in the window.
+    """
+    d = data_root / indicator_id
+    if not d.exists():
+        return None
+    today = datetime.now(timezone.utc).date()
+    for p in sorted(d.glob("*.json"), reverse=True):
+        try:
+            blob = json.loads(p.read_text())
+        except json.JSONDecodeError:
+            continue
+        if blob.get("_provenance") in ("needs_review", "stale_fallback"):
+            continue
+        if blob.get("_parse_strategy") == "extract_failed":
+            continue
+        value = blob.get("value")
+        if not isinstance(value, (int, float)) or isinstance(value, bool) or value == 0:
+            continue
+        try:
+            scraped = datetime.fromisoformat(blob["scraped_at"].replace("Z", "+00:00")).date()
+        except (KeyError, ValueError):
+            continue
+        if (today - scraped).days > max_days_back:
+            return None  # sorted newest-first — nothing closer will qualify either
+        blob["_stale_from"] = p.stem
+        return blob
+    return None
+
+
 def run(*, config_path: Path, data_root: Path, only: str | None = None) -> list[dict]:
     cfg = json.loads(config_path.read_text())
     snapshots: list[dict] = []
@@ -153,8 +194,9 @@ def run(*, config_path: Path, data_root: Path, only: str | None = None) -> list[
             logger.warning("no artifact for %s — skipping", ind["id"])
             continue
         history = _load_history(ind["id"], data_root)
+        last_good = _load_last_good(ind["id"], data_root)
         try:
-            snapshot = parse_one(artifact, ind, history=history)
+            snapshot = parse_one(artifact, ind, history=history, last_good=last_good)
         except Exception as e:
             logger.error("parse_one raised for %s: %s", ind["id"], e)
             continue
