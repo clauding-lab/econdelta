@@ -99,3 +99,125 @@ def test_llm_extract_bool_value_is_rejected_not_cast_to_float(tmp_path):
         snapshot = parse_one(_ticker_artifact(tmp_path), indicator, history=[])
     assert snapshot["_provenance"] == "needs_review"
     assert snapshot["_parse_strategy"] == "extract_failed"
+
+
+# ---------------------------------------------------------------------------
+# No llm_prompt configured (cab-memo-2026-08-05.md D2 bundle): the ladder
+# must degrade gracefully to the terminal fallback, never raise KeyError on
+# the missing config key.
+# ---------------------------------------------------------------------------
+
+
+def test_no_llm_prompt_and_deterministic_fails_uses_terminal_fallback(tmp_path):
+    indicator = {
+        "id": "x", "name": "X", "domain": "money_market", "cadence": "daily",
+        "fetch": {"task": "Nonexistent"},
+        "parse": {"deterministic": "html_footer_ticker", "value_type": "amount_usd_bn",
+                  "valid_range": [-20.0, 20.0]},  # no llm_prompt key
+    }
+    snapshot = parse_one(_ticker_artifact(tmp_path), indicator, history=[], last_good=None)
+    assert snapshot["_provenance"] == "needs_review"
+    assert snapshot["_parse_strategy"] == "extract_failed"
+    assert snapshot["value"] == 0.0
+
+
+def test_no_llm_prompt_total_failure_on_money_metric_alerts_same_day(tmp_path):
+    """cab-memo review MED-1: a no-LLM money metric going completely dark
+    must not go quiet at INFO — logs ERROR and fires a Discord notify so a
+    human finds out same-day (Stage 3's own failure counter won't catch a
+    stale_fallback snapshot; it isn't 'bad' by _is_bad_snapshot's definition)."""
+    indicator = {
+        "id": "x", "name": "X", "domain": "macro", "cadence": "monthly",
+        "fetch": {"task": "Nonexistent"},
+        "parse": {"deterministic": "html_footer_ticker", "value_type": "amount_usd_bn",
+                  "valid_range": [-20.0, 20.0]},  # no llm_prompt key
+    }
+    with patch("parsers.hybrid.notify") as fake_notify:
+        snapshot = parse_one(_ticker_artifact(tmp_path), indicator, history=[], last_good=None)
+    assert snapshot["_provenance"] == "needs_review"
+    fake_notify.assert_called_once()
+    level, title, message = fake_notify.call_args.args[:3]
+    assert level == "warning"
+    assert "x" in title
+
+
+def test_no_llm_prompt_total_failure_on_non_money_metric_does_not_alert(tmp_path):
+    """The MED-1 escalation is scoped to money (amount_*) value types — a
+    percent/rate metric with no llm_prompt keeps the quieter INFO-level log
+    it already had; only money metrics get the same-day Discord alert."""
+    indicator = {
+        "id": "x", "name": "X", "domain": "money_market", "cadence": "daily",
+        "fetch": {"task": "Nonexistent"},
+        "parse": {"deterministic": "html_footer_ticker", "value_type": "percent",
+                  "valid_range": [0.0, 100.0]},  # no llm_prompt key
+    }
+    with patch("parsers.hybrid.notify") as fake_notify:
+        parse_one(_ticker_artifact(tmp_path), indicator, history=[], last_good=None)
+    fake_notify.assert_not_called()
+
+
+def test_no_llm_prompt_and_sanity_check_disagrees_flags_dont_veto(tmp_path):
+    """cab-memo review HIGH-2: a sanity-check 'implausible' with no
+    llm_prompt configured has no cross-check escape hatch. A false positive
+    on a genuine step-change month must not silently discard the (already
+    validated) deterministic value — needs_review would make Stage 3 drop
+    it, and _load_last_good skips needs_review snapshots, freezing the
+    metric forever. Must FLAG (publish as deterministic + note + alert),
+    never VETO (needs_review), and never raise KeyError reaching for a
+    missing 'llm_prompt' config key."""
+    indicator = {
+        "id": "policy_rate_repo", "name": "Policy Rate", "domain": "money_market",
+        "cadence": "daily",
+        "fetch": {"task": "Policy Rate"},
+        "parse": {"deterministic": "html_footer_ticker", "value_type": "percent",
+                  "valid_range": [0.5, 25.0]},  # no llm_prompt key
+    }
+    fake_sanity = type("R", (), {"parsed": {"plausible": False, "reason": "looks odd"}, "raw_text": ""})()
+    with patch("parsers.hybrid._sanity_check", return_value=fake_sanity), \
+         patch("parsers.hybrid.notify") as fake_notify:
+        snapshot = parse_one(_ticker_artifact(tmp_path), indicator, history=[])
+    assert snapshot["value"] == 10.0
+    assert snapshot["_provenance"] == "deterministic"
+    assert snapshot["_parse_strategy"] == "html_footer_ticker"
+    assert "looks odd" in snapshot["sanity_note"]
+    fake_notify.assert_called_once()
+    level, title, message = fake_notify.call_args.args[:3]
+    assert level == "warning"
+    assert "policy_rate_repo" in title
+
+
+def test_terminal_fallback_holds_last_good_for_amount_value_type(tmp_path):
+    indicator = {
+        "id": "x", "name": "X", "domain": "macro", "cadence": "monthly",
+        "fetch": {"task": "Nonexistent"},
+        "parse": {"deterministic": "html_footer_ticker", "value_type": "amount_usd_bn",
+                  "valid_range": [-20.0, 20.0]},
+    }
+    last_good = {
+        "indicator_id": "x", "value": -0.301, "scraped_at": "2026-08-04T08:00:59+00:00",
+        "_provenance": "deterministic", "_parse_strategy": "html_footer_ticker",
+        "_stale_from": "2026-08-04",
+    }
+    snapshot = parse_one(_ticker_artifact(tmp_path), indicator, history=[], last_good=last_good)
+    assert snapshot["value"] == -0.301
+    assert snapshot["_provenance"] == "stale_fallback"
+    assert snapshot["scraped_at"] == "2026-08-04T08:00:59+00:00"  # ORIGINAL date, not today
+
+
+def test_terminal_fallback_does_not_hold_last_good_for_non_amount_value_type(tmp_path):
+    """Hold-last-good is scoped to amount_* value types (money) per the memo
+    bundle — a percent/rate/ratio metric keeps the original 0.0/needs_review
+    sentinel even when a last_good value is available."""
+    indicator = {
+        "id": "x", "name": "X", "domain": "money_market", "cadence": "daily",
+        "fetch": {"task": "Nonexistent"},
+        "parse": {"deterministic": "html_footer_ticker", "value_type": "percent",
+                  "valid_range": [0.0, 100.0]},
+    }
+    last_good = {
+        "indicator_id": "x", "value": 9.5, "scraped_at": "2026-08-04T08:00:59+00:00",
+        "_provenance": "deterministic", "_parse_strategy": "html_footer_ticker",
+    }
+    snapshot = parse_one(_ticker_artifact(tmp_path), indicator, history=[], last_good=last_good)
+    assert snapshot["value"] == 0.0
+    assert snapshot["_provenance"] == "needs_review"
