@@ -1265,7 +1265,18 @@ def main() -> int:
             status = verdict.get("status", "ok")
             reason = verdict.get("reason", "")
             if verdict.get("skipped"):
-                logger.info("opus review skipped: %s", reason)
+                # Involuntary skip (broken binary, timeout, malformed output) —
+                # distinct from the ECONDELTA_SKIP_OPUS_REVIEW kill-switch above,
+                # which never reaches this branch. The review stays advisory
+                # (never blocks publication), but a self-disabled safety net
+                # must not fail silently for months — surface it loudly.
+                logger.warning("opus review involuntarily skipped: %s", reason)
+                notify(
+                    "warning",
+                    "EconDelta Opus review skipped itself",
+                    f"reason: {reason}\nthe review is advisory and did not block "
+                    f"publication — but it did not run either.",
+                )
             elif status == "reject":
                 missing = verdict.get("missing", []) or []
                 anomalies = verdict.get("anomalies", []) or []
@@ -1279,7 +1290,7 @@ def main() -> int:
                         reason, missing[:5], len(anomalies), MAX_QUARANTINE_FIELDS,
                     )
                     notify(
-                        "warn",
+                        "warning",
                         "EconDelta Opus review rejected today's data",
                         f"reason: {reason}\nmissing: {missing[:5]}\nanomalies: {len(anomalies)}\n"
                         f"keeping yesterday's latest.json — retry timers will re-run.",
@@ -1291,7 +1302,7 @@ def main() -> int:
                     len(quarantined), quarantined, reason,
                 )
                 notify(
-                    "warn",
+                    "warning",
                     "EconDelta published with fields quarantined",
                     f"reason: {reason}\nquarantined: {quarantined}\n"
                     f"these fields use last-good values; the rest published fresh.",
