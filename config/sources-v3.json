@@ -1489,11 +1489,10 @@
       "fetch": {
         "type": "html",
         "url": "https://www.bb.org.bd/en/index.php/econdata/bop",
-        "task": "Entire Table"
+        "task": "row=Overall Balance -- select BB's current fiscal-year PROVISIONAL-period column by HEADER TEXT (fiscal year + month window), never by position; BB's column order is prior-FY, current-FY-revised, current-FY-provisional, left to right (NOT chronological). Source cells are in USD million on this page; the parser converts to USD billion. This is the Overall Balance row, NOT Current Account Balance (a different row of the same table, see current_account_balance)."
       },
       "parse": {
-        "deterministic": "html_table_row",
-        "llm_prompt": "html_table_row.txt",
+        "deterministic": "bb_bop_row",
         "value_type": "amount_usd_bn",
         "valid_range": [
           -20.0,
@@ -1504,7 +1503,7 @@
       "alternate": {
         "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
         "type": "pdf",
-        "task": "Go to page 31 of the doc"
+        "task": "Go to page 31 of the doc, the Overall Balance row of the BoP table, USD billion. NOT the Current Account Balance row."
       }
     },
     {
