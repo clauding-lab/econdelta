@@ -53,7 +53,7 @@ When something ships broken, when a methodology gap is exposed, or when a smoke 
 
 **NOT fixed in this PR (needs owner sign-off — it's a scoring/data-currency change, not an observability one):** giving `policy_rate_repo` (and `call_money_rate`) a real `source_as_of`, either by recovering one from a different BB source that IS reliably dated, or by having `media_screen/filter.py::classify()` treat a same-day `parsed_as_of` on an undated-strategy metric as "unknown" rather than "definitely current." Either fix changes what data currency `The Brief`, the staleness sentinel, and this screen all believe about these two metrics — bundled together, not shipped as a side effect of an observability PR.
 
-**Hotfix:** `fix/media-screen-silent` (PR TBD at entry-write time — see AGENTS.md landmine 47 for the PR number once merged) — disposition logging, no-catalog-match visibility, zero-insert streak alert (N=7), partial-insert-write hardening. Root-cause diagnosis only for the `html_labeled_value` as_of-forgery mechanism; the upstream date-recovery fix is deferred.
+**Hotfix:** PR #116 (`fix/media-screen-silent`) — disposition logging, no-catalog-match visibility, zero-insert streak alert (N=7), partial-insert-write hardening. Root-cause diagnosis only for the `html_labeled_value` as_of-forgery mechanism; the upstream date-recovery fix is deferred.
 
 **Cross-references:** AGENTS.md landmines 27, 28 (media-screen precision + report contract, both still binding), 39 (`html_labeled_value`'s deliberate no-recover_source_as_of choice), 47 (new — the undated-parse-strategy gap this incident traces to); `~/.claude/AGENT_LEARNINGS.md` (promote if this "allow-list exemption goes stale when a new strategy is added" pattern recurs elsewhere).
 
