@@ -883,3 +883,130 @@ def upsert_metric_definitions_seed(definitions: list[dict]) -> int:
     except Exception as e:  # noqa: BLE001
         logger.error("upsert_metric_definitions_seed failed: %s", e)
         raise
+
+
+# ============================================================================
+# MONTHLY metric system — metric_history_monthly / metric_definitions_monthly
+# ----------------------------------------------------------------------------
+# A SEPARATE namespace from metric_history/metric_definitions above -- see
+# AGENTS.md landmine 20 ("Two parallel metric systems -- don't mix
+# namespaces"). Monthly ids are always suffixed `_monthly`. Today the
+# namespace is normally populated by the one-off seed/backfill scripts under
+# scripts/ (seed_macro_monthly.py, backfill_call_money_monthly.py), each of
+# which posts via its own small private `_upsert` with
+# `Prefer: resolution=merge-duplicates,return=minimal` on BOTH tables --
+# NOTE this differs from upsert_metric_definitions_seed above (daily
+# namespace), which is ignore-duplicates/first-insert-wins. These two
+# functions mirror that monthly-namespace convention exactly for callers
+# OUTSIDE scripts/ -- e.g. aggregate_latest.py writing the bb_forex
+# gross/BPM6 reserves split (D5, reserves-memo-2026-08-05) -- so a live
+# writer can land rows in the monthly namespace without re-implementing the
+# POST plumbing a third time.
+# ============================================================================
+
+_MONTHLY_HISTORY_TABLE = "metric_history_monthly"
+_MONTHLY_DEFINITIONS_TABLE = "metric_definitions_monthly"
+
+
+def _upsert_monthly_table(
+    table: str,
+    rows: list[dict],
+    on_conflict: str,
+    *,
+    url: str | None = None,
+    service_key: str | None = None,
+    timeout: int = _DEFAULT_TIMEOUT,
+    session: requests.Session | None = None,
+) -> int:
+    """Shared POST helper for the two monthly-namespace tables below.
+
+    Normalises any `date` values to ISO strings (rows may be built with
+    `date` objects for `as_of`/`source_as_of`, matching the daily writer's
+    ergonomics) then upserts with merge-duplicates -- a re-run updates the
+    existing (conflict-key) row rather than erroring.
+    """
+    if not rows:
+        return 0
+    base_url, key = _resolve_credentials(url, service_key)
+    normalised: list[dict] = []
+    for row in rows:
+        r = dict(row)
+        for field in ("as_of", "source_as_of"):
+            if isinstance(r.get(field), date):
+                r[field] = r[field].isoformat()
+        normalised.append(r)
+
+    endpoint = f"{base_url}/rest/v1/{table}?on_conflict={on_conflict}"
+    headers = {
+        "apikey": key,
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+        "Prefer": "resolution=merge-duplicates,return=minimal",
+    }
+    sess = session or requests.Session()
+    upserted = 0
+    for start in range(0, len(normalised), _BATCH_SIZE):
+        batch = normalised[start : start + _BATCH_SIZE]
+        try:
+            resp = sess.post(endpoint, json=batch, headers=headers, timeout=timeout)
+        except requests.exceptions.RequestException as e:
+            raise SupabaseWriteError(f"network error during {table} upsert: {e}") from e
+        if resp.status_code not in (200, 201, 204):
+            raise SupabaseWriteError(
+                f"{table} upsert returned HTTP {resp.status_code}: {resp.text[:200]}"
+            )
+        upserted += len(batch)
+    return upserted
+
+
+def upsert_metric_history_monthly(
+    rows: list[dict],
+    *,
+    url: str | None = None,
+    service_key: str | None = None,
+    timeout: int = _DEFAULT_TIMEOUT,
+    session: requests.Session | None = None,
+) -> int:
+    """Upsert rows into metric_history_monthly on (metric_id, as_of).
+
+    Each row: {metric_id, as_of (date or ISO str), value, source,
+    source_as_of? (date or ISO str)}. Mirrors
+    scripts/seed_macro_monthly.py's private `_upsert` exactly (same
+    on_conflict key, same merge-duplicates Prefer header) -- no `ingested_at`
+    is posted, matching that convention (unlike the daily
+    `upsert_metric_history`, which posts it explicitly per landmine E1.1;
+    the monthly namespace has never needed the write-liveness distinction
+    that fix addressed).
+
+    Raises:
+        SupabaseWriteError: on missing creds, network failure, or non-2xx.
+    """
+    return _upsert_monthly_table(
+        _MONTHLY_HISTORY_TABLE, rows, "metric_id,as_of",
+        url=url, service_key=service_key, timeout=timeout, session=session,
+    )
+
+
+def upsert_metric_definitions_monthly(
+    definitions: list[dict],
+    *,
+    url: str | None = None,
+    service_key: str | None = None,
+    timeout: int = _DEFAULT_TIMEOUT,
+    session: requests.Session | None = None,
+) -> int:
+    """Upsert metric_definitions_monthly rows on metric_id (merge-duplicates).
+
+    Unlike upsert_metric_definitions_seed (daily namespace,
+    ignore-duplicates/first-insert-wins so manual Studio edits survive), the
+    monthly namespace's own seed scripts use merge-duplicates -- an edited
+    definition (label, unit, notes) re-lands on the next write. Matches
+    scripts/seed_macro_monthly.py._upsert exactly.
+
+    Raises:
+        SupabaseWriteError: on missing creds, network failure, or non-2xx.
+    """
+    return _upsert_monthly_table(
+        _MONTHLY_DEFINITIONS_TABLE, definitions, "metric_id",
+        url=url, service_key=service_key, timeout=timeout, session=session,
+    )

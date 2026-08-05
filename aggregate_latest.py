@@ -22,6 +22,7 @@ from utils.schema import (
     Alert,
     CommoditySnapshot,
     DseSnapshot,
+    ForexReserves,
     ForexSnapshot,
     FreshnessByCadence,
     FreshnessSummary,
@@ -850,6 +851,160 @@ def _apply_media_overrides(
         logger.info("media override applied: %s = %s @ %s", mid, r["press_value"], press_as_of)
 
 
+# ============================================================================
+# Reserves gross/BPM6 monthly split (D5, reserves-memo-2026-08-05)
+# ----------------------------------------------------------------------------
+# Writes the two series The Brief's chartConfigs.ts reservesConfig() already
+# expects into the MONTHLY namespace (metric_history_monthly /
+# metric_definitions_monthly -- AGENTS.md landmine 20), completely SEPARATE
+# from the existing daily gross_reserves_usd_bn / fx_reserve_gross_and_bpm6
+# write above (flatten_data / the ~1200-line alias block in main()), which
+# this section does not touch. Additive only: an older bb_forex snapshot
+# with no bpm6_reserves_usd_bn (pre-dating this PR) simply produces no
+# monthly write, same as any other new metric before its first successful
+# scrape -- no existing metric_history/metric_history_monthly row is ever
+# rewritten or restated here.
+# ============================================================================
+
+RESERVES_MONTHLY_GROSS_ID = "gross_reserves_usd_bn_monthly"
+RESERVES_MONTHLY_BPM6_ID = "net_reserves_bpm6_usd_bn_monthly"
+RESERVES_MONTHLY_SOURCE = "bb_forex"
+RESERVES_MONTHLY_SOURCE_URL = "https://www.bb.org.bd/en/index.php/econdata/intreserve"
+# Mirrors scrapers.bb_forex._BPM6_GROSS_RATIO_MIN/MAX -- see that module for
+# how this band was calibrated. Duplicated (not imported) on purpose: this is
+# a defensive RE-check, not the source of truth (parse time is), and keeping
+# aggregate_latest decoupled from bb_forex's internals matches how the
+# bpm6 < gross direction re-check below was already duplicated.
+_RESERVES_MONTHLY_RATIO_MIN = 0.70
+_RESERVES_MONTHLY_RATIO_MAX = 0.95
+# metric_definitions_monthly / metric_definitions grace window for a monthly
+# cadence (sentinel/cadence.py GRACE_DAYS_BY_CADENCE["monthly"], docs/
+# data-contract.md §10 Block 1). v_metric_freshness COALESCEs grace_days from
+# metric_definitions_monthly -- a NULL there makes is_fresh permanently
+# unknown (NULL), not merely wrong, for these two ids (2026-08-05 review M5).
+_RESERVES_MONTHLY_GRACE_DAYS = 45
+
+
+def _reserves_monthly_definitions() -> list[dict]:
+    """metric_definitions_monthly rows for the two reserves-split ids.
+
+    display_name/unit/domain/notes are kept BYTE-IDENTICAL to
+    scripts/seed_macro_monthly.py's KEY_MAP entries for these exact same ids
+    (fxReserve/fxBPM6) on purpose (2026-08-05 review L1): both writers use
+    merge-duplicates upsert on metric_id, so whichever writer ran most
+    recently wins for source_url/source_attribution -- that's the ONE field
+    pair genuinely left to last-writer-wins, and it's fine because it's
+    provenance metadata, not anything a viewer reads as the label/unit/
+    domain/notes. Keeping those four fields identical between the two
+    writers means the last-writer-wins behaviour on the other two fields is
+    invisible to anyone reading metric_definitions_monthly.
+    """
+    return [
+        {
+            "metric_id": RESERVES_MONTHLY_GROSS_ID,
+            "display_name": "FX reserves (gross)",
+            "unit": "USD bn",
+            "source_url": RESERVES_MONTHLY_SOURCE_URL,
+            "source_attribution": "Bangladesh Bank",
+            "domain": "external",
+            "description": "Gross foreign exchange reserves (BB headline measure).",
+            "notes": "",
+            "grace_days": _RESERVES_MONTHLY_GRACE_DAYS,
+        },
+        {
+            "metric_id": RESERVES_MONTHLY_BPM6_ID,
+            "display_name": "FX reserves (BPM6/net)",
+            "unit": "USD bn",
+            "source_url": RESERVES_MONTHLY_SOURCE_URL,
+            "source_attribution": "Bangladesh Bank",
+            "domain": "external",
+            "description": "Foreign exchange reserves per IMF BPM6 methodology.",
+            "notes": "Sparse — BB began reporting BPM6 ~2021; nulls for earlier months.",
+            "grace_days": _RESERVES_MONTHLY_GRACE_DAYS,
+        },
+    ]
+
+
+def _write_reserves_monthly_split(reserves: ForexReserves | None) -> int:
+    """Write the two-series reserves split into metric_history_monthly (D5).
+
+    gross_reserves_usd_bn_monthly and net_reserves_bpm6_usd_bn_monthly are
+    DECOUPLED (2026-08-05 review M1): gross does not depend on BPM6 being
+    present, so a reserves read with bpm6_reserves_usd_bn=None (an older
+    pre-this-PR snapshot, or a genuine future BB layout without that column)
+    still writes gross alone -- only the BPM6 row is withheld, and why is
+    logged (H4: this must never be silent).
+
+    The bpm6 < gross direction invariant AND the bpm6/gross ratio band are
+    both enforced at PARSE time (scrapers/bb_forex.py -- a violation there
+    raises ParseError and no new snapshot is written at all, so bad data
+    can't even reach here), but both are re-checked defensively before
+    writing here too. Either violation blocks BOTH series (it signals
+    corruption, not absence, per M1) -- unlike the bpm6=None case above.
+
+    Best-effort like the rest of main()'s Supabase write block --
+    SupabaseWriteError propagates to the caller's existing try/except.
+
+    Returns the number of history rows upserted (0, 1, or 2).
+    """
+    if reserves is None:
+        logger.warning("reserves monthly split: forex.reserves is None -- nothing to write")
+        return 0
+
+    gross = reserves.gross_reserves_usd_bn
+    bpm6 = reserves.bpm6_reserves_usd_bn
+    as_of_iso = _month_end(reserves.reserves_date).isoformat()
+
+    write_bpm6 = bpm6 is not None
+    if bpm6 is None:
+        logger.warning(
+            "reserves monthly split: bpm6_reserves_usd_bn is None for %s -- "
+            "writing %s only, withholding %s",
+            reserves.reserves_date.isoformat(), RESERVES_MONTHLY_GROSS_ID, RESERVES_MONTHLY_BPM6_ID,
+        )
+    elif bpm6 >= gross:
+        logger.warning(
+            "reserves monthly split: bpm6 (%.4f) >= gross (%.4f) for %s -- "
+            "refusing BOTH monthly writes (column-identification failure)",
+            bpm6, gross, reserves.reserves_date.isoformat(),
+        )
+        return 0
+    elif not (_RESERVES_MONTHLY_RATIO_MIN <= bpm6 / gross <= _RESERVES_MONTHLY_RATIO_MAX):
+        logger.warning(
+            "reserves monthly split: bpm6/gross ratio %.4f for %s is outside "
+            "[%.2f, %.2f] -- refusing BOTH monthly writes (magnitude/unit "
+            "corruption, not a column swap)",
+            bpm6 / gross, reserves.reserves_date.isoformat(),
+            _RESERVES_MONTHLY_RATIO_MIN, _RESERVES_MONTHLY_RATIO_MAX,
+        )
+        return 0
+
+    from utils.supabase_writer import (
+        upsert_metric_definitions_monthly,
+        upsert_metric_history_monthly,
+    )
+
+    rows = [
+        {
+            "metric_id": RESERVES_MONTHLY_GROSS_ID,
+            "as_of": as_of_iso,
+            "value": gross,
+            "source": RESERVES_MONTHLY_SOURCE,
+            "source_as_of": as_of_iso,
+        },
+    ]
+    if write_bpm6:
+        rows.append({
+            "metric_id": RESERVES_MONTHLY_BPM6_ID,
+            "as_of": as_of_iso,
+            "value": bpm6,
+            "source": RESERVES_MONTHLY_SOURCE,
+            "source_as_of": as_of_iso,
+        })
+    upsert_metric_definitions_monthly(_reserves_monthly_definitions())
+    return upsert_metric_history_monthly(rows)
+
+
 # EconDelta indicator-id ↔ brief metric_id alias map. The brief expects a
 # specific naming convention per section (`macro_*`, `remit_*`, `fiscal_*`,
 # `banking_*`, `food_*`); EconDelta keeps its own indicator IDs authoritative.
@@ -1388,6 +1543,7 @@ def main() -> int:
             # its 07:00 window, so an unscoped ingested_at>= count is exact.
             verify_landed_count(n_rows, since=write_ts, source_label="aggregate")
             _apply_media_overrides(data, source_as_of_map)
+
         except SupabaseWriteError as e:
             logger.warning(
                 "Supabase write failed: %s — continuing with local archive only", e,
@@ -1402,6 +1558,48 @@ def main() -> int:
                 "metric_history upsert failed; consumers will serve the previous "
                 f"snapshot until the next successful run. {type(e).__name__}: {e}",
             )
+
+        # Reserves gross/BPM6 monthly split (D5) -- same freshness gate as the
+        # fx_reserve_gross_and_bpm6 alias above: only write from a bb_forex
+        # read that's actually fresh, not a carried-forward file. Own
+        # try/except (2026-08-05 review L3): a monthly-namespace write
+        # failure must notify with its OWN distinct message, not get
+        # conflated with a daily metric_history failure above -- both are
+        # "Supabase write failed" superficially, but they're different
+        # tables and a responder needs to know which one to check.
+        if os.environ.get("ECONDELTA_SKIP_SUPABASE") != "1" and forex is not None and bb_forex_ok:
+            from utils.supabase_writer import SupabaseWriteError
+
+            try:
+                monthly_rows = _write_reserves_monthly_split(forex.reserves)
+                if monthly_rows:
+                    logger.info(
+                        "upserted %d row(s) to Supabase metric_history_monthly "
+                        "(reserves split, D5)", monthly_rows,
+                    )
+                else:
+                    # H4: bb_forex is fresh and forex.reserves is present, yet
+                    # nothing landed -- this must never be silent. The specific
+                    # reason (bpm6 missing / invariant or ratio-band refused /
+                    # reserves somehow None) was already logged inside
+                    # _write_reserves_monthly_split; this confirms it's visible
+                    # at the top-level run log too.
+                    logger.warning(
+                        "reserves monthly split: 0 rows written this run despite "
+                        "bb_forex being fresh -- see the warning above for why",
+                    )
+            except SupabaseWriteError as e:
+                logger.warning(
+                    "Supabase monthly-namespace write failed: %s — continuing "
+                    "with local archive only", e,
+                )
+                notify(
+                    "error",
+                    "aggregate — Supabase monthly write failed",
+                    "metric_history_monthly upsert (reserves split, D5) failed; "
+                    "The Brief's gross/BPM6 chart will serve stale data until "
+                    f"the next successful run. {type(e).__name__}: {e}",
+                )
 
     summary = " ".join(
         f"{k}={s.status}({s.age_hours}h)" if s.age_hours is not None else f"{k}={s.status}"

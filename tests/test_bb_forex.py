@@ -213,6 +213,272 @@ class TestParseReserves:
         assert reserves.import_cover_months is None
         assert reserves.reserves_date == date(2026, 3, 1)
 
+    def test_bpm6_extracted_alongside_gross(self):
+        """The BPM6 column is extracted into bpm6_reserves_usd_bn, mn->bn
+        converted just like gross (D5 reserves split, 2026-08-05 memo)."""
+        html = _read_fixture("bb_forex_reserves.html")
+        reserves = parse_reserves(html)
+        # Fixture shows March 2026 BPM6 = 29501.2 million -> 29.5012 billion
+        assert reserves.bpm6_reserves_usd_bn == pytest.approx(29.5012, abs=0.001)
+
+    def test_bpm6_is_strictly_below_gross_on_real_fixture(self):
+        html = _read_fixture("bb_forex_reserves.html")
+        reserves = parse_reserves(html)
+        assert reserves.bpm6_reserves_usd_bn < reserves.gross_reserves_usd_bn
+
+    def test_columns_identified_by_header_text_not_position(self):
+        """BB reordering the Gross/BPM6 columns (without warning) must not
+        silently swap the two values -- the parser locates each column by
+        its header TEXT ('gross' / 'bpm6'), not by cells[1]/cells[2]."""
+        html = (
+            "<html><body>"
+            "<table id='sortableTable'>"
+            "<tr><td>(In million US $)</td></tr>"
+            "<tr><td>Period</td>"
+            "<td>Foreign Exchange Reserves(as per BPM6)</td>"
+            "<td>Foreign Exchange Reserves(Gross)</td></tr>"
+            "<tr><td>2025-2026</td></tr>"
+            "<tr><td>March</td><td>29501.2</td><td>34116.6</td></tr>"
+            "</table>"
+            "</body></html>"
+        )
+        reserves = parse_reserves(html)
+        assert reserves.gross_reserves_usd_bn == pytest.approx(34.1166, abs=0.0001)
+        assert reserves.bpm6_reserves_usd_bn == pytest.approx(29.5012, abs=0.0001)
+
+    def test_bpm6_col_missing_leaves_bpm6_none(self):
+        """A 3-column table whose third header doesn't say 'BPM6' at all
+        (e.g. a genuine future BB layout change replacing that column)
+        degrades gracefully -- gross still parses, bpm6_reserves_usd_bn is
+        None, no error. Distinct from the invariant-violation case below,
+        which DOES raise (a value present in the wrong place, not a column
+        that's genuinely absent)."""
+        html = (
+            "<html><body>"
+            "<table id='sortableTable'>"
+            "<tr><td>(In million US $)</td></tr>"
+            "<tr><td>Period</td><td>Foreign Exchange Reserves(Gross)</td><td>Import Cover (Months)</td></tr>"
+            "<tr><td>2025-2026</td></tr>"
+            "<tr><td>March</td><td>34116.6</td><td>4.2</td></tr>"
+            "</table>"
+            "</body></html>"
+        )
+        reserves = parse_reserves(html)
+        assert reserves.gross_reserves_usd_bn == pytest.approx(34.1166, abs=0.0001)
+        assert reserves.bpm6_reserves_usd_bn is None
+
+    def test_bpm6_gte_gross_raises_column_identification_parse_error(self):
+        """The cross-column invariant: BPM6 must be strictly below Gross by
+        construction. A row where the parsed 'BPM6' value is >= the parsed
+        'Gross' value means the columns were misidentified -- refuse BOTH
+        figures rather than write a corrupted gross value (closes the
+        column-slip hole flagged in the D5 reserves-memo, 2026-08-05)."""
+        html = (
+            "<html><body>"
+            "<table id='sortableTable'>"
+            "<tr><td>(In million US $)</td></tr>"
+            "<tr><td>Period</td><td>Foreign Exchange Reserves(Gross)</td><td>Foreign Exchange Reserves(as per BPM6)</td></tr>"
+            "<tr><td>2025-2026</td></tr>"
+            "<tr><td>March</td><td>29501.2</td><td>34116.6</td></tr>"
+            "</table>"
+            "</body></html>"
+        )
+        with pytest.raises(ParseError, match="column identification failure"):
+            parse_reserves(html)
+
+    def test_bpm6_equal_to_gross_also_raises(self):
+        """Boundary: bpm6 == gross is also invalid (must be STRICTLY below)."""
+        html = (
+            "<html><body>"
+            "<table id='sortableTable'>"
+            "<tr><td>(In million US $)</td></tr>"
+            "<tr><td>Period</td><td>Foreign Exchange Reserves(Gross)</td><td>Foreign Exchange Reserves(as per BPM6)</td></tr>"
+            "<tr><td>2025-2026</td></tr>"
+            "<tr><td>March</td><td>34116.6</td><td>34116.6</td></tr>"
+            "</table>"
+            "</body></html>"
+        )
+        with pytest.raises(ParseError, match="column identification failure"):
+            parse_reserves(html)
+
+    # -----------------------------------------------------------------
+    # H1 (2026-08-05 Opus review) -- ambiguous/tolerant header matching
+    # -----------------------------------------------------------------
+
+    def test_two_gross_candidates_raises_not_wrong_value(self):
+        """A second column that happens to contain the word 'gross' (e.g. an
+        unrelated 'USD/BDT Gross Rate' column) must NOT silently win by being
+        scanned last -- the review reproduced exactly this (gross=4148.0 read
+        from a BDT column, with the bpm6<gross direction check still passing
+        because 4148.0 > bpm6). Two Gross candidates is ambiguous: raise,
+        don't guess."""
+        html = (
+            "<html><body>"
+            "<table id='sortableTable'>"
+            "<tr><td>(In million US $)</td></tr>"
+            "<tr><td>Period</td><td>Foreign Exchange Reserves(Gross)</td>"
+            "<td>Foreign Exchange Reserves(as per BPM6)</td><td>USD/BDT Gross Rate</td></tr>"
+            "<tr><td>2025-2026</td></tr>"
+            "<tr><td>March</td><td>34116.6</td><td>29501.2</td><td>4148.0</td></tr>"
+            "</table>"
+            "</body></html>"
+        )
+        with pytest.raises(ParseError, match="header identification failed"):
+            parse_reserves(html)
+
+    def test_zero_gross_candidates_raises(self):
+        """No column matches 'gross' at all -- must raise, not silently skip
+        to no data / a stale fallback."""
+        html = (
+            "<html><body>"
+            "<table id='sortableTable'>"
+            "<tr><td>(In million US $)</td></tr>"
+            "<tr><td>Period</td><td>Foreign Exchange Reserves(Net)</td>"
+            "<td>Foreign Exchange Reserves(as per BPM6)</td></tr>"
+            "<tr><td>2025-2026</td></tr>"
+            "<tr><td>March</td><td>34116.6</td><td>29501.2</td></tr>"
+            "</table>"
+            "</body></html>"
+        )
+        with pytest.raises(ParseError, match="header identification failed"):
+            parse_reserves(html)
+
+    @pytest.mark.parametrize("bpm6_label", [
+        "Foreign Exchange Reserves(as per BPM6)",
+        "Foreign Exchange Reserves(as per BPM 6)",
+        "Foreign Exchange Reserves(as per BPM-6)",
+        "Reserves (BPM 6)",
+        "Reserves (BPM-6)",
+    ])
+    def test_bpm6_header_spelling_variants_all_match(self, bpm6_label):
+        """The exact substring match ('bpm6') previously missed 'BPM 6' /
+        'BPM-6' spellings, silently leaving bpm6_col=None and disarming the
+        invariant entirely. The tolerant token (bpm[ -]?6) must catch all of
+        these."""
+        html = (
+            "<html><body>"
+            "<table id='sortableTable'>"
+            "<tr><td>(In million US $)</td></tr>"
+            f"<tr><td>Period</td><td>Foreign Exchange Reserves(Gross)</td><td>{bpm6_label}</td></tr>"
+            "<tr><td>2025-2026</td></tr>"
+            "<tr><td>March</td><td>34116.6</td><td>29501.2</td></tr>"
+            "</table>"
+            "</body></html>"
+        )
+        reserves = parse_reserves(html)
+        assert reserves.bpm6_reserves_usd_bn == pytest.approx(29.5012, abs=0.0001)
+
+    def test_benign_extra_column_does_not_confuse_header_matching(self):
+        """A genuinely unrelated extra column (e.g. Import Cover) alongside
+        Gross and BPM6 must not trip the ambiguity guard -- only columns that
+        actually match 'gross' or the BPM6 token count as candidates."""
+        html = (
+            "<html><body>"
+            "<table id='sortableTable'>"
+            "<tr><td>(In million US $)</td></tr>"
+            "<tr><td>Period</td><td>Foreign Exchange Reserves(Gross)</td>"
+            "<td>Foreign Exchange Reserves(as per BPM6)</td><td>Import Cover (Months)</td></tr>"
+            "<tr><td>2025-2026</td></tr>"
+            "<tr><td>March</td><td>34116.6</td><td>29501.2</td><td>4.2</td></tr>"
+            "</table>"
+            "</body></html>"
+        )
+        reserves = parse_reserves(html)
+        assert reserves.gross_reserves_usd_bn == pytest.approx(34.1166, abs=0.0001)
+        assert reserves.bpm6_reserves_usd_bn == pytest.approx(29.5012, abs=0.0001)
+
+    # -----------------------------------------------------------------
+    # H2 (2026-08-05 Opus review) -- bpm6/gross magnitude band
+    # -----------------------------------------------------------------
+
+    def test_ratio_band_catches_magnitude_corruption_direction_check_misses(self):
+        """A same-direction magnitude corruption (gross ~122x too large, e.g.
+        a decimal/unit mixup) still satisfies bpm6 < gross, so the direction
+        check alone passes it through -- the review's reproduced failure
+        mode. The ratio band must catch it."""
+        html = (
+            "<html><body>"
+            "<table id='sortableTable'>"
+            "<tr><td>(In million US $)</td></tr>"
+            "<tr><td>Period</td><td>Foreign Exchange Reserves(Gross)</td>"
+            "<td>Foreign Exchange Reserves(as per BPM6)</td></tr>"
+            "<tr><td>2025-2026</td></tr>"
+            "<tr><td>March</td><td>3611660.0</td><td>29501.2</td></tr>"
+            "</table>"
+            "</body></html>"
+        )
+        with pytest.raises(ParseError, match=r"ratio.*outside the expected band"):
+            parse_reserves(html)
+
+    def test_ratio_band_accepts_full_real_fixture_history(self):
+        """Every one of the 27 real, committed months in
+        scripts/_seed_data/bb_reserves_gross_bpm6_history.json (2024-04 ..
+        2026-06) must fall inside the ratio band -- the band was calibrated
+        against exactly this data (min observed 0.7643, max 0.8763)."""
+        import json as _json
+        from pathlib import Path as _Path
+
+        fixture_path = (
+            _Path(__file__).resolve().parent.parent
+            / "scripts" / "_seed_data" / "bb_reserves_gross_bpm6_history.json"
+        )
+        payload = _json.loads(fixture_path.read_text())
+        for row in payload["rows"]:
+            ratio = row["bpm6_usd_mn"] / row["gross_usd_mn"]
+            assert 0.70 <= ratio <= 0.95, f"{row['period']}: ratio {ratio:.4f} outside band"
+
+    # -----------------------------------------------------------------
+    # M4 (2026-08-05 Opus review) -- flexible period-header label + a
+    # distinct error message when header identification itself fails.
+    # -----------------------------------------------------------------
+
+    @pytest.mark.parametrize("period_label", ["Period", "Month", "End Period", "PERIOD", "month"])
+    def test_period_header_label_variants_accepted(self, period_label):
+        html = (
+            "<html><body>"
+            "<table id='sortableTable'>"
+            "<tr><td>(In million US $)</td></tr>"
+            f"<tr><td>{period_label}</td><td>Foreign Exchange Reserves(Gross)</td>"
+            "<td>Foreign Exchange Reserves(as per BPM6)</td></tr>"
+            "<tr><td>2025-2026</td></tr>"
+            "<tr><td>March</td><td>34116.6</td><td>29501.2</td></tr>"
+            "</table>"
+            "</body></html>"
+        )
+        reserves = parse_reserves(html)
+        assert reserves.gross_reserves_usd_bn == pytest.approx(34.1166, abs=0.0001)
+
+    def test_no_recognisable_header_row_raises_header_identification_failed(self):
+        """When NO row's first cell matches a known period label at all, the
+        error must say header identification failed -- distinct from 'no
+        data rows', which means a header WAS found but no row parsed after
+        it (a different failure to diagnose)."""
+        html = (
+            "<html><body>"
+            "<table id='sortableTable'>"
+            "<tr><td>March</td><td>34116.6</td><td>29501.2</td></tr>"
+            "</table>"
+            "</body></html>"
+        )
+        with pytest.raises(ParseError, match="header identification failed"):
+            parse_reserves(html)
+
+    def test_header_found_but_no_data_row_raises_distinct_message(self):
+        """A recognised header row with no data row after it is a DIFFERENT
+        failure from never finding a header -- keep the two error messages
+        distinguishable."""
+        html = (
+            "<html><body>"
+            "<table id='sortableTable'>"
+            "<tr><td>(In million US $)</td></tr>"
+            "<tr><td>Period</td><td>Foreign Exchange Reserves(Gross)</td>"
+            "<td>Foreign Exchange Reserves(as per BPM6)</td></tr>"
+            "</table>"
+            "</body></html>"
+        )
+        with pytest.raises(ParseError, match="Could not find any reserves data rows"):
+            parse_reserves(html)
+
     def test_reserves_date_uses_fiscal_header_unlike_current_year(self):
         """A fiscal header year that does NOT match whatever year the suite
         happens to run in must still win — the dead isdigit() check this PR

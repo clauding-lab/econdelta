@@ -756,6 +756,55 @@ remaining 7 (`tax_gdp_ratio`, `rev_gdp_ratio`, `non_tax_revenue`,
 All frozen (`ingested_at` stopped weeks ago) with a live successor — safe to mark
 `deprecated` (Block 3). Rows are kept, not pruned (owner decision Option A).
 
+### 10.7 Duplicate alias metric_id pairs — never double-count (D5 reserves-memo)
+
+**Duplicate alias metric_ids — these are the same measurement written twice,
+never independent confirmation.** Several `metric_id`s in `metric_history` are
+aliases minted from a single upstream value by the aggregator's force-overwrite
+alias block (`aggregate_latest.py`'s `main()`, the block that mints
+`usd_bdt_exchange_rate` / `fx_reserve_gross_and_bpm6` from `forex.rates` /
+`forex.reserves` — see also `_build_source_as_of_map`'s equivalent date
+propagation). They are byte-identical, including `as_of`, `ingested_at` and
+`source`. When two of them agree, that is arithmetic, not corroboration —
+**never** treat an alias pair as two sources confirming each other, and never
+let both members enter an average, a count of "sources agreeing", or a
+confidence score. Verified 2026-08-05 against prod Supabase (`plans/memos/
+reserves-memo-2026-08-05.md`, §5):
+
+| Pair | Rows | Status |
+|---|---|---|
+| `fx_reserve_gross_and_bpm6` ≡ `gross_reserves_usd_bn` | 58 | Fully identical (all columns) |
+| `banking_npl_pct` ≡ `gross_npl_ratio` | 2 | Fully identical (all columns) |
+| `banking_sector_crar` ≡ `banking_car_pct` | 1 | Fully identical (all columns) |
+
+The first pair is the one this PR's D5 reserves split addresses directly: the
+`_monthly`-suffixed pair the chart contract actually reads
+(`gross_reserves_usd_bn_monthly` / `net_reserves_bpm6_usd_bn_monthly`, written
+by `aggregate_latest._write_reserves_monthly_split`) is a genuinely NEW pair of
+series (gross vs BPM6 — two different accounting bases), not a duplicate of
+each other. The daily `fx_reserve_gross_and_bpm6` ≡ `gross_reserves_usd_bn`
+alias above is untouched by this PR — collapsing it is a separate,
+destructive-restatement decision explicitly deferred to the owner (see the
+memo §4.3 for why: 57 of 58 rows carry a run-date `as_of` forgery predating
+PR #97, so a naive collapse would also need the `as_of` restatement, which
+needs its own sign-off).
+
+**A fourth pair looked the same shape but is NOT a clean alias — flag, don't
+assume benign:**
+
+| Pair | Rows | Status |
+|---|---|---|
+| `banking_reserve_money` ≡ `reserve_money` | 94 | Identical on 93/94 dates — **diverges at 2026-07-10** |
+
+On 2026-07-10, `reserve_money` = 435,407.1 while `banking_reserve_money` =
+485,542.3 (a 50,135.2 gap, ~11.5%), with all 93 other dates in exact agreement.
+A single divergent day in an otherwise byte-identical pair is the signature of
+one writer catching a bad or partial read on that one date — it needs its own
+investigation (which of the two writers misread; whether the divergent date
+should be corrected or the pair should stay independent going forward) and is
+explicitly **out of scope for this PR** — tracked as an open follow-up, not
+fixed here.
+
 ---
 
 **Questions, schema requests, new consumer onboarding**: open an issue

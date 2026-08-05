@@ -67,11 +67,22 @@ class ForexRates(BaseModel):
 
 
 class ForexReserves(BaseModel):
-    """BB foreign exchange reserves snapshot."""
+    """BB foreign exchange reserves snapshot.
+
+    ``bpm6_reserves_usd_bn`` is additive (2026-08, D5 reserves-memo split):
+    older snapshot files written before this field existed simply validate
+    with it defaulting to ``None`` — nothing about the pre-existing
+    ``gross_reserves_usd_bn`` value or any stored row changes. It is
+    ``None`` only when BB's reserves table genuinely didn't carry a BPM6
+    column for that read; ``scrapers.bb_forex.parse_reserves`` refuses the
+    write entirely (raises ``ParseError``) rather than accept a BPM6 value
+    that fails the ``bpm6 < gross`` cross-column invariant.
+    """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     gross_reserves_usd_bn: float
+    bpm6_reserves_usd_bn: float | None = None
     import_cover_months: float | None = None
     reserves_date: date
     source_url: str
