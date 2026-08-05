@@ -823,14 +823,15 @@ Both ids are LLM-only extractions from the same BB MEI PDF table ("A.
 Consumer price index (CPI) and rate of inflation at national level"), which
 prints TWO methodology groups side by side — "Twelve-month average" and
 "Point to Point" — each with its own General/Food/Non-food columns. Checked
-against the real June-2026 fixture (`tests/_pdfs/bb_mei_2026_june.pdf`,
-printed page 14 of this edition per the document's own footer — inside the
-config's `page 15` hint's ±3-page search window, so this is the same table
+against the real June-2026 fixture (`tests/_pdfs/bb_mei_2026_june.pdf`).
+`general_inflation`'s config task hint is `"page 15"` — a 1-indexed PDF-page
+number, whose ±3-page search window (`_extract_pdf_text`'s default) covers
+PDF pages 12–18. The actual CPI table sits at PDF page 17 (printed page 14
+per the document's own footer — inside that window, so this IS the table
 `general_inflation`'s config already points at): the "Twelve-month average →
-General" column reads
-8.59 (Apr) / 8.63 (May) / 8.68 (Jun) — matching `general_inflation`'s
-historical values almost exactly — while the "Point to Point → General"
-column reads 9.04 (Apr) / 9.42 (May) / 9.16 (Jun) — matching
+General" column reads 8.59 (Apr) / 8.63 (May) / 8.68 (Jun) — matching
+`general_inflation`'s historical values almost exactly — while the "Point to
+Point → General" column reads 9.04 (Apr) / 9.42 (May) / 9.16 (Jun) — matching
 `point_to_point_inflation`'s. `food_inflation`/`non_food_inflation` (same
 config task template, "page 15, first table") reliably resolve to the
 Point-to-Point Food/Non-food columns across the same history — only
@@ -842,18 +843,47 @@ converged with `point_to_point_inflation` for the first time on 2026-06-30
 only because that row came from config-conversion batch 1's NEW deterministic
 `pdf_component` extraction (reads the Executive Summary's explicit "Headline
 inflation (p-t-p) ... 9.16 percent" sentence, unambiguous by construction),
-not because the two ids became a stable pair. **Verdict: not a confirmed
-duplicate (values disagree on 4 of the last 5 dates) and not safely
-independent either (the disagreement looks like one metric's extraction
-being unreliable, not two real different numbers) — flagged, not fixed.**
-Do not add this pair to the confirmed-alias table above. Do not convert
-`general_inflation` to a deterministic parser until the underlying
-dynamic-month-row table problem (same blocker as `food_inflation`/
-`non_food_inflation`, AGENTS.md landmine 47) is solved — and when it is,
-anchor `general_inflation` to the SAME "Point to Point → General" column the
-other three siblings already use, not the ambiguous "first table"
-instruction that produced this drift. See also `AGENT_LEARNINGS.md`
-(2026-08-05 entry) for the incident writeup.
+not because the two ids became a stable pair.
+
+**Verdict: not a confirmed duplicate (values disagree on 4 of the last 5
+dates) and not safely independent either (the disagreement looks like one
+metric's extraction being unreliable, not two real different numbers) —
+flagged, not fixed.** Do not add this pair to the confirmed-alias table
+above. Do not convert `general_inflation` to a deterministic parser until the
+underlying dynamic-month-row table problem (same blocker as
+`food_inflation`/`non_food_inflation`, AGENTS.md landmine 49) is solved.
+
+**Which column to anchor `general_inflation` to once a dynamic-row parser
+exists is an OWNER decision, not an engineering one — the two options have
+materially different consequences, not just different numbers:**
+
+- **Option A — anchor to "Point to Point → General"** (matching
+  `point_to_point_inflation`'s own extraction). Consequence: `general_inflation`
+  becomes a genuine, permanent duplicate of `point_to_point_inflation` — which
+  ALREADY reads exactly this number (the Executive Summary's own "9.16"
+  sentence IS the Point-to-Point General figure for June) — inside the very
+  section of this document whose purpose is "never double-count these as
+  independent confirmation." It would also BREAK `general_inflation`'s own
+  series continuity: its production history (8.59 / 8.60 / 8.63) tracked the
+  Twelve-month-average column, not Point-to-Point, and there is no backfill
+  plan to reconcile the two.
+- **Option B — anchor to "Twelve-month average → General"** (matching
+  `general_inflation`'s own historical values). Consequence: this is a real,
+  separately-published BB concept — the MEI's own Executive Summary states it
+  independently ("12-month average inflation increased to 8.68 percent in
+  June 2026") — so the pair stays legitimately independent, and the metric's
+  own history stays CONTINUOUS (no discontinuity, no backfill needed).
+
+Whichever option the owner picks, a THIRD candidate in the same ±3-page
+window must be ruled out first: the MEI's Wage Rate Index table ("B. Wage
+Rate Index (WRI) and growth rate at national level", PDF page 18 / printed
+page 15) ALSO has its own "Point to Point → General" column (June growth
+8.18) — a plausible-looking wrong match for anyone building a row/column
+selector against a bare `"General"` anchor without first confirming which
+TABLE it's scoped to. Per the domain-expert-outranks-converging-AIs rule,
+this PR does not pick an option — it hands off the anchor, the consequences,
+and the third-candidate trap, ready for a sign-off. See also
+`AGENT_LEARNINGS.md` (2026-08-05 entry) for the incident writeup.
 
 ---
 
