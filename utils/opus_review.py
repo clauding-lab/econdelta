@@ -119,7 +119,19 @@ def review_data(
 
     try:
         result = subprocess.run(
-            [binary, "--print", "--model", model],
+            [
+                binary, "--print",
+                "--model", model,
+                "--no-session-persistence",
+                "--tools", "",
+                # Block MCP-plugin loading. Without this, a stray plugin
+                # installed in ~/.claude/plugins/ can hijack stdout on this
+                # ~250KB-of-scraped-content review call. Mirrors the fix in
+                # claude_max/max_client.py — keeps all claude-CLI call sites
+                # in lockstep.
+                "--strict-mcp-config",
+                "--permission-mode", "bypassPermissions",
+            ],
             input=prompt,
             capture_output=True,
             text=True,
