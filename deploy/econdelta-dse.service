@@ -15,6 +15,20 @@ User=adnan-local
 Group=adnan-local
 WorkingDirectory=/home/adnan-local/econdelta
 EnvironmentFile=/etc/econdelta.env
+# Log-file ownership guard (deploy/README.md Troubleshooting,
+# AGENT_LEARNINGS.md 2026-08-05): if this log is absent, systemd
+# creates the StandardOutput/StandardError append target as root
+# before ExecStart drops to User=/Group=. The file is world-readable
+# (0644) either way; the break is the WRITE side — nightly logrotate's
+# `su adnan-local adnan-local` + copytruncate opens O_RDWR to truncate,
+# which a non-root adnan-local can't do to a root-owned file. '+' runs
+# outside this unit's own sandboxing so the chown always succeeds no
+# matter who most recently (re)created the file; the leading
+# `[ -L ... ] && exit 1` refuses (aborts the whole start) instead of
+# chowning/chmoding through a symlink if the path is ever swapped for
+# one (CWE-59). chmod 0644 here is deliberately this guard's mode
+# authority for the log file, not just a touch side effect.
+ExecStartPre=+/bin/sh -c '[ -L /home/adnan-local/econdelta/logs/dse_market-systemd.log ] && exit 1; touch /home/adnan-local/econdelta/logs/dse_market-systemd.log && chmod 0644 /home/adnan-local/econdelta/logs/dse_market-systemd.log && chown adnan-local:adnan-local /home/adnan-local/econdelta/logs/dse_market-systemd.log'
 ExecStart=/home/adnan-local/econdelta/.venv/bin/python -m scrapers.dse_market
 
 # Resource limits to protect Notifyr and Mission Control on the same VPS
@@ -32,7 +46,13 @@ ReadWritePaths=/home/adnan-local/econdelta/data /home/adnan-local/econdelta/logs
 
 # Timeouts + retry on transient failures
 TimeoutStartSec=60
+# exit 2 = index/market anomaly vs. previous trading day (write skipped) —
+# not a transient failure. A restart would hit DSE again and reach the
+# identical verdict, wasting a fetch and duplicating the Discord alert.
+# Retry only genuine failures (exit 1: fetch/parse failure). Mirrors the
+# same exit-2 precedent as econdelta-forex.service / econdelta-briefing.service.
 Restart=on-failure
+RestartPreventExitStatus=2
 RestartSec=300
 
 # Logging — systemd journal + append to file
