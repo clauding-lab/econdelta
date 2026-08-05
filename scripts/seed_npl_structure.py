@@ -82,6 +82,9 @@ def run(*, execute: bool) -> int:
         as_of=SEED_AS_OF,
         source=SEED_SOURCE,
         ingested_at=datetime.now(timezone.utc),
+        # Hand-transcribed from a press deck (see module docstring) — not a
+        # scrape, not an LLM extraction.
+        provenance="manual",
     )
     logger.info("seeded %d history rows (+%d new definitions)", count, new_defs)
     return 0

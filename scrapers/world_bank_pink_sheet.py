@@ -300,6 +300,8 @@ def upsert_commodities(values: dict[str, float], as_of: date) -> int:
         source="World Bank Pink Sheet",
         source_as_of_map={metric_id: as_of for metric_id in values},
         ingested_at=write_ts,
+        # stdlib zipfile/xml.etree parse of the .xlsx — no LLM call.
+        provenance="deterministic",
     )
     verify_landed_count(
         n, since=write_ts, metric_ids=list(values), source_label="world_bank_pink_sheet"

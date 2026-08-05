@@ -486,6 +486,8 @@ def main() -> int:
         upsert_metric_definitions_seed(build_definitions_rows())  # first-insert-wins no-op later
         count = upsert_metric_history(
             data=rows, as_of=position_date, source=SOURCE_LABEL, ingested_at=write_ts,
+            # One LLM extraction pass over the FSR PDF slice (see module docstring).
+            provenance="llm",
         )
     except Exception as e:
         # Broad on purpose (matches the fetch stage): upsert_metric_definitions_seed

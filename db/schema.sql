@@ -26,8 +26,24 @@ CREATE TABLE IF NOT EXISTS public.metric_history (
     value        numeric      NOT NULL,
     source       text         NOT NULL,
     ingested_at  timestamptz  NOT NULL DEFAULT now(),
+    provenance   text,        -- 0013: extraction method, NOT the org — see column comment below
     PRIMARY KEY (metric_id, as_of)
 );
+
+-- 0013: extraction-method CHECK. Guarded (Postgres has no ADD CONSTRAINT IF
+-- NOT EXISTS) so this snapshot stays safe to re-apply, matching the DO-block
+-- pattern used for policies below.
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'metric_history_provenance_check'
+      AND conrelid = 'public.metric_history'::regclass
+  ) THEN
+    ALTER TABLE public.metric_history
+      ADD CONSTRAINT metric_history_provenance_check
+      CHECK (provenance IN ('deterministic', 'llm', 'hybrid', 'manual'));
+  END IF;
+END $$;
 
 -- Indexes for the common consumer query shapes:
 --   1. "give me the last N days of metric X"  — ordered by as_of desc
@@ -108,6 +124,18 @@ COMMENT ON COLUMN public.metric_history.ingested_at IS
     'WRITE-liveness for a vintage-stamped id (is the pipeline still writing?) '
     'reads latest-by-``ingested_at``; the ``v_metric_freshness`` view (E3.1) is '
     'the canonical freshness surface for all three consumers.';
+
+COMMENT ON COLUMN public.metric_history.provenance IS
+    'Extraction method used to pull this value out of its source document: '
+    '''deterministic'' (regex/table parser), ''llm'' (Claude extraction '
+    'fallback), ''hybrid'' (deterministic parse + LLM-recovered field, e.g. '
+    'date recovery), or ''manual'' (hand-transcribed / one-off seed). '
+    'NULLABLE (migration 0013). Distinct from ``source`` above, which '
+    'records the ORIGINATING ORGANIZATION (e.g. BB, DSE, EconDelta) — never '
+    'conflate the two. Populated only when the writer passes provenance= AND '
+    'ECONDELTA_PROVENANCE_ENABLED=1 is set (see utils/supabase_writer.py). '
+    'metric_history_monthly does NOT get this column — its writers are '
+    'separate one-off/backfill scripts this change does not touch.';
 
 -- ============================================================================
 -- 0008 — briefings

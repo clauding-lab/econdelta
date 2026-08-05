@@ -1365,6 +1365,15 @@ def main() -> int:
             # Explicit write timestamp so the E2.2 landed-count read-back counts
             # exactly this upsert's rows.
             write_ts = datetime.now(timezone.utc)
+            # No provenance= here on purpose: this one call flattens the WHOLE
+            # snapshot — deterministic Tier-1 flatten, config-driven regex/table
+            # parsers, AND the LLM-extraction fallback (hybrid.parse_one) all
+            # land in the same `data` dict with no per-metric extraction-method
+            # tag surviving to this point. Stamping the batch would be a guess,
+            # not a fact — see AGENTS.md / utils/supabase_writer.py on provenance
+            # vs source. Per-metric provenance here is a real follow-up (would
+            # need parse_all/aggregate to carry the tag alongside each value,
+            # analogous to source_as_of_map above), not something to fake now.
             n_rows = upsert_metric_history(
                 data=data, as_of=now.date(), source_as_of_map=source_as_of_map,
                 ingested_at=write_ts,
