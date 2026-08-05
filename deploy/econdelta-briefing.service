@@ -3,7 +3,9 @@ Description=EconDelta — Weekly ALCO briefing (Opus 4.8 1M, xhigh)
 Documentation=https://github.com/clauding-lab/econdelta
 After=network-online.target
 Wants=network-online.target
-StartLimitIntervalSec=3600
+# Window sized so TimeoutStartSec(3600)+RestartSec(600) retry cycles land
+# inside it — otherwise StartLimitBurst never trips.
+StartLimitIntervalSec=8400
 StartLimitBurst=2
 
 [Service]

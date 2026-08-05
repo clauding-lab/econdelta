@@ -4,7 +4,9 @@ Documentation=https://github.com/clauding-lab/econdelta
 After=network-online.target
 Wants=network-online.target
 
-StartLimitIntervalSec=1800
+# Window sized so TimeoutStartSec(2700)+RestartSec(300) retry cycles land
+# inside it — otherwise StartLimitBurst never trips.
+StartLimitIntervalSec=6000
 StartLimitBurst=3
 
 [Service]
