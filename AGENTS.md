@@ -154,6 +154,27 @@ Pre-merge smoke list for backend changes:
 
 40. **The stillness alarm budgets must clear several publication periods, and standing values are EXCLUDED on purpose.** `utils/staleness.check_value_staleness` (wired into `aggregate_latest`, detect-and-alert only) tracks how long each v3-registry indicator has held the same value and alerts past a cadence-derived budget — the inverse of `utils/anomaly`, which only sees failures of *motion*. Three things a future edit will want to get wrong. (a) **Budgets are deliberately loose** (`daily` 14d, `weekly` 35d, `monthly` 75d, `quarterly` 200d, `fiscal_year` 400d) because re-printing the same value between releases is NORMAL — a quarterly NPL is restamped daily at one value for ~90 days by design, and `bill_bond_rates`/`tbill_182d_yield`/`tbill_364d_yield` are nominally `daily` but really weekly auctions measured at 6 days unchanged when healthy. Tightening a budget toward "one publication period" makes the alarm fire on every healthy metric every period, which is how an alert channel gets muted. (b) **The BB corridor is exempt** (`_STANDING_VALUE_IDS`) and must stay exempt: the repo rate sat at 10.00% for six years *legitimately*, so no budget can distinguish "BB has not moved it" from "our parser is stuck". That failure mode is caught at the source instead (landmine 39) and at the consumer (The Brief ages event-cadence metrics off the restamp date). Do NOT "improve" the alarm by removing this exemption. (c) **Scope is the v3 registry only.** Replaying the rule over the other ~80 keys in the flat `data` dict (aliases, derived ratios, retired legacy ids, the writer-less `*_monthly` archive) produced **59 alerts on day one**, all restating already-known dead writers — a metric with no live writer is a missing-writer problem, not a stillness one. The tracker warms up by observation (`data/staleness_state.json`, seeded on first sight, `_MIN_RUNS_BEFORE_ALERTING`), so the already-known freezes re-surface on their own schedule rather than on the first run; never hand-seed it with backfilled dates. Measured at design time on real history: 9 alerts, all genuine — the 8 `food_*` prices (93d) plus `interbank_repo_data` (33d at 5591.93). Also found there: `debt_gdp_ratio` carries an `as_of` of **2031-12-31** in `metric_history` from a mis-parse, which is why `_parse_day` rejects future dates (a negative age would make a metric permanently un-alertable). (2026-08-03.)
 
+41. **`bb_npl_structure` ids live OUTSIDE the pipeline config.** The 35
+    banking-structure metrics (22 FSR-written, 13 seed-only press series)
+    are written by scrapers/bb_npl_structure.py and
+    scripts/seed_npl_structure.py. Never add these ids to
+    config/sources-v3.json (each would become a daily LLM parse), never to
+    briefing CORE_METRIC_IDS (owner: non-gating), and never remove them
+    from sentinel ACCEPTED_STALE_METRIC_IDS (structural source lag — FSR
+    is annual with ~6mo lag; band/CMSME have no scheduled source at all).
+    tests/test_bb_npl_structure_wiring.py enforces all three. Note: the
+    reconciliation gate wrong-column-proves only npl_rate_sector_industrial_mfg,
+    npl_rate_sector_trade_commerce, npl_rate_sector_industrial_services, and
+    npl_rate_sector_other; npl_rate_sector_agriculture,
+    npl_rate_sector_consumer_credit, npl_rate_sector_nbfi, and
+    npl_rate_sector_capital_market DO enter the weighted-average-vs-overall
+    sum but each has too small a lending share to move it past the 1pp
+    tolerance on a bad read — inside the reconciliation math, effectively
+    unproven by it. Only npl_rate_sub_rmg, npl_rate_sub_construction,
+    npl_rate_sub_housing_finance, and npl_rate_sub_smc_industries sit
+    outside every reconciliation entirely and are range-only — treat their
+    values with that weaker guarantee.
+
 ## Communication & timezone
 
 - **All times in BDT (UTC+6).** When generating timestamps, dates, or schedules, convert to BDT and label it. UTC appears in some systemd unit files and `scraped_at` ISO strings — convert before showing to Adnan.

@@ -92,6 +92,48 @@ _SCRAPER_CADENCE: dict[str, str] = {
     # bucket, never `breaches`) — the cadence here is only for catalog/labeling.
     "rev_gdp_ratio": "fiscal_year",
     "tax_gdp_ratio": "fiscal_year",
+    # bb_npl_structure (2026-08-03 spec amendment, see
+    # docs/superpowers/specs/2026-08-03-bb-npl-structure-design.md) — FSR
+    # sector-wise NPL family (22 ids) + seed-only band/CMSME family (13 ids),
+    # 35 total, all "fiscal_year". Written explicitly rather than relying on
+    # _prefix_cadence: these ids start with "npl_" and would otherwise match
+    # the quarterly prefix rule above, which is WRONG for this annual-with-lag
+    # FSR series. See scrapers/bb_npl_structure.py.
+    "gross_npl_stock": "fiscal_year",
+    "lending_share_sector_agriculture": "fiscal_year",
+    "lending_share_sector_capital_market": "fiscal_year",
+    "lending_share_sector_consumer_credit": "fiscal_year",
+    "lending_share_sector_industrial_mfg": "fiscal_year",
+    "lending_share_sector_industrial_services": "fiscal_year",
+    "lending_share_sector_nbfi": "fiscal_year",
+    "lending_share_sector_other": "fiscal_year",
+    "lending_share_sector_trade_commerce": "fiscal_year",
+    "loans_outstanding_band_1_10cr": "fiscal_year",
+    "loans_outstanding_band_gt50cr": "fiscal_year",
+    "loans_outstanding_band_lt1cr": "fiscal_year",
+    "npl_rate_band_10_20cr": "fiscal_year",
+    "npl_rate_band_1_10cr": "fiscal_year",
+    "npl_rate_band_20_30cr": "fiscal_year",
+    "npl_rate_band_30_40cr": "fiscal_year",
+    "npl_rate_band_40_50cr": "fiscal_year",
+    "npl_rate_band_gt50cr": "fiscal_year",
+    "npl_rate_band_lt1cr": "fiscal_year",
+    "npl_rate_cmsme_cottage": "fiscal_year",
+    "npl_rate_cmsme_medium": "fiscal_year",
+    "npl_rate_cmsme_overall": "fiscal_year",
+    "npl_rate_sector_agriculture": "fiscal_year",
+    "npl_rate_sector_capital_market": "fiscal_year",
+    "npl_rate_sector_consumer_credit": "fiscal_year",
+    "npl_rate_sector_industrial_mfg": "fiscal_year",
+    "npl_rate_sector_industrial_services": "fiscal_year",
+    "npl_rate_sector_nbfi": "fiscal_year",
+    "npl_rate_sector_other": "fiscal_year",
+    "npl_rate_sector_trade_commerce": "fiscal_year",
+    "npl_rate_sub_construction": "fiscal_year",
+    "npl_rate_sub_housing_finance": "fiscal_year",
+    "npl_rate_sub_rmg": "fiscal_year",
+    "npl_rate_sub_smc_industries": "fiscal_year",
+    "total_bank_advances": "fiscal_year",
 }
 
 

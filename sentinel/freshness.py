@@ -23,8 +23,9 @@ _DAILY_TRADING_DAY_GRACE = GRACE_DAYS_BY_CADENCE["daily"]
 # never fire the daily breach alert (that would be unactionable alert-fatigue,
 # poisoning the very channel the run_logs dead-man's-switch relies on). A genuine
 # scraper failure is still caught by the scraper's own error path + run_logs, not
-# by data-freshness here; and both ids below are unconsumed parity metrics
-# (fetched, not yet displayed on any surface):
+# by data-freshness here. The two fiscal ratios below are unconsumed parity
+# metrics (fetched, not yet displayed on any surface) — see the bb_npl_structure
+# block further down for a different reason (structural source lag, not parity):
 #   - tax_gdp_ratio: World Bank GC.TAX.TOTL.GD.ZS for BD stops at 2021 (~4-5y lag).
 #   - rev_gdp_ratio: IMF DataMapper "rev" for BD carries no forward projection, so
 #     its latest actual (currently 2024) breaches the fiscal_year grace for a
@@ -32,6 +33,48 @@ _DAILY_TRADING_DAY_GRACE = GRACE_DAYS_BY_CADENCE["daily"]
 # See scrapers/fiscal_gdp_ratios.py and sentinel/cadence.py.
 ACCEPTED_STALE_METRIC_IDS: frozenset[str] = frozenset(
     {"tax_gdp_ratio", "rev_gdp_ratio"}
+    # bb_npl_structure (2026-08-03 spec amendment): structural source lag —
+    # FSR annual ~6mo lag (22 ids) / press-only seed series with no schedule
+    # (13 ids), 35 total. Never in briefing.config.CORE_METRIC_IDS or
+    # config/sources-v3.json — owner decision, non-gating. See
+    # docs/superpowers/specs/2026-08-03-bb-npl-structure-design.md.
+    | {
+        "gross_npl_stock",
+        "lending_share_sector_agriculture",
+        "lending_share_sector_capital_market",
+        "lending_share_sector_consumer_credit",
+        "lending_share_sector_industrial_mfg",
+        "lending_share_sector_industrial_services",
+        "lending_share_sector_nbfi",
+        "lending_share_sector_other",
+        "lending_share_sector_trade_commerce",
+        "loans_outstanding_band_1_10cr",
+        "loans_outstanding_band_gt50cr",
+        "loans_outstanding_band_lt1cr",
+        "npl_rate_band_10_20cr",
+        "npl_rate_band_1_10cr",
+        "npl_rate_band_20_30cr",
+        "npl_rate_band_30_40cr",
+        "npl_rate_band_40_50cr",
+        "npl_rate_band_gt50cr",
+        "npl_rate_band_lt1cr",
+        "npl_rate_cmsme_cottage",
+        "npl_rate_cmsme_medium",
+        "npl_rate_cmsme_overall",
+        "npl_rate_sector_agriculture",
+        "npl_rate_sector_capital_market",
+        "npl_rate_sector_consumer_credit",
+        "npl_rate_sector_industrial_mfg",
+        "npl_rate_sector_industrial_services",
+        "npl_rate_sector_nbfi",
+        "npl_rate_sector_other",
+        "npl_rate_sector_trade_commerce",
+        "npl_rate_sub_construction",
+        "npl_rate_sub_housing_finance",
+        "npl_rate_sub_rmg",
+        "npl_rate_sub_smc_industries",
+        "total_bank_advances",
+    }
 )
 
 # Metrics whose id has fallen out of its SOURCE's tracked universe — a
