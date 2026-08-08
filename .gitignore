@@ -19,7 +19,13 @@ logs/*/
 logs/*.log
 logs/*.stderr
 logs/*.stdout
+# Rotated systemd logs (logrotate on ExonVPS) — e.g.
+# logs/econdelta-forex-systemd.log.1, logs/econdelta-forex-systemd.log.1.gz
+logs/*.log.*
 data/latest.json
+# Ad-hoc backup snapshots left on the box during manual tuning — e.g.
+# data/latest.json.pre-tuning.bak
+data/*.bak
 # Per-box runtime state for the stillness alarm — learned by observation on the
 # box that runs the aggregate; committing one box's copy would seed another with
 # counters it never observed (AGENTS.md landmine 40).
