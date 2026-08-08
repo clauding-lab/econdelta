@@ -92,6 +92,67 @@ RETIRED_METRIC_IDS: frozenset[str] = frozenset(
     {"dse_close_KOHINOOR", "dse_close_LINDEBD", "dse_close_UNIQUEHRL"}
 )
 
+# 2026-08-08 frozen-charts incident triage (AGENTS.md landmine 50): 4 of the
+# metric_history_monthly chart-feeding ids that froze alongside the CPI-trio/
+# remittance series (which DID get a live appender, see
+# aggregate_latest._write_macro_monthly_append) have no live source to
+# refresh against at all -- their staleness is structural, not a pipeline
+# fault, so routing them to `breaches` would be exactly the kind of
+# unactionable daily nag ACCEPTED_STALE_METRIC_IDS exists to prevent.
+#   - cpi_12m_food_monthly / cpi_12m_nonfood_monthly: the 12-month-average
+#     food/non-food splits have no live source anywhere post-seed-death (the
+#     dead macro_observer_seed site was the only writer either id ever had;
+#     unlike the headline cpi_12m_avg_monthly, EconDelta's own daily pipeline
+#     has no equivalent food/non-food 12-month-average extraction to derive
+#     from -- only the point-to-point food/non-food ids are safe daily
+#     sources, see cpi_p2p_food_monthly/cpi_p2p_nonfood_monthly).
+#   - imports_usd_mn_monthly: BB publishes cif imports on a ~2-month lag and
+#     no standalone monthly import figure exists beyond May 2026 -- a
+#     structural source lag, not a scraper regression.
+#   - exports_usd_mn_monthly: backfilled to Jun 2026 from EPB press figures
+#     (scripts/backfill_monthly_chart_series.py); the EPB portal itself is
+#     JS-rendered/unscrapeable, so there is no live writer yet. Ongoing
+#     source research is PARKED, not abandoned -- revisit note: check whether
+#     EPB or BSS ever exposes a scrapeable monthly export table before
+#     assuming this stays accepted-stale forever.
+ACCEPTED_STALE_METRIC_IDS = ACCEPTED_STALE_METRIC_IDS | frozenset(
+    {
+        "cpi_12m_food_monthly",
+        "cpi_12m_nonfood_monthly",
+        "imports_usd_mn_monthly",
+        "exports_usd_mn_monthly",
+    }
+)
+
+# The metric_history_monthly ids The Brief's charts + the EconDelta PWA's
+# /macro tab actually render. 2026-08-08 incident (AGENTS.md landmine 50):
+# one of these (the whole chart-feeding tier) froze for 5 months, invisible
+# because it was buried inside a 41-item freshness digest with no way to
+# tell "a metric a reader can SEE is broken" apart from "an internal parity
+# metric nobody looks at is stale". sentinel/report.py surfaces breaches in
+# this set FIRST, under their own heading, so a chart-feeding freeze can
+# never again hide behind a wall of lower-stakes breaches.
+CHART_FEEDING_METRIC_IDS: frozenset[str] = frozenset(
+    {
+        "remittance_usd_mn_monthly",
+        "exports_usd_mn_monthly",
+        "imports_usd_mn_monthly",
+        "cpi_12m_avg_monthly",
+        "cpi_p2p_food_monthly",
+        "cpi_p2p_nonfood_monthly",
+        "tbill_91d_yield_monthly",
+        "tbill_182d_yield_monthly",
+        "tbill_364d_yield_monthly",
+        "yield_2y_monthly",
+        "yield_5y_monthly",
+        "yield_10y_monthly",
+        "yield_15y_monthly",
+        "yield_20y_monthly",
+        "gross_reserves_usd_bn_monthly",
+        "net_reserves_bpm6_usd_bn_monthly",
+    }
+)
+
 
 @dataclass(frozen=True)
 class MetricFreshness:

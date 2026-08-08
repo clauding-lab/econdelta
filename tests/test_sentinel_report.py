@@ -78,3 +78,67 @@ def test_breach_digest_caps_line_count():
 
 def test_heartbeat_weekday_is_sunday():
     assert HEARTBEAT_WEEKDAY == 6
+
+
+# --- 2026-08-08 chart-feeding grouping (landmine 50) -------------------------
+
+
+def test_chart_feeding_breaches_are_listed_first_under_their_own_heading():
+    """The exact incident this reorders the digest to prevent: a
+    chart-feeding freeze (a reader-visible chart) must never sit buried
+    below lower-stakes internal-parity breaches."""
+    report = FreshnessReport(
+        breaches=[
+            _breach("internal_parity_metric", "quarterly", 200),
+            _breach("remittance_usd_mn_monthly", "monthly", 60),
+        ],
+    )
+    _level, _title, message, _fields = format_digest(report)
+    chart_idx = message.index("CHART-FEEDING")
+    remit_idx = message.index("remittance_usd_mn_monthly")
+    other_idx = message.index("internal_parity_metric")
+    assert chart_idx < remit_idx < other_idx
+
+
+def test_chart_feeding_group_is_worst_first_within_itself():
+    # freshness.assess sorts report.breaches worst-first BEFORE format_digest
+    # ever sees it -- construct the input already in that order (oldest/
+    # worst first) the way assess() would, and assert format_digest
+    # PRESERVES it within the chart-feeding group (does not re-sort or
+    # reverse it).
+    report = FreshnessReport(
+        breaches=[
+            _breach("remittance_usd_mn_monthly", "monthly", 90),   # worst
+            _breach("gross_reserves_usd_bn_monthly", "monthly", 50),
+        ],
+    )
+    _level, _title, message, _fields = format_digest(report)
+    assert message.index("remittance_usd_mn_monthly") < message.index("gross_reserves_usd_bn_monthly")
+
+
+def test_no_chart_feeding_breaches_omits_the_heading_entirely():
+    """Degrades to the EXACT prior single-list digest shape when nothing
+    chart-feeding is stale — no structural change for the common case."""
+    report = FreshnessReport(breaches=[_breach("some_internal_metric", "daily", 10)])
+    _level, _title, message, _fields = format_digest(report)
+    assert "CHART-FEEDING" not in message
+    assert "Other:" not in message
+
+
+def test_chart_feeding_and_other_both_respect_the_25_line_total_cap():
+    import sentinel.report as report_mod
+
+    real_chart_ids = list(report_mod.CHART_FEEDING_METRIC_IDS)[:8]
+    chart = [_breach(mid, "monthly", 100 - i) for i, mid in enumerate(real_chart_ids)]
+    other = [_breach(f"internal_{i}", "daily", 50 - i) for i in range(30)]
+    report = FreshnessReport(breaches=chart + other)
+    total = len(chart) + len(other)
+
+    _level, _title, message, fields = format_digest(report)
+    shown_lines = [
+        ln for ln in message.split("\n")
+        if ln.startswith("`")  # `_breach_line` always starts with a backtick
+    ]
+    assert len(shown_lines) == 25
+    assert f"…and {total - 25} more" in message
+    assert fields["Breached"] == str(total)

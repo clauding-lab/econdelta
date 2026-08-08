@@ -8,7 +8,7 @@ Two shapes:
 """
 from __future__ import annotations
 
-from .freshness import FreshnessReport, MetricFreshness
+from .freshness import CHART_FEEDING_METRIC_IDS, FreshnessReport, MetricFreshness
 
 # BD week starts Sunday. Python date.weekday(): Mon=0 … Sun=6.
 HEARTBEAT_WEEKDAY = 6
@@ -41,9 +41,33 @@ def format_digest(report: FreshnessReport) -> tuple[str, str, str, dict]:
 
     if n_breach:
         title = f"Freshness sentinel — {n_breach} stale metric(s)"
-        lines = [_breach_line(m) for m in report.breaches[:_MAX_BREACH_LINES]]
-        if n_breach > _MAX_BREACH_LINES:
-            lines.append(f"…and {n_breach - _MAX_BREACH_LINES} more")
+        # 2026-08-08 incident (landmine 50): a chart-feeding freeze hid for 5
+        # months inside a 41-item digest. Chart-feeding breaches go FIRST
+        # under their own heading, worst-first within each group (both lists
+        # are filtered from report.breaches, which freshness.assess already
+        # sorted worst-first -- filtering preserves that relative order).
+        # Total metric lines shown still respects the existing 25-line cap;
+        # when there are no chart-feeding breaches this degrades to the
+        # exact prior single-list behaviour (no heading added).
+        chart_breaches = [m for m in report.breaches if m.metric_id in CHART_FEEDING_METRIC_IDS]
+        other_breaches = [m for m in report.breaches if m.metric_id not in CHART_FEEDING_METRIC_IDS]
+
+        lines: list[str] = []
+        shown = 0
+        if chart_breaches:
+            lines.append("CHART-FEEDING — visible to readers:")
+            shown_chart = chart_breaches[:_MAX_BREACH_LINES]
+            lines.extend(_breach_line(m) for m in shown_chart)
+            shown += len(shown_chart)
+            if other_breaches:
+                lines.append("Other:")
+        remaining_budget = _MAX_BREACH_LINES - shown
+        shown_other = other_breaches[:remaining_budget] if remaining_budget > 0 else []
+        lines.extend(_breach_line(m) for m in shown_other)
+        shown += len(shown_other)
+        if n_breach > shown:
+            lines.append(f"…and {n_breach - shown} more")
+
         message = "Metrics past their cadence grace window:\n" + "\n".join(lines)
         fields = {
             "Breached": str(n_breach),
