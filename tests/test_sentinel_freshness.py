@@ -269,3 +269,75 @@ def test_other_dse_close_tickers_still_breach_normally():
     )
     assert {b.metric_id for b in report.breaches} == {"dse_close_GP"}
     assert report.accepted_stale == []
+
+
+# --- assess: 2026-08-08 frozen-charts triage (landmine 50) -------------------
+
+
+def test_cpi_12m_food_and_nonfood_route_to_accepted_stale():
+    """cpi_12m_food_monthly/cpi_12m_nonfood_monthly have no live source
+    anywhere post-seed-death (unlike the headline cpi_12m_avg_monthly, which
+    the live appender derives from general_inflation) — must never fire the
+    daily/monthly breach alert."""
+    from sentinel.freshness import ACCEPTED_STALE_METRIC_IDS
+
+    assert {"cpi_12m_food_monthly", "cpi_12m_nonfood_monthly"} <= ACCEPTED_STALE_METRIC_IDS
+
+    m = load_cadence_map()
+    report = assess(
+        rows_daily=[],
+        rows_monthly=[_row("cpi_12m_food_monthly", "2026-03-01"),
+                      _row("cpi_12m_nonfood_monthly", "2026-03-01")],
+        cadence_map=m,
+        today=date(2026, 8, 8),
+    )
+    ids = {"cpi_12m_food_monthly", "cpi_12m_nonfood_monthly"}
+    assert {s.metric_id for s in report.accepted_stale} >= ids
+    assert not (ids & {b.metric_id for b in report.breaches})
+
+
+def test_imports_usd_mn_monthly_routes_to_accepted_stale():
+    """BB publishes cif imports ~2 months late; no standalone monthly figure
+    exists beyond May 2026 — structural source lag, not a pipeline fault."""
+    from sentinel.freshness import ACCEPTED_STALE_METRIC_IDS
+
+    assert "imports_usd_mn_monthly" in ACCEPTED_STALE_METRIC_IDS
+
+    m = load_cadence_map()
+    report = assess(
+        rows_daily=[], rows_monthly=[_row("imports_usd_mn_monthly", "2026-05-01")],
+        cadence_map=m, today=date(2026, 8, 8),
+    )
+    assert "imports_usd_mn_monthly" in {s.metric_id for s in report.accepted_stale}
+    assert "imports_usd_mn_monthly" not in {b.metric_id for b in report.breaches}
+
+
+def test_exports_usd_mn_monthly_routes_to_accepted_stale():
+    """Backfilled to Jun 2026 from EPB press; the EPB portal itself is
+    JS-rendered/unscrapeable — no live writer, accepted-stale pending
+    ongoing source research."""
+    from sentinel.freshness import ACCEPTED_STALE_METRIC_IDS
+
+    assert "exports_usd_mn_monthly" in ACCEPTED_STALE_METRIC_IDS
+
+    m = load_cadence_map()
+    report = assess(
+        rows_daily=[], rows_monthly=[_row("exports_usd_mn_monthly", "2026-06-01")],
+        cadence_map=m, today=date(2026, 8, 8),
+    )
+    assert "exports_usd_mn_monthly" in {s.metric_id for s in report.accepted_stale}
+    assert "exports_usd_mn_monthly" not in {b.metric_id for b in report.breaches}
+
+
+def test_chart_feeding_metric_ids_has_exactly_16_ids():
+    from sentinel.freshness import CHART_FEEDING_METRIC_IDS
+
+    assert len(CHART_FEEDING_METRIC_IDS) == 16
+    assert CHART_FEEDING_METRIC_IDS == {
+        "remittance_usd_mn_monthly", "exports_usd_mn_monthly", "imports_usd_mn_monthly",
+        "cpi_12m_avg_monthly", "cpi_p2p_food_monthly", "cpi_p2p_nonfood_monthly",
+        "tbill_91d_yield_monthly", "tbill_182d_yield_monthly", "tbill_364d_yield_monthly",
+        "yield_2y_monthly", "yield_5y_monthly", "yield_10y_monthly",
+        "yield_15y_monthly", "yield_20y_monthly",
+        "gross_reserves_usd_bn_monthly", "net_reserves_bpm6_usd_bn_monthly",
+    }

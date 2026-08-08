@@ -72,6 +72,24 @@ def get_metric_history(metric_id: str, *, days: int, url: str | None = None,
     return _get(path, url=url, key=key, session=session)
 
 
+def get_metric_history_monthly(metric_id: str, *, limit: int = 36, url: str | None = None,
+                               key: str | None = None,
+                               session: requests.Session | None = None) -> list[dict[str, Any]]:
+    """Most-recent `limit` rows for one metric_id from ``metric_history_monthly``,
+    newest first. Mirrors ``get_metric_history`` but targets the MONTHLY
+    namespace (AGENTS.md landmine 20 -- a separate table from ``metric_history``).
+
+    Used by APPEND-ONLY writers (``aggregate_latest._write_macro_monthly_append``,
+    landmine 50) to check whether a given (metric_id, as_of) already has a row
+    BEFORE writing -- so a live appender can never clobber a backfilled or
+    previously-appended official value. Default limit of 36 (3 years of
+    monthly rows) comfortably covers the append-only lookback these callers
+    need without paging.
+    """
+    path = f"metric_history_monthly?metric_id=eq.{metric_id}&order=as_of.desc&limit={limit}"
+    return _get(path, url=url, key=key, session=session)
+
+
 def get_recent_run_ok(source: str, *, within_hours: int, url: str | None = None,
                       key: str | None = None, session: requests.Session | None = None) -> bool:
     """True if the latest run_logs row for `source` with status='ok' started within the window.
