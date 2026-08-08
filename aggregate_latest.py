@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import sys
 from calendar import monthrange
 from datetime import date, datetime, timezone
@@ -1014,6 +1015,379 @@ def _write_reserves_monthly_split(reserves: ForexReserves | None) -> int:
     return upsert_metric_history_monthly(rows)
 
 
+# ============================================================================
+# Macro monthly LIVE APPENDER (2026-08-08 frozen-charts incident, AGENTS.md
+# landmine 50, AGENT_LEARNINGS.md 2026-08-08 entry)
+# ----------------------------------------------------------------------------
+# 5 of the metric_history_monthly chart-feeding series (remittance, exports,
+# and the CPI trio) were seeded ONCE from a dead third-party site
+# (macro_observer_seed) and froze at as_of=2026-03-01 -- no live writer ever
+# kept them moving. scripts/backfill_monthly_chart_series.py fills the
+# Apr-Jun 2026 gap with owner-verified official values (a ONE-TIME,
+# owner-run backfill); THIS function is the ONGOING writer that keeps two of
+# those five series moving every day after -- the CPI trio (derived from our
+# own daily metric_history, never from the third-party site) and remittance
+# (fetched live from BB's official monthly table). exports_usd_mn_monthly
+# and imports_usd_mn_monthly have NO live writer here -- see the
+# sentinel/freshness.py accepted-stale entries for why.
+#
+# APPEND-ONLY BY DESIGN: every write checks metric_history_monthly for an
+# existing (metric_id, as_of) row first and skips if present. This is
+# load-bearing, not a style choice -- the backfill patches two known-bad
+# daily cells (non_food_inflation April 2026, general_inflation June 2026;
+# see the equality guard below) with hand-verified official values, and this
+# appender must never overwrite them with a re-derived daily value on a
+# later run.
+#
+# Same call-site gating pattern as _write_reserves_monthly_split above: own
+# try/except at the call site, its own distinct notify() message on write
+# failure so a responder can tell which appender failed, never crashes the
+# daily run. Sub-path (CPI read / remittance fetch) failures are handled
+# INSIDE this function -- they degrade gracefully (skip that sub-path only)
+# rather than aborting the whole appender, and each notifies with its own
+# message so "the CPI read failed" and "BB's remittance page changed shape"
+# are distinguishable incidents.
+# ============================================================================
+
+# Daily metric_history id -> monthly chart-feeding id it feeds. Only
+# general_inflation/food_inflation/non_food_inflation -- point_to_point_inflation
+# is read too (see below) but ONLY to power the equality guard, never written
+# itself.
+_CPI_DAILY_TO_MONTHLY: dict[str, str] = {
+    "general_inflation": "cpi_12m_avg_monthly",
+    "food_inflation": "cpi_p2p_food_monthly",
+    "non_food_inflation": "cpi_p2p_nonfood_monthly",
+}
+_CPI_MONTHLY_SOURCE = "econdelta_daily_cpi"
+# Range check per spec: 0 < v < 30 (strict on both ends -- a 0.0 or 30.0
+# reading is exactly as suspicious as a negative or triple-digit one for a
+# CPI YoY/12m-average percentage).
+_CPI_VALUE_MIN = 0.0
+_CPI_VALUE_MAX = 30.0
+
+_REMITTANCE_MONTHLY_ID = "remittance_usd_mn_monthly"
+_REMITTANCE_URL = "https://www.bb.org.bd/en/index.php/econdata/wageremitance"
+_REMITTANCE_SOURCE = "bb_wageremitance"
+_REMITTANCE_VALUE_MIN = 500.0
+_REMITTANCE_VALUE_MAX = 6000.0
+# scripts/backfill_monthly_chart_series.py owns Apr-Jun 2026; this appender
+# only ever writes data months from July 2026 onward (the append-only
+# skip-if-exists check would no-op on Apr-Jun anyway, but pinning the floor
+# here means a future re-run can never even attempt to touch pre-backfill
+# months).
+_REMITTANCE_APPEND_FROM = date(2026, 7, 1)
+
+_REMIT_MONTH_NAME_TO_NUM: dict[str, int] = {
+    "January": 1, "February": 2, "March": 3, "April": 4, "May": 5, "June": 6,
+    "July": 7, "August": 8, "September": 9, "October": 10, "November": 11,
+    "December": 12,
+}
+# BB's fiscal-year row-group header, e.g. "2025-2026" (BD fiscal year =
+# July-June; "2025-2026" spans July 2025 .. June 2026).
+_REMIT_FY_HEADER_RE = re.compile(r"(\d{4})\s*-\s*(\d{4})")
+
+
+def _latest_value_as_of(rows: list[dict]) -> tuple[float, date] | None:
+    """Parse the first (newest) row from get_metric_history into (value, as_of).
+
+    Returns None on an empty list or a malformed row -- callers treat that
+    identically to "no daily row" (they must not distinguish missing from
+    unparseable; both mean "nothing safe to derive from").
+    """
+    if not rows:
+        return None
+    row = rows[0]
+    try:
+        value = float(row["value"])
+        as_of = date.fromisoformat(str(row["as_of"])[:10])
+    except (KeyError, TypeError, ValueError):
+        return None
+    return value, as_of
+
+
+def _parse_monthly_row_date(raw: object) -> date | None:
+    if raw is None:
+        return None
+    try:
+        return date.fromisoformat(str(raw)[:10])
+    except (ValueError, TypeError):
+        return None
+
+
+def _cpi_monthly_append_rows(
+    *,
+    general_row: tuple[float, date] | None,
+    food_row: tuple[float, date] | None,
+    nonfood_row: tuple[float, date] | None,
+    p2p_row: tuple[float, date] | None,
+    existing_pairs: set[tuple[str, date]],
+) -> tuple[list[dict], list[str]]:
+    """Pure transform: latest daily CPI rows -> metric_history_monthly append
+    candidates for the CPI trio.
+
+    Applies, in order: month-end vintage check (a daily row whose as_of isn't
+    the last day of its month isn't a true monthly reading -- see AGENTS.md
+    landmine 26/47 on as_of forgery), the [0, 30) range check, the
+    general_inflation == point_to_point_inflation wrong-column equality
+    guard (landmine 49 -- this exact defect happened for June 2026: the
+    extractor grabbed the Point-to-Point column instead of the Twelve-month-
+    average column), and finally the append-only skip-if-exists check.
+
+    Because all three daily ids are extracted from the SAME BB MEI PDF in
+    the SAME parse run, their as_of values naturally align without any
+    forced-alignment step here -- each surviving row is written under its
+    OWN correctly-derived as_of, and all three (when all pass) are returned
+    together for the caller to write in ONE upsert batch ("the same run"
+    the spec calls for).
+
+    Returns (rows_to_write, skip_reasons) -- skip_reasons feed the caller's
+    logging so a responder can see WHY a metric wasn't appended this run.
+    """
+    rows: list[dict] = []
+    reasons: list[str] = []
+    daily_rows = {
+        "general_inflation": general_row,
+        "food_inflation": food_row,
+        "non_food_inflation": nonfood_row,
+    }
+    for daily_id, monthly_id in _CPI_DAILY_TO_MONTHLY.items():
+        row = daily_rows[daily_id]
+        if row is None:
+            reasons.append(f"{monthly_id}: no daily {daily_id} row available")
+            continue
+        value, as_of = row
+        if as_of != _month_end(as_of):
+            reasons.append(
+                f"{monthly_id}: latest {daily_id} as_of={as_of} is not a "
+                "month-end vintage -- skipping (not a true monthly reading)"
+            )
+            continue
+        if not (_CPI_VALUE_MIN < value < _CPI_VALUE_MAX):
+            reasons.append(
+                f"{monthly_id}: value {value} outside ({_CPI_VALUE_MIN}, {_CPI_VALUE_MAX})"
+            )
+            continue
+        if daily_id == "general_inflation" and p2p_row is not None:
+            p2p_value, p2p_as_of = p2p_row
+            if p2p_as_of == as_of and p2p_value == value:
+                reasons.append(
+                    f"{monthly_id}: general_inflation ({value}) exactly equals "
+                    f"point_to_point_inflation for {as_of} -- extractor likely "
+                    "grabbed the wrong CPI column (June-2026 incident class, "
+                    "landmine 49); skipping cpi_12m_avg_monthly this month"
+                )
+                continue
+        month_start = as_of.replace(day=1)
+        if (monthly_id, month_start) in existing_pairs:
+            # Append-only: already have this month (backfill or a prior run).
+            continue
+        month_start_iso = month_start.isoformat()
+        rows.append({
+            "metric_id": monthly_id,
+            "as_of": month_start_iso,
+            "value": value,
+            "source": _CPI_MONTHLY_SOURCE,
+            "source_as_of": as_of.isoformat(),
+        })
+    return rows, reasons
+
+
+def parse_remittance_table(html: str) -> list[tuple[date, float]]:
+    """Pure parse: BB wage-remittance page HTML -> [(as_of, value_usd_mn), ...].
+
+    The table (id="sortableTable", verified live 2026-08-08 -- see
+    tests/fixtures/bb_wageremitance.html for a trimmed real capture) is
+    FY-ROW-GROUPED: a one-cell header row "YYYY-YYYY" (BD fiscal year,
+    July-June -- e.g. "2025-2026" = July 2025 .. June 2026) precedes 12
+    three-cell month rows (month name, USD mn, BDT bn) in reverse-
+    chronological order (June down to July). July-December belong to the
+    FIRST year in the header pair; January-June belong to the SECOND year --
+    this is what makes "July = first month of the NEXT FY" correct (a
+    "2026-2027" header's July row is July 2026, not July 2027).
+
+    Month labels and years come ENTIRELY from the table's own text -- never
+    inferred from the run date (AGENTS.md landmine 26/47). Raises ValueError
+    if no table is found (page structure changed) or it has no <tbody> --
+    the caller treats any exception here as "parse failed, notify, write
+    nothing" and never crashes the aggregate run.
+    """
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(html, "html.parser")
+    table = soup.find("table", id="sortableTable") or soup.find("table")
+    if table is None:
+        raise ValueError("no remittance table found in page HTML (page structure changed?)")
+    tbody = table.find("tbody")
+    if tbody is None:
+        raise ValueError("remittance table has no <tbody>")
+
+    rows: list[tuple[date, float]] = []
+    fy_start_year: int | None = None
+    fy_end_year: int | None = None
+    for tr in tbody.find_all("tr"):
+        cells = tr.find_all("td")
+        if not cells:
+            continue
+        if len(cells) == 1:
+            # FY header row, e.g. "2025-2026".
+            m = _REMIT_FY_HEADER_RE.search(cells[0].get_text(strip=True))
+            if m:
+                fy_start_year, fy_end_year = int(m.group(1)), int(m.group(2))
+            continue
+        # Data row: month name, USD mn, BDT bn.
+        month_name = cells[0].get_text(strip=True)
+        month_num = _REMIT_MONTH_NAME_TO_NUM.get(month_name)
+        if month_num is None or fy_start_year is None or len(cells) < 2:
+            continue
+        value_text = cells[1].get_text(strip=True).replace(",", "")
+        try:
+            value = float(value_text)
+        except ValueError:
+            continue
+        year = fy_start_year if month_num >= 7 else fy_end_year
+        rows.append((date(year, month_num, 1), value))
+    return rows
+
+
+def _select_new_remittance_rows(
+    parsed: list[tuple[date, float]],
+    *,
+    existing_as_of: set[date],
+    min_as_of: date = _REMITTANCE_APPEND_FROM,
+) -> tuple[list[dict], list[str]]:
+    """Filter parsed (as_of, value) pairs to genuinely new rows to append:
+    as_of >= min_as_of (the backfill's cutoff), not already in
+    metric_history_monthly (append-only), and within [500, 6000] USD mn.
+
+    Returns (rows_to_write, skip_reasons).
+    """
+    rows: list[dict] = []
+    reasons: list[str] = []
+    for as_of, value in parsed:
+        if as_of < min_as_of or as_of in existing_as_of:
+            continue
+        if not (_REMITTANCE_VALUE_MIN <= value <= _REMITTANCE_VALUE_MAX):
+            reasons.append(
+                f"{_REMITTANCE_MONTHLY_ID}: {as_of} value {value} outside "
+                f"[{_REMITTANCE_VALUE_MIN}, {_REMITTANCE_VALUE_MAX}]"
+            )
+            continue
+        as_of_iso = as_of.isoformat()
+        rows.append({
+            "metric_id": _REMITTANCE_MONTHLY_ID,
+            "as_of": as_of_iso,
+            "value": value,
+            "source": _REMITTANCE_SOURCE,
+            "source_as_of": as_of_iso,
+        })
+    return rows, reasons
+
+
+def _fetch_remittance_html() -> str:
+    """Live-fetch BB's wage-remittance page. BB's Akamai/TSPD JS challenge
+    means a plain requests.get() returns the challenge page, not the table
+    (verified live 2026-08-08) -- fetchers.html_fetcher.fetch_html clears it
+    the same way bb_forex.py does for BB's other econdata pages. Raises
+    FetchError on network/challenge failure; the caller treats that as
+    "fetch failed, notify, write nothing."
+    """
+    from fetchers.html_fetcher import fetch_html
+
+    snapshot_dir = DATA_DIR / "_html" / "bb_wageremitance_monthly"
+    result = fetch_html(
+        url=_REMITTANCE_URL, indicator_id="bb_wageremitance_monthly", snapshot_dir=snapshot_dir,
+    )
+    return result.artifact_path.read_text(encoding="utf-8")
+
+
+def _write_macro_monthly_append() -> int:
+    """Live appender for the CPI trio + remittance chart-feeding monthly
+    series (2026-08-08 incident, landmine 50). Returns the number of new
+    metric_history_monthly rows written this run.
+
+    0 is the NORMAL outcome on most days: these are monthly-cadence series,
+    so a daily run usually finds nothing new (the daily CPI ids haven't
+    rolled to a new month-end vintage yet; BB hasn't published a new
+    remittance month yet). The two sub-paths (CPI trio, remittance) are
+    independent -- a failure in one degrades gracefully and does not block
+    the other; each notifies with its own message so a responder can tell
+    which one needs attention.
+    """
+    from utils.supabase_reader import (
+        SupabaseReadError,
+        get_metric_history,
+        get_metric_history_monthly,
+    )
+    from utils.supabase_writer import upsert_metric_history_monthly
+
+    rows_to_write: list[dict] = []
+    skip_reasons: list[str] = []
+
+    # --- (a) CPI trio, derived from our own daily metric_history -----------
+    try:
+        general = _latest_value_as_of(get_metric_history("general_inflation", days=1))
+        food = _latest_value_as_of(get_metric_history("food_inflation", days=1))
+        nonfood = _latest_value_as_of(get_metric_history("non_food_inflation", days=1))
+        p2p = _latest_value_as_of(get_metric_history("point_to_point_inflation", days=1))
+        existing_cpi: set[tuple[str, date]] = set()
+        for monthly_id in _CPI_DAILY_TO_MONTHLY.values():
+            for row in get_metric_history_monthly(monthly_id):
+                as_of = _parse_monthly_row_date(row.get("as_of"))
+                if as_of is not None:
+                    existing_cpi.add((monthly_id, as_of))
+        cpi_rows, cpi_reasons = _cpi_monthly_append_rows(
+            general_row=general, food_row=food, nonfood_row=nonfood, p2p_row=p2p,
+            existing_pairs=existing_cpi,
+        )
+        rows_to_write.extend(cpi_rows)
+        skip_reasons.extend(cpi_reasons)
+    except SupabaseReadError as e:
+        logger.warning("macro monthly append: CPI trio read failed: %s", e)
+        skip_reasons.append(f"CPI trio: read failed ({type(e).__name__}: {e})")
+        notify(
+            "warning",
+            "aggregate — macro monthly append: CPI read failed",
+            "Could not read general_inflation/food_inflation/non_food_inflation/"
+            f"point_to_point_inflation from metric_history; CPI trio skipped this "
+            f"run. {type(e).__name__}: {e}",
+        )
+
+    # --- (b) Remittance, from BB's official monthly table -------------------
+    try:
+        html = _fetch_remittance_html()
+        parsed = parse_remittance_table(html)
+        existing_remit: set[date] = set()
+        for row in get_metric_history_monthly(_REMITTANCE_MONTHLY_ID):
+            as_of = _parse_monthly_row_date(row.get("as_of"))
+            if as_of is not None:
+                existing_remit.add(as_of)
+        remit_rows, remit_reasons = _select_new_remittance_rows(
+            parsed, existing_as_of=existing_remit,
+        )
+        rows_to_write.extend(remit_rows)
+        skip_reasons.extend(remit_reasons)
+    except Exception as e:  # noqa: BLE001 -- fetch/parse must never crash the daily run
+        logger.warning("macro monthly append: remittance fetch/parse failed: %s", e)
+        skip_reasons.append(f"remittance: fetch/parse failed ({type(e).__name__}: {e})")
+        notify(
+            "warning",
+            "aggregate — macro monthly append: remittance fetch/parse failed",
+            "Could not fetch or parse BB's wage-remittance page "
+            f"({_REMITTANCE_URL}); remittance chart-feeding series skipped "
+            f"this run. {type(e).__name__}: {e}",
+        )
+
+    if skip_reasons:
+        logger.info(
+            "macro monthly append: %d skip reason(s): %s",
+            len(skip_reasons), "; ".join(skip_reasons),
+        )
+
+    if not rows_to_write:
+        return 0
+    return upsert_metric_history_monthly(rows_to_write)
+
+
 # EconDelta indicator-id ↔ brief metric_id alias map. The brief expects a
 # specific naming convention per section (`macro_*`, `remit_*`, `fiscal_*`,
 # `banking_*`, `food_*`); EconDelta keeps its own indicator IDs authoritative.
@@ -1608,6 +1982,39 @@ def main() -> int:
                     "metric_history_monthly upsert (reserves split, D5) failed; "
                     "The Brief's gross/BPM6 chart will serve stale data until "
                     f"the next successful run. {type(e).__name__}: {e}",
+                )
+
+        # Macro monthly LIVE APPENDER (2026-08-08 frozen-charts incident,
+        # landmine 50) -- CPI trio + remittance chart-feeding series. Own
+        # try/except (mirrors D5 above): a failure here must notify with its
+        # OWN distinct message, not get conflated with the daily
+        # metric_history failure or the reserves-split failure above -- three
+        # different tables/paths, three different responder actions. Gated
+        # the same way as the daily metric_history write above (not tied to
+        # bb_forex_ok -- this appender is independent of bb_forex) and placed
+        # AFTER it so a CPI value that changed THIS run is already persisted
+        # to the daily table before the appender reads it back.
+        if os.environ.get("ECONDELTA_SKIP_SUPABASE") != "1":
+            from utils.supabase_writer import SupabaseWriteError
+
+            try:
+                macro_rows = _write_macro_monthly_append()
+                if macro_rows:
+                    logger.info(
+                        "upserted %d row(s) to Supabase metric_history_monthly "
+                        "(macro monthly append: CPI trio + remittance)", macro_rows,
+                    )
+            except SupabaseWriteError as e:
+                logger.warning(
+                    "Supabase macro monthly append write failed: %s — continuing "
+                    "with local archive only", e,
+                )
+                notify(
+                    "error",
+                    "aggregate — macro monthly append write failed",
+                    "metric_history_monthly upsert (CPI trio / remittance appender) "
+                    "failed; The Brief's inflation/remittance charts will serve "
+                    f"stale data until the next successful run. {type(e).__name__}: {e}",
                 )
 
     summary = " ".join(
