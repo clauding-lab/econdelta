@@ -467,8 +467,8 @@ class TestWriteYieldLadderMonthlyAppend:
 
         n = agg._write_yield_ladder_monthly_append(today=TODAY)
         assert n == 0
-        assert any("yield ladder existing-rows read failed" in title for _level, title in notify_calls)
-        assert not any("auction_results read failed" in title for _level, title in notify_calls)
+        assert any(title == agg._YIELD_EXISTING_ROWS_READ_FAILED_TITLE for _level, title in notify_calls)
+        assert not any(title == agg._YIELD_AUCTION_READ_FAILED_TITLE for _level, title in notify_calls)
 
     def test_auction_results_read_failure_has_its_own_distinct_message(self, monkeypatch):
         import utils.supabase_reader as reader
@@ -486,17 +486,24 @@ class TestWriteYieldLadderMonthlyAppend:
 
         n = agg._write_yield_ladder_monthly_append(today=TODAY)
         assert n == 0
-        assert any("yield ladder auction_results read failed" in title for _level, title in notify_calls)
-        assert not any("existing-rows read failed" in title for _level, title in notify_calls)
+        assert any(title == agg._YIELD_AUCTION_READ_FAILED_TITLE for _level, title in notify_calls)
+        assert not any(title == agg._YIELD_EXISTING_ROWS_READ_FAILED_TITLE for _level, title in notify_calls)
 
     def test_m3_the_two_read_failure_titles_are_never_identical(self):
-        """Direct pin of the M3 fix: format the two literal title strings
-        the function uses and assert they differ -- catches a future
-        accidental re-merge of the two messages even if the mocked-failure
-        tests above somehow both pass."""
-        existing_rows_title = "aggregate — macro monthly append: yield ladder existing-rows read failed"
-        auction_results_title = "aggregate — macro monthly append: yield ladder auction_results read failed"
-        assert existing_rows_title != auction_results_title
+        """Direct pin of the M3 fix against the PRODUCTION constants
+        (2026-08-08 re-review N1) -- the prior version of this test defined
+        its own two literal strings inline, which could never fail even if
+        the two notify() call sites were accidentally re-merged onto one
+        title, since the test wasn't reading from the same source of truth
+        the code actually uses. Asserting against agg._YIELD_..._TITLE
+        directly means a future edit that collapses the two constants (or
+        the two notify() call sites) back onto one title breaks this test."""
+        assert agg._YIELD_EXISTING_ROWS_READ_FAILED_TITLE != agg._YIELD_AUCTION_READ_FAILED_TITLE
+        # Also guard against both being accidentally emptied/blanked out to
+        # "equal nothing" (technically still "not identical" is the wrong
+        # bar to clear).
+        assert agg._YIELD_EXISTING_ROWS_READ_FAILED_TITLE
+        assert agg._YIELD_AUCTION_READ_FAILED_TITLE
 
     def test_writes_all_8_in_one_upsert_batch(self, monkeypatch):
         import utils.supabase_reader as reader

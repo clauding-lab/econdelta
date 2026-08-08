@@ -1698,6 +1698,21 @@ _YIELD_VALUE_MAX = 25.0
 # fiscal quarters.
 _YIELD_LADDER_MAX_CARRY_FORWARD_MONTHS = 6
 
+# Distinct notify() titles for the two read-failure points below (2026-08-08
+# review M3 -- utils.notifier.notify dedups on (level, title) for 3600s, so
+# sharing one title would silently suppress the second failure of a run).
+# Hoisted to module constants (2026-08-08 re-review N1) so the ONLY place
+# either string is spelled out is here -- a test asserting these two
+# constants differ is then a real regression guard against the two messages
+# ever being accidentally re-merged, not a tautology re-typing the same
+# literals inside the test itself.
+_YIELD_EXISTING_ROWS_READ_FAILED_TITLE = (
+    "aggregate — macro monthly append: yield ladder existing-rows read failed"
+)
+_YIELD_AUCTION_READ_FAILED_TITLE = (
+    "aggregate — macro monthly append: yield ladder auction_results read failed"
+)
+
 
 def _yield_ladder_staleness_floor(month_end: date) -> date:
     """``month_end`` shifted back ``_YIELD_LADDER_MAX_CARRY_FORWARD_MONTHS``
@@ -1880,7 +1895,7 @@ def _write_yield_ladder_monthly_append(today: date | None = None) -> int:
         logger.warning("yield ladder append: existing-rows read failed: %s", e)
         notify(
             "warning",
-            "aggregate — macro monthly append: yield ladder existing-rows read failed",
+            _YIELD_EXISTING_ROWS_READ_FAILED_TITLE,
             "Could not read metric_history_monthly for the yield-ladder "
             f"append-only check; yield ladder skipped this run. {type(e).__name__}: {e}",
         )
@@ -1901,7 +1916,7 @@ def _write_yield_ladder_monthly_append(today: date | None = None) -> int:
         logger.warning("yield ladder append: auction_results read failed: %s", e)
         notify(
             "warning",
-            "aggregate — macro monthly append: yield ladder auction_results read failed",
+            _YIELD_AUCTION_READ_FAILED_TITLE,
             f"Could not read auction_results (through {month_end}) for the "
             f"yield-ladder append; skipped this run. {type(e).__name__}: {e}",
         )
