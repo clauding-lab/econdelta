@@ -142,3 +142,80 @@ def test_chart_feeding_and_other_both_respect_the_25_line_total_cap():
     assert len(shown_lines) == 25
     assert f"…and {total - 25} more" in message
     assert fields["Breached"] == str(total)
+
+
+# --- L1 regression: a full chart-feeding group must never leave a dangling
+# --- "Other:" heading with zero lines under it (2026-08-08 Opus review) ----
+
+
+def test_l1_exactly_25_chart_feeding_breaches_omits_other_heading_entirely():
+    """The precise boundary the reviewer proved: chart_breaches alone fills
+    the entire 25-line budget while other_breaches is non-empty -- "Other:"
+    must not appear at all (0 lines would follow it)."""
+    chart_25 = [_breach(f"chart_feeding_synthetic_{i}", "monthly", 200 - i) for i in range(25)]
+    other = [_breach("internal_leftover", "daily", 10)]
+
+    import sentinel.report as report_mod
+
+    original = report_mod.CHART_FEEDING_METRIC_IDS
+    try:
+        report_mod.CHART_FEEDING_METRIC_IDS = frozenset(m.metric_id for m in chart_25)
+        report = FreshnessReport(breaches=chart_25 + other)
+        _level, _title, message, _fields = format_digest(report)
+    finally:
+        report_mod.CHART_FEEDING_METRIC_IDS = original
+
+    assert "Other:" not in message
+    assert "…and 1 more" in message
+
+
+# --- M5: accepted-stale ids that are ALSO chart-feeding are permanently ----
+# --- invisible without a weekly heartbeat note (2026-08-08 Opus review) ----
+
+
+def _accepted_stale(mid, as_of=date(2026, 6, 1)):
+    return MetricFreshness(
+        metric_id=mid, cadence="monthly", latest_as_of=as_of,
+        latest_ingested_at=datetime(as_of.year, as_of.month, as_of.day, tzinfo=timezone.utc),
+        age_days=90, breach=False, tables=("metric_history_monthly",),
+    )
+
+
+def test_m5_heartbeat_names_parked_chart_feeding_accepted_stale_ids():
+    report = FreshnessReport(
+        fresh=[_fresh("a")],
+        accepted_stale=[
+            _accepted_stale("exports_usd_mn_monthly", date(2026, 6, 1)),
+            _accepted_stale("imports_usd_mn_monthly", date(2026, 3, 1)),
+            _accepted_stale("tax_gdp_ratio", date(2021, 12, 31)),  # NOT chart-feeding
+        ],
+    )
+    _level, title, message, _fields = format_digest(report)
+    assert title.startswith("Freshness sentinel — all")  # heartbeat/all-fresh shape
+    assert "Chart-feeding, parked:" in message
+    assert "exports_usd_mn_monthly (frozen at 2026-06)" in message
+    assert "imports_usd_mn_monthly (frozen at 2026-03)" in message
+    # A non-chart-feeding accepted-stale id must NOT appear in this line.
+    parked_line = next(ln for ln in message.split("\n") if ln.startswith("Chart-feeding, parked:"))
+    assert "tax_gdp_ratio" not in parked_line
+
+
+def test_m5_no_parked_line_when_no_accepted_stale_chart_feeding_overlap():
+    report = FreshnessReport(
+        fresh=[_fresh("a")],
+        accepted_stale=[_accepted_stale("tax_gdp_ratio", date(2021, 12, 31))],
+    )
+    _level, _title, message, _fields = format_digest(report)
+    assert "Chart-feeding, parked:" not in message
+
+
+def test_m5_parked_line_only_appears_on_the_heartbeat_no_breach_branch():
+    """The line lives in the n_breach==0 branch, which should_send() only
+    ever actually posts on the weekly heartbeat day -- a breach digest must
+    never carry it (breaches already get their own chart-feeding heading)."""
+    report = FreshnessReport(
+        breaches=[_breach("some_internal_metric")],
+        accepted_stale=[_accepted_stale("exports_usd_mn_monthly")],
+    )
+    _level, _title, message, _fields = format_digest(report)
+    assert "Chart-feeding, parked:" not in message

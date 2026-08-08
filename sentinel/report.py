@@ -59,12 +59,19 @@ def format_digest(report: FreshnessReport) -> tuple[str, str, str, dict]:
             shown_chart = chart_breaches[:_MAX_BREACH_LINES]
             lines.extend(_breach_line(m) for m in shown_chart)
             shown += len(shown_chart)
-            if other_breaches:
-                lines.append("Other:")
+        # 2026-08-08 review L1: compute the "Other:" section BEFORE deciding
+        # whether to print its heading -- a chart-feeding group that already
+        # fills the whole 25-line budget must NOT print a dangling "Other:"
+        # heading with zero lines under it (the prior version added the
+        # heading unconditionally whenever other_breaches was non-empty,
+        # regardless of remaining budget).
         remaining_budget = _MAX_BREACH_LINES - shown
         shown_other = other_breaches[:remaining_budget] if remaining_budget > 0 else []
-        lines.extend(_breach_line(m) for m in shown_other)
-        shown += len(shown_other)
+        if shown_other:
+            if chart_breaches:
+                lines.append("Other:")
+            lines.extend(_breach_line(m) for m in shown_other)
+            shown += len(shown_other)
         if n_breach > shown:
             lines.append(f"…and {n_breach - shown} more")
 
@@ -86,5 +93,24 @@ def format_digest(report: FreshnessReport) -> tuple[str, str, str, dict]:
             f"\n{n_unmapped} metric(s) have no resolvable cadence / no current "
             f"vintage — dedupe/retire candidates: {preview}{more}"
         )
+    # 2026-08-08 review M5: exports_usd_mn_monthly/imports_usd_mn_monthly sit
+    # in BOTH ACCEPTED_STALE_METRIC_IDS (silent every day by design) AND
+    # CHART_FEEDING_METRIC_IDS (a reader-visible chart) -- that combination
+    # makes them PERMANENTLY invisible with no reorder of the breach digest
+    # above (they never reach `breaches` at all). This line surfaces them
+    # ONCE A WEEK instead: format_digest reaches this branch (n_breach==0)
+    # every day, but should_send() only actually POSTS it on the heartbeat
+    # day (report.py's own should_send/HEARTBEAT_WEEKDAY contract) -- so
+    # this note rides that existing weekly-only send gate for free and adds
+    # no daily noise.
+    parked_chart_feeding = [
+        s for s in report.accepted_stale if s.metric_id in CHART_FEEDING_METRIC_IDS
+    ]
+    if parked_chart_feeding:
+        parked_desc = ", ".join(
+            f"{s.metric_id} (frozen at {s.latest_as_of.strftime('%Y-%m') if s.latest_as_of else 'unknown'})"
+            for s in parked_chart_feeding
+        )
+        message += f"\nChart-feeding, parked: {parked_desc} — see ACCEPTED_STALE comments"
     fields = {"Fresh": str(n_fresh), "Unmapped": str(n_unmapped)}
     return "info", title, message, fields
