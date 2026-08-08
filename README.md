@@ -11,6 +11,7 @@
 [![indicators](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fclauding-lab%2Fecondelta%2Fbadges%2Findicators.json)](docs/indicator-catalog.md)
 [![data updated](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fclauding-lab%2Fecondelta%2Fbadges%2Fupdated.json)](https://econdelta.clauding-lab.com)
 [![deploy](https://github.com/clauding-lab/econdelta/actions/workflows/pwa-deploy.yml/badge.svg)](https://github.com/clauding-lab/econdelta/actions/workflows/pwa-deploy.yml)
+[![tests](https://github.com/clauding-lab/econdelta/actions/workflows/test.yml/badge.svg)](https://github.com/clauding-lab/econdelta/actions/workflows/test.yml)
 
 🌐 **Live dashboard → [econdelta.clauding-lab.com](https://econdelta.clauding-lab.com)**
 
@@ -96,7 +97,7 @@ pytest --cov=utils --cov-report=term-missing
 
 ## VPS deployment
 
-Systemd unit files and `deploy/install.sh` are written in Phase 6. The installer sets `MemoryMax=500M` and `CPUQuota=50%` on each timer unit.
+Systemd unit files live in `deploy/`; `deploy/install.sh` installs and enables them. Each timer unit carries its own `MemoryMax`/`CPUQuota` sized to its job (see `deploy/README.md` for the full schedule and per-unit limits).
 
 ## Environment variables
 

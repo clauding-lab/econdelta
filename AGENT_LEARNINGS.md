@@ -37,6 +37,26 @@ When something ships broken, when a methodology gap is exposed, or when a smoke 
 
 ## Entries (most recent first)
 
+## 2026-08-08 — DSE's Sun–Thu trading week isn't universal, dsebd.org's archive doesn't go back to 2013, and a full year of `dse_market` rows were dated one day late
+
+**Trigger:** rebuilding the DSE historical archive (2026-08-08) to backfill/repair `dse_market` — a chain-law date-validation gate rejected rows around the 2026 Eid calendar before the rebuild got far enough to hit the archive's actual coverage limit.
+
+**What went wrong:** three separate findings, each a landmine on its own.
+
+(a) **DSE runs makeup WEEKEND sessions around Eid.** The pipeline (and `config/holidays_2026.json`/`utils/calendar.py`) assumes Bangladesh's standard Sun–Thu trading week with Fri–Sat as the weekend. DSE deviates from that around Eid holidays, opening for a makeup session on what the calendar treats as a weekend day to recover lost trading days. A hardcoded "if weekend, skip" or "if not Sun–Thu, treat as non-trading" branch anywhere in the DSE pipeline is a landmine — it would silently drop or misdate a real trading day. This one was caught only because a chain-law validation gate (sequential trading-day consistency check) flagged the anomaly instead of silently accepting it.
+
+(b) **`dsebd.org/market_summary.php`'s archive is shallow, not 14-years-deep.** The site only serves recent history — roughly 2025-onward — not back to 2013 the way `metric_history_monthly`'s broader backlog does for other indicators. Any future backfill plan for `dse_market` that assumes the live archive page can supply pre-2025 history will find nothing there; older history has to come from a different source (or stays as whatever was captured historically), not a deeper archive-page crawl.
+
+(c) **Every `dse_market` row before 2026-07-09 was one trading day late.** The pre-market scraper run fires at 06:06 BDT — before that morning's session opens — so it can only see the PREVIOUS session's close. The row was being stored under `as_of = D` (today's date) while the value was actually session D-1's close, a systematic one-trading-day shift affecting the whole history up to the 2026-07-09 fix. The 2026-08-08 archive rebuild corrected the pre-2026-07-09 rows to their true trading-day `as_of`.
+
+**Lesson:** A market's trading calendar is not a fixed weekday rule, and a scraper's own capture time relative to the session it's reporting on is part of the schema, not an implementation detail — get either wrong and the error is silent (wrong day, not a missing day) rather than loud.
+
+**Prevention:** Keep the chain-law trading-day validation gate in place for DSE ingestion — it is the mechanism that caught (a) instead of silently misdating a makeup session. Any DSE calendar logic must treat `config/holidays_2026.json`'s Sun–Thu assumption as a default, not a hard rule, and allow for out-of-pattern trading days. Any backfill plan must first confirm the actual depth of the source archive before promising a target year.
+
+**Hotfix:** Historical `dse_market` rows corrected via a full archive rebuild (2026-08-08) that re-derives each row's true trading-day `as_of` instead of trusting the original run-date stamp.
+
+**Cross-references:** AGENTS.md landmine 33 (DSE TLS chain — same source family), PR #74 (`fix: DSE staleness is trading-day-aware`), `config/holidays_2026.json` / `utils/calendar.py` (the Sun–Thu default this finding qualifies), landmine 26 class (`as_of` must be the reporting period, never the run/capture date).
+
 ## 2026-08-08 — The dict-fallback fix (below) skipped ALL numeric validation on the least-trustworthy path — a hallucinated 948% call-money rate would have published
 
 **Trigger:** Adversarial review of PR #121 (`fix/call-money-dict-fallback`, the entry directly below this one) before merge.
