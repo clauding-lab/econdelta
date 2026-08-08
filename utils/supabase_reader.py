@@ -16,7 +16,7 @@ keeping the read error contract clean for callers that catch it.
 from __future__ import annotations
 
 import os
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any
 
 import requests
@@ -161,6 +161,47 @@ def fetch_all_freshness_rows(
         path = (
             f"{table}?select=metric_id,as_of,ingested_at"
             f"&order=metric_id.asc,as_of.asc&limit={page_size}&offset={offset}"
+        )
+        page = _get(path, url=url, key=key, session=sess)
+        rows.extend(page)
+        if len(page) < page_size:
+            break
+        offset += page_size
+    return rows
+
+
+_AUCTION_RESULTS_PAGE_SIZE = 1000
+
+
+def get_auction_results_through(
+    as_of: date, *, url: str | None = None, key: str | None = None,
+    session: requests.Session | None = None, page_size: int = _AUCTION_RESULTS_PAGE_SIZE,
+) -> list[dict[str, Any]]:
+    """All ``auction_results`` rows with ``auction_date <= as_of``, newest
+    first -- ``[{auction_date, tenor, cutoff}]``.
+
+    Used by the yield-ladder monthly appender (Phase 2, AGENTS.md landmine
+    51) to find the latest cutoff yield per tenor as of a given month-end:
+    T-bill/T-bond tenors auction roughly monthly-to-quarterly (not every
+    single month), so "the latest row on or before month-end" is what
+    implements the carry-forward-across-months derivation rule -- callers
+    take the FIRST row per tenor from this newest-first list.
+
+    Pages with limit/offset like ``fetch_all_freshness_rows`` since
+    PostgREST caps a single response. Raises ``SupabaseReadError`` on any
+    page failure -- a partial read must never be silently treated as "this
+    tenor has no auction history" (that would trip the all-or-nothing
+    guard for a reason that has nothing to do with the data itself).
+    """
+    rows: list[dict[str, Any]] = []
+    offset = 0
+    sess = session or requests.Session()
+    as_of_iso = as_of.isoformat()
+    while True:
+        path = (
+            "auction_results?select=auction_date,tenor,cutoff"
+            f"&auction_date=lte.{as_of_iso}&order=auction_date.desc"
+            f"&limit={page_size}&offset={offset}"
         )
         page = _get(path, url=url, key=key, session=sess)
         rows.extend(page)
