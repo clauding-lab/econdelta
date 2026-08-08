@@ -57,9 +57,12 @@ INSERT INTO metric_definitions (
     alias_of
 ) VALUES (
     'gross_reserves_usd_bn',
-    'Gross Reserves Usd Bn',
+    -- Byte-identical to aggregate_latest.py's RESERVES_MONTHLY definitions
+    -- (display_name/unit for RESERVES_MONTHLY_GROSS_ID, ~line 911) — same
+    -- physical quantity, same convention already used for its monthly twin.
+    'FX reserves (gross)',
     NULL,
-    NULL,
+    'USD bn',
     'forex_and_reserves',
     100,
     'monthly',
@@ -72,8 +75,14 @@ INSERT INTO metric_definitions (
         || 'sources-v3.json config-driven id copied from it. Same source, '
         || 'same value, same cadence — do not treat these as independent '
         || 'confirmation of anything.',
-    NULL,
-    'https://www.bb.org.bd/en/index.php/publication/publictn/5/27',
+    'Bangladesh Bank',
+    -- This id is scraped by scrapers/bb_forex.py::parse_reserves off BB's
+    -- reserves TABLE page (aggregate_latest.py:881
+    -- RESERVES_MONTHLY_SOURCE_URL, used at :916 for this exact figure's
+    -- monthly twin) -- NOT the WSEI PDF publication page, which is
+    -- fx_reserve_gross_and_bpm6's own config fetch URL (config/sources-v3.json)
+    -- and would send a reader to the wrong document entirely.
+    'https://www.bb.org.bd/en/index.php/econdata/intreserve',
     false,
     false,
     45,
