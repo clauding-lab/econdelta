@@ -291,11 +291,12 @@ comment on policy "anon read auction_calendar" on public.auction_calendar is
 -- metric_definitions — display metadata for the DAILY metric system
 -- ----------------------------------------------------------------------------
 -- Canonical snapshot of the LIVE table (verified via information_schema,
--- 2026-07-09). Seeded idempotently (ON CONFLICT DO NOTHING) by
+-- 2026-07-09; grace_days/deprecated/alias_of confirmed live 2026-07-10 by
+-- migration 0012). Seeded idempotently (ON CONFLICT DO NOTHING) by
 -- aggregate_latest._build_definition_seeds → upsert_metric_definitions_seed;
 -- first insert wins so Studio hand-edits are preserved. Consumers join it for
--- labels/units/cadence; the E3.1 package adds grace_days + deprecated/alias_of
--- (see docs/data-contract.md §10.3 — DDL applied via Adnan's SQL editor only).
+-- labels/units/cadence/freshness (see docs/data-contract.md §10.3 — DDL
+-- applied via Adnan's SQL editor only).
 -- ============================================================================
 create table if not exists public.metric_definitions (
   metric_id    text         primary key,
@@ -312,9 +313,11 @@ create table if not exists public.metric_definitions (
   is_hero      boolean      default false,
   inverted     boolean      default false,
   created_at   timestamptz  not null default now(),
-  updated_at   timestamptz  not null default now()
-  -- E3.1 package (prepared, not yet applied) adds:
-  --   grace_days integer, deprecated boolean default false, alias_of text
+  updated_at   timestamptz  not null default now(),
+  -- E3.1 package (migration 0012, LIVE):
+  grace_days   integer,
+  deprecated   boolean      default false,
+  alias_of     text
 );
 
 -- ============================================================================
@@ -337,8 +340,9 @@ create table if not exists public.metric_definitions_monthly (
   description         text,
   notes               text,
   created_at          timestamptz  not null default now(),
-  updated_at          timestamptz  not null default now()
-  -- E3.1 package (prepared, not yet applied) adds: grace_days integer
+  updated_at          timestamptz  not null default now(),
+  -- E3.1 package (migration 0012, LIVE):
+  grace_days          integer
 );
 
 -- ============================================================================
