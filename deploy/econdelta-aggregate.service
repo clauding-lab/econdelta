@@ -37,10 +37,22 @@ EnvironmentFile=/etc/econdelta.env
 ExecStartPre=+/bin/sh -c '[ -L /home/adnan-local/econdelta/logs/aggregate-systemd.log ] && exit 1; touch /home/adnan-local/econdelta/logs/aggregate-systemd.log && chmod 0644 /home/adnan-local/econdelta/logs/aggregate-systemd.log && chown adnan-local:adnan-local /home/adnan-local/econdelta/logs/aggregate-systemd.log'
 ExecStart=/home/adnan-local/econdelta/.venv/bin/python -m aggregate_latest
 
-# Resource limits — aggregator is light
-MemoryMax=250M
-MemoryHigh=200M
-CPUQuota=50%
+# Resource limits — sized for the aggregator's own Chromium launch
+# (aggregate_latest._fetch_remittance_html -> fetchers.html_fetcher.fetch_html,
+# 2026-08-08 frozen-charts fix). The prior 250M/200M/50% sizing assumed a pure
+# HTTP+Supabase workload and predates this unit hosting a headless-Chromium
+# fetch; other units that already launch Playwright (econdelta-forex.service,
+# econdelta-dse.service, econdelta-commodity.service: 500M/400M/50%;
+# econdelta-fetch.service/econdelta-parse.service: 1500M/1200M/200%) are all
+# sized well above the old aggregate numbers. 800M/600M/100% gives headroom
+# above the forex/dse/commodity tier (a single Chromium instance, not the
+# heavier multi-page fetch/parse workload) without matching the largest
+# units. TasksMax=512 (unchanged) already comfortably covers a Chromium
+# launch's process/thread count -- every Playwright-launching unit in this
+# fleet shares the same 512 value.
+MemoryMax=800M
+MemoryHigh=600M
+CPUQuota=100%
 TasksMax=512
 
 # Hardening
