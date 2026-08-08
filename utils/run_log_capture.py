@@ -59,14 +59,24 @@ class RingBufferHandler(logging.Handler):
 # Full URL query strings: keep scheme + host + path, drop everything from "?".
 _URL_QUERY_RE = re.compile(r"(https?://[^\s?#\"']+)\?[^\s\"'>)]*")
 
+# URL userinfo credentials: scheme://user:pass@host — not currently reachable
+# (no DB driver or authenticated-proxy fetch in this codebase uses this URL
+# shape today), but a latent hole the moment one is added, and cheap to close
+# now. Keeps the scheme, drops user+pass.
+_URL_USERINFO_RE = re.compile(r"(?i)(://)[^/\s:@]+:[^/\s@]+@")
+
 # JWTs: three dot-separated base64url segments, header always starts "eyJ".
 _JWT_RE = re.compile(r"eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}")
 
 # Values following an Authorization/apikey/token/key/secret/password marker,
-# an optional "Bearer " prefix, case-insensitive marker matching.
+# an optional "Bearer " prefix, case-insensitive marker matching. Separator
+# (":"/"=" plus surrounding whitespace) and any "Bearer " prefix are captured
+# so the replacement can preserve them — only the VALUE is a secret; rewriting
+# "Authorization: Bearer xyz" into "Authorization=[REDACTED]" would silently
+# drop the "Bearer" scheme and misrepresent what the original line said.
 _MARKER_RE = re.compile(
     r"(?i)\b(authorization|apikey|api[_-]?key|access[_-]?token|token|"
-    r"secret|password|passwd|pwd|key)\s*[:=]\s*(?:Bearer\s+)?[^\s,;\"'\)]+"
+    r"secret|password|passwd|pwd|key)(\s*[:=]\s*)((?:Bearer\s+)?)[^\s,;\"'\)]+"
 )
 
 # KEY=value pairs where KEY looks like an env secret name — catches
@@ -78,20 +88,39 @@ _ENV_SECRET_ASSIGN_RE = re.compile(
 )
 
 # Catch-all: any remaining standalone hex/base64-looking run of 20+ chars.
-_LONG_TOKEN_RE = re.compile(r"[A-Za-z0-9+/_=-]{20,}")
+# Deliberately excludes "/" — earlier drafts included it, which meant any
+# file path or URL path segment (e.g. "/home/adnan-local/econdelta/data/
+# snapshots/bb_forex.json", or "www.bb.org.bd/en/index.php/econdata/
+# exchangerate") got swept into ONE long "token" across its slashes and
+# redacted wholesale, destroying the exact diagnostic this module exists to
+# preserve. None of this codebase's real secret shapes (Supabase JWT — see
+# _JWT_RE above, sb_secret_*, sk-ant-oat01-*, Discord webhook tokens) rely on
+# "/" appearing INSIDE the secret value itself, so dropping it costs no
+# real coverage — a webhook URL's own "/" separators now just delimit the
+# path from the trailing token, and the token segment alone still clears 20
+# chars and gets caught.
+_LONG_TOKEN_RE = re.compile(r"[A-Za-z0-9+_=-]{20,}")
 
 
 def scrub_secrets(text: str) -> str:
     """Redact likely secrets from ``text`` before it reaches PUBLIC run_logs.
 
-    Redacts, in order: full URL query strings (scheme+host+path kept), JWTs,
-    values after an Authorization/apikey/token/key/secret/password marker,
-    KEY=value pairs whose KEY looks like an env secret name, and finally any
-    remaining standalone hex/base64-looking run of 20+ characters.
+    Redacts, in order: full URL query strings (scheme+host+path kept), URL
+    userinfo credentials (scheme+host kept), JWTs, values after an
+    Authorization/apikey/token/key/secret/password marker, KEY=value pairs
+    whose KEY looks like an env secret name, and finally any remaining
+    standalone hex/base64-looking run of 20+ characters.
+
+    Deliberately aggressive by design: a false-positive redaction is
+    harmless, an unredacted secret on a public table is not. Known accepted
+    gaps (not bugs): a secret under 20 characters with no adjacent marker
+    word (e.g. a bare short token in prose) survives, because a shorter
+    threshold would false-positive on ordinary numbers and identifiers.
     """
     text = _URL_QUERY_RE.sub(r"\1", text)
+    text = _URL_USERINFO_RE.sub(r"\1[REDACTED]@", text)
     text = _JWT_RE.sub("[REDACTED]", text)
-    text = _MARKER_RE.sub(lambda m: f"{m.group(1)}=[REDACTED]", text)
+    text = _MARKER_RE.sub(lambda m: f"{m.group(1)}{m.group(2)}{m.group(3)}[REDACTED]", text)
     text = _ENV_SECRET_ASSIGN_RE.sub(lambda m: f"{m.group(1)}=[REDACTED]", text)
     text = _LONG_TOKEN_RE.sub("[REDACTED]", text)
     return text
