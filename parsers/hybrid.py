@@ -256,6 +256,36 @@ _HOLD_LAST_GOOD_VALUE_TYPES = frozenset({
     "amount_bdt_crore", "amount_bdt_mn", "amount_usd_bn", "amount_usd_mn",
 })
 
+# Indicators whose LLM-only fallback (parse_one's dict branch below) may
+# legitimately return a dict rather than a scalar. Mirrors the set
+# aggregate_latest._flatten_dict_indicators explodes into per-key numeric
+# metrics. Any OTHER llm_prompt-configured indicator returning a dict is a
+# hallucination, not a legitimate shape (PR #121 review, 2026-08-08) — 63 of
+# the 65 llm_prompt indicators in config/sources-v3.json are scalar and must
+# fall through to the scalar rejection path below instead of "succeeding" as
+# an unwritable dict that silently defeats hold-last-good.
+_DICT_SHAPED_LLM_INDICATOR_IDS = frozenset({"call_money_rate", "dse_sector_heat"})
+
+
+def _expected_dict_keys(indicator_id: str) -> frozenset[str]:
+    """Allow-listed dict keys for a dict-shaped LLM extract.
+
+    Reuses the SAME allow-list each indicator's deterministic parser already
+    trusts, so the LLM-only fallback can never mint a metric_id (via
+    aggregate_latest._flatten_dict_indicators) the deterministic path would
+    not — a hallucinated key like ``"../evil"`` or a free-text tenor label
+    like ``"overnight"`` gets dropped rather than published (PR #121 review).
+    Imports are local to avoid hybrid.py depending on every dict-shaped
+    parser module at import time for the common (non-dict) case.
+    """
+    if indicator_id == "call_money_rate":
+        from parsers.html_call_money import _TENORS
+        return frozenset(_TENORS)
+    if indicator_id == "dse_sector_heat":
+        from parsers.dse_sector_heat import _load_taxonomy
+        return frozenset(_load_taxonomy())
+    raise KeyError(indicator_id)
+
 
 def _terminal_fallback(
     *, indicator: dict, artifact: FetchResult, error: str, last_good: dict | None,
@@ -322,8 +352,14 @@ def parse_one(
 
     if v_det is not None:
         # Dict-shaped values (e.g. dse_sector_heat: {sector: pct}) skip the
-        # scalar Sonnet sanity check — the per-entry valid_range applied at
-        # parse time is the structural guard. Emitting deterministic.
+        # scalar Sonnet sanity check. NOTE (corrected 2026-08-08, PR #121
+        # review): dict-shaped deterministic parsers do NOT apply a
+        # per-entry valid_range at parse time — verified false for
+        # html_call_money.py, dse_sector_heat.py, and
+        # pdf_fsr_ownership_cluster.py, none of which range-check. There is
+        # no structural guard here; a bad deterministic dict value would
+        # publish unchecked. Emitting deterministic regardless, since fixing
+        # that is a separate, pre-existing gap outside this branch's scope.
         if isinstance(v_det, dict):
             return _build_snapshot(indicator=indicator, artifact=artifact, value=v_det,
                                    provenance="deterministic", parse_strategy=parse_block["deterministic"],
@@ -437,23 +473,70 @@ def parse_one(
         if isinstance(v_llm, dict):
             # Multi-tenor indicators (e.g. call_money_rate: {"1D": 9.48, "7D":
             # 11.95, "14D": 9.48, "90D": null}) legitimately extract as a dict
-            # even on this LLM-only path — mirrors the deterministic dict
-            # branch above (v_det dict case), which also skips validate_value
-            # and trusts per-entry structure instead of a scalar range check.
-            # Validate PER-KEY: each tenor must be int/float or null (a tenor
-            # with no trades that day) — reject bool, string, and nested
-            # values same as the scalar guard below, and reject an empty
-            # dict outright (nothing was actually extracted).
+            # even on this LLM-only path. UNLIKE this branch's previous
+            # comment claimed, the deterministic dict branch above is NOT a
+            # structural guard — html_call_money.py, dse_sector_heat.py, and
+            # pdf_fsr_ownership_cluster.py all skip range-checking entirely
+            # (verified false, PR #121 review, 2026-08-08). The LLM path is
+            # far less trustworthy than any of those, so it needs its OWN
+            # validation, done here in full:
+            #   1. Only indicators explicitly known to produce a dict may
+            #      take this path — any other llm_prompt indicator returning
+            #      a dict is a hallucination, not a legitimate shape, and
+            #      must fall through to the scalar rejection below instead
+            #      of "succeeding" as an unwritable dict that silently
+            #      defeats hold-last-good for a scalar money metric.
+            #   2. Every key is matched case-insensitively against that
+            #      indicator's own allow-list (the SAME list its
+            #      deterministic parser trusts) and remapped to the
+            #      allow-list's canonical casing — an unrecognised key (a
+            #      free-text tenor label, or something injection-shaped like
+            #      "../evil") is dropped, never published, and casing drift
+            #      ("1d" vs "1D") no longer silently defeats
+            #      aggregate_latest's exact-case ``call_money.get("1D")``
+            #      headline promotion.
+            #   3. Every non-null value is range-checked with the
+            #      indicator's own configured valid_range via
+            #      validate_value — which also rejects NaN/Infinity (both
+            #      compare False against any finite range) and bool, same as
+            #      the scalar guard below. A null tenor (no trades that day)
+            #      is preserved as-is, not validated.
+            # Any failure below raises InvalidValueError, caught by this
+            # function's outer except clause, routing the WHOLE indicator to
+            # _terminal_fallback (hold-last-good for money metrics) exactly
+            # like a bad scalar extract already does — a response containing
+            # even one impossible number is not trusted for the rest either.
+            indicator_id = indicator["id"]
+            if indicator_id not in _DICT_SHAPED_LLM_INDICATOR_IDS:
+                raise InvalidValueError(
+                    f"llm extract returned a dict value for {indicator_id!r}, "
+                    f"which is not configured as a dict-shaped indicator: {v_llm!r}"
+                )
             if not v_llm:
                 raise InvalidValueError("llm extract returned an empty dict")
-            for key, val in v_llm.items():
-                if val is None:
-                    continue
-                if isinstance(val, bool) or not isinstance(val, (int, float)):
-                    raise InvalidValueError(
-                        f"llm extract dict value for key {key!r} is non-numeric: {val!r}"
+            expected_keys = _expected_dict_keys(indicator_id)
+            keys_by_lower = {k.lower(): k for k in expected_keys}
+            validated: dict[str, float | None] = {}
+            for raw_key, val in v_llm.items():
+                canonical_key = keys_by_lower.get(str(raw_key).strip().lower())
+                if canonical_key is None:
+                    logger.warning(
+                        "llm extract dict for %s has an unexpected key %r "
+                        "(allowed: %s) — dropping",
+                        indicator_id, raw_key, sorted(expected_keys),
                     )
-            return _build_snapshot(indicator=indicator, artifact=artifact, value=v_llm,
+                    continue
+                if val is None:
+                    validated[canonical_key] = None
+                    continue
+                validate_value(value=val, value_type=value_type, valid_range=valid_range)
+                validated[canonical_key] = float(val)
+            if not any(v is not None for v in validated.values()):
+                raise InvalidValueError(
+                    f"llm extract dict for {indicator_id} had no non-null "
+                    f"values matching the allow-list {sorted(expected_keys)}: {v_llm!r}"
+                )
+            return _build_snapshot(indicator=indicator, artifact=artifact, value=validated,
                                    provenance="llm_extracted", parse_strategy=parse_block["deterministic"],
                                    source_as_of=_recover_source_as_of(parser, artifact))
         # Reject bool before the isinstance(..., (int, float)) check below —
