@@ -4,6 +4,7 @@ __pycache__/
 *.pyd
 .venv/
 venv/
+.venv-bump/
 .pytest_cache/
 .coverage
 htmlcov/

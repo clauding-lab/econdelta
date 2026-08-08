@@ -19,7 +19,7 @@ dependencies = [
     # OCR fallback for scanned PDFs (parsers/hybrid.py); needs system tesseract+poppler at runtime
     "pytesseract>=0.3.10,<0.4",
     "pdf2image>=1.17,<2",
-    "Pillow>=10,<12",
+    "Pillow>=12.3,<13",
 ]
 
 [tool.pytest.ini_options]
