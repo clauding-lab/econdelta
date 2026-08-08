@@ -5,7 +5,13 @@ yfinance>=0.2.40,<1
 python-dateutil>=2.9,<3
 playwright>=1.49,<2
 playwright-stealth>=2.0,<3
-pdfplumber>=0.11,<0.13
+# Capped below 0.11.10 on purpose: that release requires Pillow>=12.2.0 and
+# pins pdfminer.six==20260107 (via its own ==), so letting pip pick it drags
+# pdfminer.six/pypdfium2 along for the ride as a side effect of the Pillow
+# security bump below. pdfplumber is on VISION.md's sign-off list — moving
+# past 0.11.9 needs its own reviewed PR, not a resolver side effect. See
+# tests/test_pdfplumber_pillow_coupling.py.
+pdfplumber>=0.11,<0.11.10
 # OCR fallback for scanned PDFs (no text layer). Requires system binaries:
 # Linux: apt install tesseract-ocr poppler-utils
 # Mac:   brew install tesseract poppler
