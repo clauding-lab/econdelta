@@ -13,13 +13,17 @@ dependencies = [
     "pydantic>=2.8,<3",
     "yfinance>=0.2.40,<1",
     "python-dateutil>=2.9,<3",
-    "pdfplumber>=0.11,<0.13",
+    # Capped below 0.11.10 on purpose: see requirements.txt and
+    # tests/test_pdfplumber_pillow_coupling.py — that release requires
+    # Pillow>=12.2.0 and would drag pdfminer.six/pypdfium2 along with the
+    # Pillow security bump below. pdfplumber needs its own sign-off (VISION.md).
+    "pdfplumber>=0.11,<0.11.10",
     "playwright>=1.49,<2",
     "playwright-stealth>=2.0,<3",
     # OCR fallback for scanned PDFs (parsers/hybrid.py); needs system tesseract+poppler at runtime
     "pytesseract>=0.3.10,<0.4",
     "pdf2image>=1.17,<2",
-    "Pillow>=10,<12",
+    "Pillow>=12.3,<13",
 ]
 
 [tool.pytest.ini_options]
