@@ -221,3 +221,94 @@ def test_terminal_fallback_does_not_hold_last_good_for_non_amount_value_type(tmp
     snapshot = parse_one(_ticker_artifact(tmp_path), indicator, history=[], last_good=last_good)
     assert snapshot["value"] == 0.0
     assert snapshot["_provenance"] == "needs_review"
+
+
+# ---------------------------------------------------------------------------
+# call_money_rate freeze (2026-08-08): the LLM-only fallback path (used when
+# the deterministic parser fails outright) rejected ANY non-int/float extract
+# value, including the legitimate multi-tenor dict call_money_rate's LLM
+# extraction returns — e.g. {"1D": 9.48, "7D": 11.95, "14D": 9.48, "90D": null}
+# (real shape observed on the box, Aug 3-4 snapshots). PR #107 closed a real
+# hole for scalar indicators but had no dict-aware branch here, so the whole
+# bundle was rejected wholesale and the metric froze on stale_fallback.
+# ---------------------------------------------------------------------------
+
+_CALL_MONEY_INDICATOR = {
+    "id": "call_money_rate", "name": "Call money rate", "domain": "money_market",
+    "cadence": "daily",
+    "fetch": {"task": "Nonexistent"},  # forces the deterministic parser to fail
+    "parse": {"deterministic": "html_footer_ticker", "value_type": "percent",
+              "valid_range": [0.0, 25.0], "llm_prompt": "html_footer_ticker.txt"},
+}
+
+
+def test_llm_extract_multi_tenor_dict_reproduces_and_fixes_the_freeze(tmp_path):
+    """Reproduces the Aug 5-7 freeze: the real 4-tenor dict shape the LLM
+    extraction legitimately returns must be accepted through the LLM-only
+    fallback path, not rejected wholesale into needs_review/extract_failed."""
+    real_shape = {"1D": 9.48, "7D": 11.95, "14D": 9.48, "90D": None}
+    fake_extract = type("R", (), {"parsed": {"value": real_shape}, "raw_text": ""})()
+    with patch("parsers.hybrid._llm_extract", return_value=fake_extract):
+        snapshot = parse_one(_ticker_artifact(tmp_path), _CALL_MONEY_INDICATOR, history=[])
+    assert snapshot["_provenance"] == "llm_extracted"
+    assert snapshot["_parse_strategy"] == "html_footer_ticker"
+    assert snapshot["value"] == real_shape
+
+
+def test_llm_extract_all_numeric_dict_tenors_accepted(tmp_path):
+    real_shape = {"1D": 9.48, "7D": 11.95, "14D": 9.48, "90D": 9.75}
+    fake_extract = type("R", (), {"parsed": {"value": real_shape}, "raw_text": ""})()
+    with patch("parsers.hybrid._llm_extract", return_value=fake_extract):
+        snapshot = parse_one(_ticker_artifact(tmp_path), _CALL_MONEY_INDICATOR, history=[])
+    assert snapshot["_provenance"] == "llm_extracted"
+    assert snapshot["value"] == real_shape
+
+
+def test_llm_extract_dict_null_tenor_passes_and_is_preserved(tmp_path):
+    """A null tenor (e.g. 90D not traded that day) is a valid per-key shape —
+    it is skipped downstream by aggregate_latest._flatten_dict_indicators,
+    not rejected here."""
+    real_shape = {"1D": 9.48, "7D": 11.95, "14D": 9.48, "90D": None}
+    fake_extract = type("R", (), {"parsed": {"value": real_shape}, "raw_text": ""})()
+    with patch("parsers.hybrid._llm_extract", return_value=fake_extract):
+        snapshot = parse_one(_ticker_artifact(tmp_path), _CALL_MONEY_INDICATOR, history=[])
+    assert snapshot["_provenance"] == "llm_extracted"
+    assert snapshot["value"]["90D"] is None
+
+
+def test_llm_extract_dict_string_tenor_rejected(tmp_path):
+    bad_shape = {"1D": 9.48, "7D": "n/a", "14D": 9.48, "90D": None}
+    fake_extract = type("R", (), {"parsed": {"value": bad_shape}, "raw_text": ""})()
+    with patch("parsers.hybrid._llm_extract", return_value=fake_extract):
+        snapshot = parse_one(_ticker_artifact(tmp_path), _CALL_MONEY_INDICATOR, history=[])
+    assert snapshot["_provenance"] == "needs_review"
+    assert snapshot["_parse_strategy"] == "extract_failed"
+
+
+def test_llm_extract_dict_bool_tenor_rejected(tmp_path):
+    """bool is an int subclass — must be rejected per-key exactly like the
+    scalar path rejects a bool value (test_llm_extract_bool_value_is_rejected_
+    not_cast_to_float above)."""
+    bad_shape = {"1D": 9.48, "7D": True, "14D": 9.48, "90D": None}
+    fake_extract = type("R", (), {"parsed": {"value": bad_shape}, "raw_text": ""})()
+    with patch("parsers.hybrid._llm_extract", return_value=fake_extract):
+        snapshot = parse_one(_ticker_artifact(tmp_path), _CALL_MONEY_INDICATOR, history=[])
+    assert snapshot["_provenance"] == "needs_review"
+    assert snapshot["_parse_strategy"] == "extract_failed"
+
+
+def test_llm_extract_dict_nested_tenor_rejected(tmp_path):
+    bad_shape = {"1D": 9.48, "7D": {"low": 9.0, "high": 10.0}, "14D": 9.48, "90D": None}
+    fake_extract = type("R", (), {"parsed": {"value": bad_shape}, "raw_text": ""})()
+    with patch("parsers.hybrid._llm_extract", return_value=fake_extract):
+        snapshot = parse_one(_ticker_artifact(tmp_path), _CALL_MONEY_INDICATOR, history=[])
+    assert snapshot["_provenance"] == "needs_review"
+    assert snapshot["_parse_strategy"] == "extract_failed"
+
+
+def test_llm_extract_empty_dict_rejected(tmp_path):
+    fake_extract = type("R", (), {"parsed": {"value": {}}, "raw_text": ""})()
+    with patch("parsers.hybrid._llm_extract", return_value=fake_extract):
+        snapshot = parse_one(_ticker_artifact(tmp_path), _CALL_MONEY_INDICATOR, history=[])
+    assert snapshot["_provenance"] == "needs_review"
+    assert snapshot["_parse_strategy"] == "extract_failed"

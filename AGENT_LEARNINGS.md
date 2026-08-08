@@ -37,6 +37,20 @@ When something ships broken, when a methodology gap is exposed, or when a smoke 
 
 ## Entries (most recent first)
 
+## 2026-08-08 — A scalar-only value guard closed a real hole and opened a new one: call_money_rate froze for 3+ days because the LLM-only fallback had no dict-aware branch
+
+**Trigger:** The Brief's call-money rate chart showed identical `1D`/`7D`/`14D` values from Aug 4 through Aug 7 while BB's live page had already moved — a live data-quality regression flagged for investigation.
+
+**What went wrong:** PR #107 (2b4a2c9, merged 2026-08-05) hardened `parsers/hybrid.py`'s LLM-only extract fallback (the path used when the deterministic parser fails outright) to reject any extract value that isn't `int`/`float` — closing a real hole where a bool or garbage string could sneak past `validate_value`. But `call_money_rate` is a multi-tenor indicator: its LLM extraction legitimately returns a dict (`{"1D": 9.48, "7D": 11.95, "14D": 9.48, "90D": null}`), a shape the DETERMINISTIC branch a few lines above (`isinstance(v_det, dict)`) already special-cased. The LLM-only branch had no equivalent, so the moment `html_call_money`'s deterministic parser failed to find all 4 tenors (forcing the LLM-only path), the correctly-extracted dict was rejected wholesale as "non-numeric" → `needs_review`/`extract_failed` → aggregate's own 60-day stale-fallback (`_load_last_good_snapshot`) kept republishing the frozen Aug-4 snapshot every day, and `call_money_rate_90d` got zero new rows because 90D was `null` in that frozen snapshot.
+
+**Lesson:** A scalar type guard added to ONE branch of a multi-branch value-handling ladder must be checked against every OTHER shape the same field legitimately takes elsewhere in the same function — "reject anything that isn't `(int, float)`" is only safe if every legitimate producer of that value is scalar. A fix that closes a real hole for the common case can silently open a new one for a documented exception the reviewer didn't have in view.
+
+**Prevention:** When hardening a value-validation branch, grep the same file/module for other `isinstance(..., dict)` (or other non-scalar) branches on the same variable family before assuming "reject non-numeric" is complete. Money-critical fixtures for a multi-tenor indicator must include the real dict shape (with a `null` tenor), not just scalar synthetic values.
+
+**Hotfix:** `parsers/hybrid.py`'s LLM-only fallback now has a dict-aware branch mirroring the deterministic one: validates PER-KEY (each tenor must be `int`/`float` or `null`; rejects string/bool/nested values per-key; rejects an empty dict), and skips `validate_value` for the dict case exactly like the deterministic branch does — PR #107's scalar guards are untouched. Separately investigated but NOT fixed here (documented, not shipped — see AGENTS.md landmine 47): `call_money_rate` is on `aggregate_latest.py`'s `_NEVER_DATED_PARSE_STRATEGIES` allow-list (`html_call_money` never recovers `source_as_of`), so every day this metric holds a stale value via the 60-day stale-fallback, its `metric_history.as_of` still advances to the run date — the same as_of-forgery class PR #97 killed for Tier-1, but for a different, already-documented reason (landmine 47 flags this exact gap for `call_money_rate` and `policy_rate_repo` as an owner-level decision, not a bug introduced by PR #107). Fixing the dict-rejection stops new stale-fallback episodes from starting; it does not, by itself, fix the pre-existing as_of gap.
+
+**Cross-references:** AGENTS.md landmine 47 (as_of forgery gap, pre-existing), PR #107 (2b4a2c9, the regression), `tests/test_hybrid.py` (new dict-aware fallback tests).
+
 ## 2026-08-05 — A source table with two methodology groups sharing the same column labels let one indicator's LLM extraction silently flip-flop between two real, different numbers for months
 
 **Trigger:** config-conversion batch 2 (issue #113), checking whether `general_inflation` and `point_to_point_inflation` were a duplicate `metric_id` pair worth collapsing (per the pattern in `docs/data-contract.md` §10.7).

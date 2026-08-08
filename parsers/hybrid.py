@@ -434,6 +434,28 @@ def parse_one(
         v_llm = (extract.parsed or {}).get("value")
         if v_llm is None:
             raise MaxCallError(f"llm extract returned no value: {extract.raw_text[:200]}")
+        if isinstance(v_llm, dict):
+            # Multi-tenor indicators (e.g. call_money_rate: {"1D": 9.48, "7D":
+            # 11.95, "14D": 9.48, "90D": null}) legitimately extract as a dict
+            # even on this LLM-only path — mirrors the deterministic dict
+            # branch above (v_det dict case), which also skips validate_value
+            # and trusts per-entry structure instead of a scalar range check.
+            # Validate PER-KEY: each tenor must be int/float or null (a tenor
+            # with no trades that day) — reject bool, string, and nested
+            # values same as the scalar guard below, and reject an empty
+            # dict outright (nothing was actually extracted).
+            if not v_llm:
+                raise InvalidValueError("llm extract returned an empty dict")
+            for key, val in v_llm.items():
+                if val is None:
+                    continue
+                if isinstance(val, bool) or not isinstance(val, (int, float)):
+                    raise InvalidValueError(
+                        f"llm extract dict value for key {key!r} is non-numeric: {val!r}"
+                    )
+            return _build_snapshot(indicator=indicator, artifact=artifact, value=v_llm,
+                                   provenance="llm_extracted", parse_strategy=parse_block["deterministic"],
+                                   source_as_of=_recover_source_as_of(parser, artifact))
         # Reject bool before the isinstance(..., (int, float)) check below —
         # bool is an int subclass, and float(True) == 1.0 would silently
         # strip the type info that validate_value's own bool guard checks,
