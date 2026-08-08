@@ -42,6 +42,8 @@ from typing import Optional as _Optional
 
 import requests
 
+from utils.run_log_capture import RingBufferHandler, scrub_secrets
+
 logger = logging.getLogger("supabase_writer")
 
 # How many rows to send in one POST. PostgREST is comfortable with a few
@@ -683,6 +685,26 @@ def log_run_end(
 
 _STATUS_BY_EXIT = {0: "ok", 1: "fail", 2: "stale", 3: "skip"}
 
+# run_logs.error is capped well below log_run_end's own 2000-char truncate —
+# this is a short diagnostic pointer, not a transcript.
+_RUN_ERROR_MAX_CHARS = 500
+
+# Statuses where a self-handled failure otherwise leaves error=null. 'skip'
+# is a by-design no-op (landmine 48) and stays null on purpose.
+_STATUSES_NEEDING_CAPTURED_ERROR = frozenset({"fail", "stale"})
+
+
+def _finalize_run_error(raw: str) -> str:
+    """Truncate then scrub a raw error string before it reaches PUBLIC run_logs.
+
+    Scrubs the WHOLE composed string, not just the captured-log portion — an
+    uncaught exception's own message can carry a secret too (e.g. a
+    ``requests`` error embedding the request URL's query string), so
+    confining the scrub to only the appended tail would leave that path
+    unprotected.
+    """
+    return scrub_secrets(raw[-_RUN_ERROR_MAX_CHARS:])
+
 
 def wrap_run(source: str, unit: str, main_func: _Callable[[], int]) -> int:
     """Wrap a scraper's main() with run_logs instrumentation.
@@ -693,20 +715,37 @@ def wrap_run(source: str, unit: str, main_func: _Callable[[], int]) -> int:
 
     Maps main()'s exit code to run_logs.status:
         0 -> 'ok', 1 -> 'fail', 2 -> 'stale', 3 -> 'skip', other -> 'fail'
-    Uncaught exceptions are logged as 'fail' with error=type(e).__name__: str(e),
-    then re-raised so systemd records non-zero exit.
+
+    A ``RingBufferHandler`` is attached to the root logger for the duration
+    of ``main_func`` so a self-handled failure (exit 1/2, no exception) still
+    leaves a diagnostic: the last few WARNING-or-above log lines, scrubbed of
+    secrets, become ``error=``. Uncaught exceptions keep the existing
+    ``type(e).__name__: e`` string and append the same captured tail. The
+    handler is always detached in ``finally``, including on raise.
     """
     started_at = datetime.now(timezone.utc)
     run_id = log_run_start(source=source, unit=unit, started_at=started_at)
+    handler = RingBufferHandler()
+    root_logger = logging.getLogger()
+    root_logger.addHandler(handler)
     try:
         exit_code = main_func()
         status = _STATUS_BY_EXIT.get(exit_code, "fail")
-        log_run_end(run_id, started_at, status=status, exit_code=exit_code)
+        error = None
+        if status in _STATUSES_NEEDING_CAPTURED_ERROR:
+            tail = handler.tail()
+            error = _finalize_run_error(tail) if tail else None
+        log_run_end(run_id, started_at, status=status, exit_code=exit_code, error=error)
         return exit_code
     except Exception as e:
-        err = f"{type(e).__name__}: {e}"
-        log_run_end(run_id, started_at, status="fail", exit_code=1, error=err)
+        raw = f"{type(e).__name__}: {e}"
+        tail = handler.tail()
+        if tail:
+            raw = f"{raw}\n{tail}"
+        log_run_end(run_id, started_at, status="fail", exit_code=1, error=_finalize_run_error(raw))
         raise
+    finally:
+        root_logger.removeHandler(handler)
 
 
 # ============================================================================
