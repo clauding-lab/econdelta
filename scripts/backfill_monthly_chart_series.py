@@ -47,10 +47,19 @@ Values (owner-approved 2026-08-08 -- DO NOT "improve" these numbers):
 
 Also re-points ``metric_definitions_monthly.source_url``/``source_attribution``
 for these 5 ids to the real official sources -- the seeded definitions still
-point at the dead macro-observer site. Sends a PARTIAL row (metric_id +
-source_url + source_attribution only) so PostgREST's merge-duplicates upsert
-touches ONLY those two columns, leaving display_name/unit/domain/notes
-untouched (they already match ``scripts/seed_macro_monthly.py``'s KEY_MAP).
+point at the dead macro-observer site. Sends FULL rows (2026-08-08 Opus
+review H1: migration ``0007_metric_definitions_monthly.sql`` declares
+``display_name``/``unit``/``domain`` ``NOT NULL`` with no ``DEFAULT``; a
+bulk PostgREST upsert is one ``INSERT ... ON CONFLICT DO UPDATE`` statement
+and Postgres validates the INSERT's own VALUES list against ``NOT NULL``
+BEFORE the ``ON CONFLICT`` decision runs -- a 3-key partial row would
+``23502`` the WHOLE bulk upsert, not just silently skip those two columns).
+``display_name``/``unit``/``domain``/``notes`` are kept byte-identical to
+``scripts/seed_macro_monthly.py``'s ``KEY_MAP`` entries for these 5 ids --
+only ``source_url``/``source_attribution``/``description`` change.
+``run()``'s ``--write`` path posts history rows BEFORE the definitions
+re-point (also H1) -- the definitions upsert is metadata-only and does not
+gate whether the 15 history values land.
 
 ``as_of`` uses the day-1-of-data-month convention (2026-04-01 = April data),
 matching every existing row already in these 5 series (seeded by
@@ -135,34 +144,74 @@ EXPECTED_PAIRS: frozenset[tuple[str, date]] = frozenset(
 )
 assert len(EXPECTED_PAIRS) == 15, f"expected exactly 15 backfill pairs, got {len(EXPECTED_PAIRS)}"
 
-# metric_definitions_monthly source re-point for the same 5 ids -- PARTIAL
-# rows (see module docstring: only source_url/source_attribution are sent,
-# so merge-duplicates leaves display_name/unit/domain/notes untouched).
+# metric_definitions_monthly re-point for the same 5 ids -- FULL rows
+# (2026-08-08 Opus review H1: migration 0007 declares display_name/unit/
+# domain NOT NULL with no DEFAULT; a bulk PostgREST upsert is a single
+# INSERT ... ON CONFLICT DO UPDATE statement, and Postgres validates the
+# INSERT's own VALUES list against NOT NULL constraints BEFORE the ON
+# CONFLICT decision -- ON CONFLICT DO UPDATE does not bypass that check on
+# the attempted new row. A 3-key partial row {metric_id, source_url,
+# source_attribution} would 23502 the WHOLE bulk upsert, and because
+# --write calls upsert_metric_definitions_monthly BEFORE
+# upsert_metric_history_monthly (see run(), also fixed by H1), that failure
+# would have blocked every history row from landing too).
+#
+# display_name/unit/domain/notes are kept BYTE-IDENTICAL to
+# scripts/seed_macro_monthly.py's KEY_MAP entries for these same 5 ids
+# (remUsd/expUsd/gen12M/foodP2P/nonFoodP2P) -- only source_url/
+# source_attribution/description differ from the dead-site seed. This
+# mirrors aggregate_latest._reserves_monthly_definitions()'s own
+# byte-identical-labels convention (landmine 44 review L1).
 DEFINITION_SOURCE_UPDATES: tuple[dict, ...] = (
     {
         "metric_id": "remittance_usd_mn_monthly",
+        "display_name": "Remittance",
+        "unit": "USD mn",
         "source_url": "https://www.bb.org.bd/en/index.php/econdata/wageremitance",
         "source_attribution": "Bangladesh Bank",
+        "domain": "external",
+        "description": "Remittance",
+        "notes": "",
     },
     {
         "metric_id": "exports_usd_mn_monthly",
+        "display_name": "Exports",
+        "unit": "USD mn",
         "source_url": "https://epb.gov.bd/",
         "source_attribution": "Export Promotion Bureau (EPB) via BSS",
+        "domain": "external",
+        "description": "Exports",
+        "notes": "",
     },
     {
         "metric_id": "cpi_12m_avg_monthly",
+        "display_name": "CPI 12-month average",
+        "unit": "%",
         "source_url": "https://www.bb.org.bd/en/index.php/econdata/inflation",
         "source_attribution": "Bangladesh Bank",
+        "domain": "prices_policy",
+        "description": "CPI 12-month average",
+        "notes": "",
     },
     {
         "metric_id": "cpi_p2p_food_monthly",
+        "display_name": "CPI YoY (food)",
+        "unit": "%",
         "source_url": "https://www.bb.org.bd/en/index.php/econdata/inflation",
         "source_attribution": "Bangladesh Bank",
+        "domain": "prices_policy",
+        "description": "CPI YoY (food)",
+        "notes": "",
     },
     {
         "metric_id": "cpi_p2p_nonfood_monthly",
+        "display_name": "CPI YoY (non-food)",
+        "unit": "%",
         "source_url": "https://www.bb.org.bd/en/index.php/econdata/inflation",
         "source_attribution": "Bangladesh Bank",
+        "domain": "prices_policy",
+        "description": "CPI YoY (non-food)",
+        "notes": "",
     },
 )
 
@@ -254,9 +303,14 @@ def run(argv: list[str] | None = None) -> int:
         upsert_metric_history_monthly,
     )
 
+    # 2026-08-08 Opus review H1: history rows BEFORE the definitions
+    # re-point. The definitions upsert is metadata-only (source_url/
+    # source_attribution) and must never gate whether the 15 owner-approved
+    # values land -- if it were to fail for any reason, the history rows
+    # (the actual fix for the frozen charts) should still be written.
     try:
-        sent_defs = upsert_metric_definitions_monthly(definition_rows)
         sent_hist = upsert_metric_history_monthly(history_rows)
+        sent_defs = upsert_metric_definitions_monthly(definition_rows)
     except SupabaseWriteError as e:
         logger.error("write failed: %s", e)
         return 1

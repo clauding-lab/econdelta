@@ -119,12 +119,39 @@ class TestBuildDefinitionRows:
             "cpi_p2p_nonfood_monthly",
         }
 
-    def test_rows_are_partial_source_only(self):
-        """Only metric_id/source_url/source_attribution -- no display_name/
-        unit/domain -- so the merge-duplicates upsert leaves the existing
-        labels (from scripts/seed_macro_monthly.py's KEY_MAP) untouched."""
+    def test_rows_are_full_not_partial(self):
+        """2026-08-08 Opus review H1: migration 0007 declares display_name/
+        unit/domain NOT NULL with no DEFAULT -- a bulk PostgREST upsert is
+        one INSERT ... ON CONFLICT DO UPDATE statement, and Postgres
+        validates the INSERT's VALUES list against NOT NULL BEFORE the ON
+        CONFLICT decision. A partial 3-key row would 23502 the WHOLE bulk
+        upsert -- every row must carry every NOT NULL column."""
+        required = {"metric_id", "display_name", "unit", "source_url",
+                    "source_attribution", "domain", "description", "notes"}
         for r in build_definition_rows():
-            assert set(r.keys()) == {"metric_id", "source_url", "source_attribution"}
+            assert required <= set(r.keys())
+            assert r["display_name"]  # NOT NULL, must not be empty/missing
+            assert r["unit"]
+            assert r["domain"]
+
+    def test_display_name_unit_domain_match_seed_macro_monthly_key_map(self):
+        """Byte-identical to scripts/seed_macro_monthly.py's KEY_MAP for
+        these 5 ids (remUsd/expUsd/gen12M/foodP2P/nonFoodP2P) -- only
+        source_url/source_attribution/description change from the dead-site
+        seed."""
+        by_id = {r["metric_id"]: r for r in build_definition_rows()}
+        assert by_id["remittance_usd_mn_monthly"]["display_name"] == "Remittance"
+        assert by_id["remittance_usd_mn_monthly"]["unit"] == "USD mn"
+        assert by_id["remittance_usd_mn_monthly"]["domain"] == "external"
+        assert by_id["exports_usd_mn_monthly"]["display_name"] == "Exports"
+        assert by_id["exports_usd_mn_monthly"]["unit"] == "USD mn"
+        assert by_id["exports_usd_mn_monthly"]["domain"] == "external"
+        assert by_id["cpi_12m_avg_monthly"]["display_name"] == "CPI 12-month average"
+        assert by_id["cpi_12m_avg_monthly"]["domain"] == "prices_policy"
+        assert by_id["cpi_p2p_food_monthly"]["display_name"] == "CPI YoY (food)"
+        assert by_id["cpi_p2p_nonfood_monthly"]["display_name"] == "CPI YoY (non-food)"
+        for r in build_definition_rows():
+            assert r["unit"] in ("%", "USD mn")
 
     def test_no_dead_macro_observer_site_remains(self):
         for r in build_definition_rows():
@@ -166,6 +193,25 @@ class TestDryRunCLI:
         mock_defs.assert_called_once()
         written_rows = mock_hist.call_args[0][0]
         assert len(written_rows) == 15
+
+    def test_write_path_writes_history_before_definitions(self):
+        """2026-08-08 Opus review H1: history rows must land BEFORE the
+        definitions re-point, so a definitions-upsert failure can never
+        block the actual fix (the 15 chart values) from being written."""
+        from unittest.mock import MagicMock
+
+        manager = MagicMock()
+        with patch(
+            "utils.supabase_writer.upsert_metric_history_monthly", return_value=15
+        ) as mock_hist, patch(
+            "utils.supabase_writer.upsert_metric_definitions_monthly", return_value=5
+        ) as mock_defs:
+            manager.attach_mock(mock_hist, "history")
+            manager.attach_mock(mock_defs, "definitions")
+            exit_code = run(["--write"])
+        assert exit_code == 0
+        call_order = [c[0] for c in manager.mock_calls]
+        assert call_order.index("history") < call_order.index("definitions")
 
     def test_write_path_returns_1_on_supabase_write_error(self):
         from utils.supabase_writer import SupabaseWriteError
