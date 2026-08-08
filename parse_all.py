@@ -287,6 +287,11 @@ def _claude_preflight() -> bool:
                         attempt, _PREFLIGHT_MAX_ATTEMPTS, elapsed,
                     )
                 return True
+            # NOTE: this ERROR-level log is a candidate for wrap_run's ring
+            # buffer -> PUBLIC run_logs.error (utils/run_log_capture.py).
+            # scrub_secrets() is pattern-based, not allow-list based, and
+            # nothing here controls what the `claude` CLI prints to
+            # stdout/stderr.
             logger.error(
                 "claude pre-flight attempt %d/%d exited %d after %.1fs — stdout=%r stderr=%r",
                 attempt, _PREFLIGHT_MAX_ATTEMPTS, result.returncode, elapsed,

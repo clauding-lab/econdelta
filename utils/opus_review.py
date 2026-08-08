@@ -141,6 +141,10 @@ def review_data(
         logger.warning("opus review unavailable: %s", e)
         return {"status": "ok", "reason": f"review_skipped: {type(e).__name__}", "skipped": True}
 
+    # NOTE: these two warnings are candidates for wrap_run's ring buffer ->
+    # PUBLIC run_logs.error (utils/run_log_capture.py). scrub_secrets() is
+    # pattern-based, not allow-list based, and nothing here controls what
+    # the `claude` CLI prints to stdout/stderr.
     if result.returncode != 0:
         logger.warning("opus review exit %d: %s", result.returncode, result.stderr.strip()[:200])
         return {

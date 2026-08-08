@@ -42,6 +42,8 @@ from typing import Optional as _Optional
 
 import requests
 
+from utils.run_log_capture import RingBufferHandler, scrub_secrets
+
 logger = logging.getLogger("supabase_writer")
 
 # How many rows to send in one POST. PostgREST is comfortable with a few
@@ -683,6 +685,63 @@ def log_run_end(
 
 _STATUS_BY_EXIT = {0: "ok", 1: "fail", 2: "stale", 3: "skip"}
 
+# run_logs.error is capped well below log_run_end's own 2000-char truncate —
+# this is a short diagnostic pointer, not a transcript.
+_RUN_ERROR_MAX_CHARS = 500
+
+# Absolute ceiling on the text handed to scrub_secrets, applied BEFORE
+# scrubbing. Several of its patterns (_ENV_SECRET_ASSIGN_RE in particular)
+# backtrack super-linearly; without a cap here, a pathological multi-megabyte
+# record (e.g. an exception whose str(e) embeds a full HTML error page) would
+# turn the scrub itself into a resource hazard. Comfortably larger than any
+# real ring-buffer tail (10 records) or exception message this codebase
+# currently produces, so it never affects normal output.
+_PRE_SCRUB_CAP_CHARS = 5_000
+
+# Fallback format for the stderr handler wrap_run installs when nothing else
+# has configured logging yet. Matches the format string used by the majority
+# of wrap_run's own callers (aggregate_latest, sentinel, and 10 of the 14
+# scrapers that call logging.basicConfig() inside their own main()).
+_DEFAULT_STDERR_LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
+
+# Statuses where a self-handled failure otherwise leaves error=null. 'skip'
+# is a by-design no-op (landmine 48) and stays null on purpose.
+_STATUSES_NEEDING_CAPTURED_ERROR = frozenset({"fail", "stale"})
+
+
+def _finalize_run_error(tail: str, *, head: str | None = None) -> str:
+    """Scrub, then truncate, the captured log tail (and optional head) before
+    this reaches PUBLIC run_logs.
+
+    Order matters: scrubbing MUST run before truncation. Three of
+    ``scrub_secrets``'s five patterns are left-anchored (a URL needs its
+    leading ``https?://``, a JWT needs its leading ``eyJ``, an env-secret
+    assignment needs a word boundary before the marker) — truncating first
+    can slice into the middle of any of them, silently defeating that
+    pattern for whatever secret straddled the cut. ``tail`` and ``head`` are
+    each capped at ``_PRE_SCRUB_CAP_CHARS`` and scrubbed independently
+    (never concatenated first) so scrubbing itself stays bounded and a
+    truncation can never land mid-pattern by cutting across the head/tail
+    boundary either.
+
+    ``head`` is the caller's most valuable string — an uncaught exception's
+    own ``Type: message`` — and is preserved in full up to
+    ``_RUN_ERROR_MAX_CHARS`` regardless of how much of the ring-buffer tail
+    that leaves room for. Only ``tail`` is trimmed to fit, and only from its
+    FRONT (oldest lines first) so the most recent captured log line — the
+    one right before the run gave up — survives.
+    """
+    scrubbed_tail = scrub_secrets(tail[:_PRE_SCRUB_CAP_CHARS])
+    if head is None:
+        return scrubbed_tail[-_RUN_ERROR_MAX_CHARS:]
+
+    scrubbed_head = scrub_secrets(head[:_PRE_SCRUB_CAP_CHARS])[:_RUN_ERROR_MAX_CHARS]
+    budget = _RUN_ERROR_MAX_CHARS - len(scrubbed_head)
+    separator = "\n"
+    if budget <= len(separator) or not scrubbed_tail:
+        return scrubbed_head
+    return scrubbed_head + separator + scrubbed_tail[-(budget - len(separator)):]
+
 
 def wrap_run(source: str, unit: str, main_func: _Callable[[], int]) -> int:
     """Wrap a scraper's main() with run_logs instrumentation.
@@ -693,20 +752,74 @@ def wrap_run(source: str, unit: str, main_func: _Callable[[], int]) -> int:
 
     Maps main()'s exit code to run_logs.status:
         0 -> 'ok', 1 -> 'fail', 2 -> 'stale', 3 -> 'skip', other -> 'fail'
-    Uncaught exceptions are logged as 'fail' with error=type(e).__name__: str(e),
-    then re-raised so systemd records non-zero exit.
+
+    A ``RingBufferHandler`` is attached to the root logger for the duration
+    of ``main_func`` so a self-handled failure (exit 1/2, no exception) still
+    leaves a diagnostic: the last few WARNING-or-above log lines, scrubbed of
+    secrets, become ``error=``. Uncaught exceptions keep the existing
+    ``type(e).__name__: e`` string and append the same captured tail. The
+    handler is always detached in ``finally``, including on raise.
+
+    IMPORTANT: this attaches the RingBufferHandler to the root logger BEFORE
+    ``main_func()`` runs. ``logging.basicConfig()`` is a documented no-op
+    once ``root.handlers`` is non-empty, and every one of this function's 16
+    entrypoints calls ``logging.basicConfig(level=logging.INFO, ...)`` as the
+    first line of its own ``main()`` — so without the two steps below, that
+    call would silently do nothing, root would stay at its default WARNING
+    level, and ``logging.lastResort`` (which normally prints WARNING+ to
+    stderr when nothing else is configured) would never fire either, because
+    the RingBufferHandler itself counts as "something else is configured".
+    Net effect: the on-disk systemd log files every unit appends stderr to
+    (``deploy/econdelta-*.service``) would go silent. To prevent that, wrap_run
+    reproduces what a fresh process's own ``basicConfig()`` call would have
+    done, ahead of attaching the ring buffer:
+      - if root has no handlers yet, install a stderr ``StreamHandler`` (the
+        same thing ``basicConfig()`` would install) so INFO+ records keep
+        reaching stderr the way they did before this ring buffer existed;
+      - if root already has a handler (e.g. a test harness or an embedder
+        pre-configured logging) but its level is coarser than INFO — which
+        includes the interpreter's real un-configured default, WARNING —
+        raise the level to INFO so that pre-existing handler keeps
+        receiving INFO records too, without touching handlers the caller
+        already owns. A caller that deliberately set something MORE
+        permissive than INFO (e.g. DEBUG) is left alone.
+    Each entrypoint's own ``basicConfig()`` call remains in place and is now
+    a harmless no-op; it is not removed here.
+
+    Not handled: nested ``wrap_run`` calls. Every real caller invokes this
+    via ``python -m <module>`` (one wrap_run per process), so this isn't
+    reachable today — but if a wrapped entrypoint ever called another
+    wrapped ``main()`` in-process, both RingBufferHandlers would be live on
+    root simultaneously and the inner run's warnings would also land in the
+    outer run's captured ``error``.
     """
     started_at = datetime.now(timezone.utc)
     run_id = log_run_start(source=source, unit=unit, started_at=started_at)
+    root_logger = logging.getLogger()
+    if not root_logger.handlers:
+        logging.basicConfig(level=logging.INFO, format=_DEFAULT_STDERR_LOG_FORMAT)
+    elif root_logger.level > logging.INFO:
+        root_logger.setLevel(logging.INFO)
+    handler = RingBufferHandler()
+    root_logger.addHandler(handler)
     try:
         exit_code = main_func()
         status = _STATUS_BY_EXIT.get(exit_code, "fail")
-        log_run_end(run_id, started_at, status=status, exit_code=exit_code)
+        error = None
+        if status in _STATUSES_NEEDING_CAPTURED_ERROR:
+            tail = handler.tail()
+            error = _finalize_run_error(tail) if tail else None
+        log_run_end(run_id, started_at, status=status, exit_code=exit_code, error=error)
         return exit_code
     except Exception as e:
-        err = f"{type(e).__name__}: {e}"
-        log_run_end(run_id, started_at, status="fail", exit_code=1, error=err)
+        head = f"{type(e).__name__}: {e}"
+        tail = handler.tail()
+        error = _finalize_run_error(tail, head=head)
+        log_run_end(run_id, started_at, status="fail", exit_code=1, error=error)
         raise
+    finally:
+        root_logger.removeHandler(handler)
+        handler.close()
 
 
 # ============================================================================
