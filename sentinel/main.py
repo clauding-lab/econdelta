@@ -100,7 +100,11 @@ def main() -> int:
 
     is_heartbeat = today.weekday() == HEARTBEAT_WEEKDAY
     if should_send(report, is_heartbeat_day=is_heartbeat):
-        level, title, message, fields = format_digest(report)
+        # 2026-08-08 review R3: pass is_heartbeat_day through so the
+        # "Chart-feeding, parked: ..." line (M5) appears on the real
+        # calendar heartbeat day regardless of whether today ALSO has
+        # breaches (the breach digest branch, not just the quiet one).
+        level, title, message, fields = format_digest(report, is_heartbeat_day=is_heartbeat)
         notify(level, title, message, fields)
     else:
         logger.info("no breaches and not heartbeat day — staying silent (run_logs proves liveness)")

@@ -365,6 +365,43 @@ class TestParseRemittanceTable:
         # in-range-looking, but permanently wrong).
         assert parsed[date(2026, 7, 1)] == pytest.approx(2950.00)
 
+    def test_r2_two_matching_usd_columns_raises_instead_of_guessing(self):
+        """2026-08-08 re-review, finding R2: the H4 fix returned the FIRST
+        header cell matching "million US dollar" -- a table with TWO such
+        columns (e.g. a cumulative-FYTD column and a monthly column, both
+        labelled "... million US dollar") would silently pick whichever
+        came first in grid order, re-opening H4 under a different disguise
+        (still in-range, still plausible, still permanently wrong). Must
+        raise on ambiguity, never guess."""
+        html = """
+        <table id="sortableTable">
+          <thead>
+            <tr><td rowspan="2">Year/Month</td>
+                <td colspan="2">Cumulative</td><td colspan="2">Monthly</td></tr>
+            <tr><th>Cumulative (in million US dollar)</th><th>Cumulative BDT</th>
+                <th>Monthly (in million US dollar)</th><th>Monthly BDT</th></tr>
+          </thead>
+          <tbody>
+            <tr><td colspan="5">2026-2027</td></tr>
+            <tr><td>July</td><td>18500.00</td><td>2260.00</td>
+                <td>2950.00</td><td>360.00</td></tr>
+          </tbody>
+        </table>
+        """
+        with pytest.raises(ValueError, match="ambiguous"):
+            agg.parse_remittance_table(html)
+
+    def test_r2_single_matching_usd_column_still_resolves_normally(self):
+        """Sanity check: the R2 fix's ambiguity guard must not fire on the
+        normal single-match case (regression guard against over-tightening)."""
+        parsed = dict(agg.parse_remittance_table(f"""
+        <table id="sortableTable">{_REMIT_THEAD}<tbody>
+          <tr><td colspan="3">2026-2027</td></tr>
+          <tr><td>July</td><td>2950.00</td><td>360.00</td></tr>
+        </tbody></table>
+        """))
+        assert parsed[date(2026, 7, 1)] == pytest.approx(2950.00)
+
     def test_h3_structurally_empty_parse_raises(self):
         """2026-08-08 Opus review H3: the newest FY block's header row
         rendered as <th> instead of a single colspan <td> -- fy_start_year
@@ -653,6 +690,55 @@ class TestWriteMacroMonthlyAppend:
         remit_read_calls = [c for c in notify_calls if "remittance read failed" in c[1]]
         assert remit_read_calls, notify_calls
         assert not any("fetch/parse failed" in title for _level, title, _msg in notify_calls)
+
+    def test_r1_non_supabase_read_error_on_existing_rows_check_does_not_discard_cpi_rows(
+        self, monkeypatch,
+    ):
+        """2026-08-08 re-review, finding R1: the remittance existing-rows
+        read was still `except SupabaseReadError` while the CPI block above
+        (M1) was broadened to `except Exception`. A JSONDecodeError there
+        (same 200-with-HTML-body class M1 fixed) would escape THIS narrower
+        except, aborting _write_macro_monthly_append with an unhandled
+        exception BEFORE its final upsert call -- discarding the CPI trio's
+        already-computed rows_to_write even though the CPI sub-path
+        succeeded cleanly. Proves BOTH: the function doesn't crash, AND the
+        valid CPI rows still reach the upsert."""
+        import json as json_module
+
+        import utils.supabase_reader as reader
+        import utils.supabase_writer as writer
+
+        def fake_get_metric_history(metric_id, *, days, **kwargs):
+            values = {
+                "general_inflation": 8.68, "food_inflation": 8.60,
+                "non_food_inflation": 9.61, "point_to_point_inflation": 9.16,
+            }
+            return self._cpi_daily_row(values[metric_id], date(2026, 6, 30))
+
+        def get_metric_history_monthly_dispatch(metric_id, **kwargs):
+            if metric_id == agg._REMITTANCE_MONTHLY_ID:
+                raise json_module.JSONDecodeError("Expecting value", "<html>oops</html>", 0)
+            return []  # the 3 CPI monthly-id existing-pairs checks succeed
+
+        monkeypatch.setattr(reader, "get_metric_history", fake_get_metric_history)
+        monkeypatch.setattr(reader, "get_metric_history_monthly", get_metric_history_monthly_dispatch)
+        monkeypatch.setattr(
+            agg, "_fetch_remittance_html",
+            lambda: pytest.fail("existing-rows read failed -- fetch must not be attempted"),
+        )
+
+        captured: list[dict] = []
+        monkeypatch.setattr(
+            writer, "upsert_metric_history_monthly",
+            lambda rows, **k: (captured.extend(rows), len(rows))[1],
+        )
+        monkeypatch.setattr(agg, "notify", lambda *a, **k: True)
+
+        # Must not raise -- the JSONDecodeError must be contained.
+        n = agg._write_macro_monthly_append(today=TODAY)
+        assert n == 3
+        ids = {r["metric_id"] for r in captured}
+        assert ids == {"cpi_12m_avg_monthly", "cpi_p2p_food_monthly", "cpi_p2p_nonfood_monthly"}
 
     # --- M6: gate the browser launch on the existing-rows check ------------
 

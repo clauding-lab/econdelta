@@ -190,11 +190,11 @@ def test_m5_heartbeat_names_parked_chart_feeding_accepted_stale_ids():
             _accepted_stale("tax_gdp_ratio", date(2021, 12, 31)),  # NOT chart-feeding
         ],
     )
-    _level, title, message, _fields = format_digest(report)
+    _level, title, message, _fields = format_digest(report, is_heartbeat_day=True)
     assert title.startswith("Freshness sentinel — all")  # heartbeat/all-fresh shape
     assert "Chart-feeding, parked:" in message
-    assert "exports_usd_mn_monthly (frozen at 2026-06)" in message
-    assert "imports_usd_mn_monthly (frozen at 2026-03)" in message
+    assert "exports_usd_mn_monthly (2026-06)" in message
+    assert "imports_usd_mn_monthly (2026-03)" in message
     # A non-chart-feeding accepted-stale id must NOT appear in this line.
     parked_line = next(ln for ln in message.split("\n") if ln.startswith("Chart-feeding, parked:"))
     assert "tax_gdp_ratio" not in parked_line
@@ -205,17 +205,87 @@ def test_m5_no_parked_line_when_no_accepted_stale_chart_feeding_overlap():
         fresh=[_fresh("a")],
         accepted_stale=[_accepted_stale("tax_gdp_ratio", date(2021, 12, 31))],
     )
-    _level, _title, message, _fields = format_digest(report)
+    _level, _title, message, _fields = format_digest(report, is_heartbeat_day=True)
     assert "Chart-feeding, parked:" not in message
 
 
-def test_m5_parked_line_only_appears_on_the_heartbeat_no_breach_branch():
-    """The line lives in the n_breach==0 branch, which should_send() only
-    ever actually posts on the weekly heartbeat day -- a breach digest must
-    never carry it (breaches already get their own chart-feeding heading)."""
+# --- R3 (2026-08-08 re-review): the parked line is HEARTBEAT-DAY-gated, not
+# --- breach-branch-gated -- it must appear on BOTH digest shapes on the
+# --- real calendar heartbeat day, and on NEITHER shape on any other day. ---
+
+
+def test_r3_parked_line_appears_on_breach_branch_on_heartbeat_day():
+    """The re-reviewer's finding: the original M5 fix only ever attached the
+    line to the n_breach==0 branch, which is "effectively never" reached on
+    an ACTUAL heartbeat day (most heartbeat days have at least one breach,
+    routing through this branch instead). Must appear here too."""
     report = FreshnessReport(
         breaches=[_breach("some_internal_metric")],
-        accepted_stale=[_accepted_stale("exports_usd_mn_monthly")],
+        accepted_stale=[_accepted_stale("exports_usd_mn_monthly", date(2026, 6, 1))],
+    )
+    _level, title, message, _fields = format_digest(report, is_heartbeat_day=True)
+    assert title.startswith("Freshness sentinel — ") and "stale metric" in title  # breach shape
+    assert "Chart-feeding, parked:" in message
+    assert "exports_usd_mn_monthly (2026-06)" in message
+
+
+def test_r3_parked_line_appears_on_no_breach_branch_on_heartbeat_day():
+    report = FreshnessReport(
+        fresh=[_fresh("a")],
+        accepted_stale=[_accepted_stale("exports_usd_mn_monthly", date(2026, 6, 1))],
+    )
+    _level, _title, message, _fields = format_digest(report, is_heartbeat_day=True)
+    assert "Chart-feeding, parked:" in message
+
+
+def test_r3_parked_line_absent_on_breach_branch_when_not_heartbeat_day():
+    report = FreshnessReport(
+        breaches=[_breach("some_internal_metric")],
+        accepted_stale=[_accepted_stale("exports_usd_mn_monthly", date(2026, 6, 1))],
+    )
+    _level, _title, message, _fields = format_digest(report, is_heartbeat_day=False)
+    assert "Chart-feeding, parked:" not in message
+
+
+def test_r3_parked_line_absent_on_no_breach_branch_when_not_heartbeat_day():
+    report = FreshnessReport(
+        fresh=[_fresh("a")],
+        accepted_stale=[_accepted_stale("exports_usd_mn_monthly", date(2026, 6, 1))],
+    )
+    _level, _title, message, _fields = format_digest(report, is_heartbeat_day=False)
+    assert "Chart-feeding, parked:" not in message
+
+
+def test_r3_default_is_heartbeat_day_false_when_caller_omits_it():
+    """Backward-compatible default: callers that don't know about heartbeat
+    days (or just want the plain digest) get no parked line by default."""
+    report = FreshnessReport(
+        fresh=[_fresh("a")],
+        accepted_stale=[_accepted_stale("exports_usd_mn_monthly", date(2026, 6, 1))],
     )
     _level, _title, message, _fields = format_digest(report)
     assert "Chart-feeding, parked:" not in message
+
+
+def test_r3_full_breach_digest_with_parked_line_stays_under_discord_2000_char_cap():
+    """2026-08-08 review R3 budget note: the reviewer measured a full
+    25-line breach digest close to Discord's 2000-char embed-description
+    ceiling BEFORE the parked line existed. Pin the worst realistic case --
+    all 16 real chart-feeding ids breaching (the longest real metric_ids)
+    plus enough other breaches to fill the 25-line cap, plus both known
+    chart-feeding/accepted-stale ids parked -- comfortably under budget."""
+    import sentinel.report as report_mod
+
+    chart_ids = sorted(report_mod.CHART_FEEDING_METRIC_IDS)  # 16 ids
+    chart = [_breach(mid, "monthly", 300 - i) for i, mid in enumerate(chart_ids)]
+    other = [_breach(f"some_other_internal_metric_id_{i}", "daily", 50 - i) for i in range(20)]
+    report = FreshnessReport(
+        breaches=chart + other,
+        accepted_stale=[
+            _accepted_stale("exports_usd_mn_monthly", date(2026, 6, 1)),
+            _accepted_stale("imports_usd_mn_monthly", date(2026, 3, 1)),
+        ],
+    )
+    _level, _title, message, _fields = format_digest(report, is_heartbeat_day=True)
+    assert "Chart-feeding, parked:" in message
+    assert len(message) <= 2000, f"digest is {len(message)} chars, over Discord's cap: {message!r}"

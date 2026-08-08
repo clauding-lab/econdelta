@@ -1240,8 +1240,15 @@ def _resolve_remittance_value_column(table) -> int:
     the header's rowspan/colspan grid to find the label's real column
     index, which then lines up with the data rows' own cell order.
 
-    Raises ValueError if there is no <thead>, no header rows, or no cell
-    containing the USD marker text anywhere in the expanded grid.
+    Raises ValueError if there is no <thead>, no header rows, no cell
+    containing the USD marker text anywhere in the expanded grid, OR (2026-
+    08-08 review R2) more than ONE distinct header cell matches -- e.g. a
+    table with BOTH "Cumulative (in million US dollar)" and "Monthly (in
+    million US dollar)" columns. The prior version returned the FIRST match
+    in grid-iteration order, which would silently pick whichever of the two
+    happened to sit first (re-opening H4 under a different disguise: still
+    an in-range, plausible-looking, permanently WRONG value). Ambiguity
+    must raise, never guess.
     """
     thead = table.find("thead")
     if thead is None:
@@ -1267,10 +1274,28 @@ def _resolve_remittance_value_column(table) -> int:
                     grid[(r, c)] = cell
             col_idx += colspan
 
+    # Collect ALL distinct matching cells (deduped by object identity, since
+    # a single cell spanning colspan/rowspan appears at multiple (row, col)
+    # grid positions but is still only ONE logical column) -> its smallest
+    # (first-encountered) column index.
+    matches: dict[int, object] = {}
+    seen_cell_ids: set[int] = set()
     for (_row_idx, col_idx), cell in grid.items():
+        if id(cell) in seen_cell_ids:
+            continue
         if _REMIT_USD_HEADER_MARKER in cell.get_text(strip=True).lower():
-            return col_idx
-    raise ValueError('remittance table header has no "million US dollar" column')
+            seen_cell_ids.add(id(cell))
+            matches[col_idx] = cell
+
+    if not matches:
+        raise ValueError('remittance table header has no "million US dollar" column')
+    if len(matches) > 1:
+        raise ValueError(
+            f'remittance table header has {len(matches)} columns matching "million US '
+            f"dollar\" (column indices {sorted(matches)}) -- ambiguous, refusing to "
+            "guess which one is the true monthly value (review R2)"
+        )
+    return next(iter(matches))
 
 
 def parse_remittance_table(html: str) -> list[tuple[date, float]]:
@@ -1454,11 +1479,10 @@ def _write_macro_monthly_append(today: date | None = None) -> int:
     if today is None:
         today = datetime.now(timezone.utc).date()
 
-    from utils.supabase_reader import (
-        SupabaseReadError,
-        get_metric_history,
-        get_metric_history_monthly,
-    )
+    # No SupabaseReadError import here on purpose (review R1, 2026-08-08
+    # re-review): both sub-path try/excepts below catch a broad `Exception`
+    # rather than that one type, so nothing in this function names it.
+    from utils.supabase_reader import get_metric_history, get_metric_history_monthly
     from utils.supabase_writer import upsert_metric_history_monthly
 
     rows_to_write: list[dict] = []
@@ -1509,9 +1533,22 @@ def _write_macro_monthly_append(today: date | None = None) -> int:
     # failure gets its OWN notify message, distinct from a fetch/parse
     # failure -- "can't check Supabase" and "BB's page changed shape" are
     # different incidents needing different responses.
+    #
+    # Review R1 (2026-08-08 re-review): broadened from `except
+    # SupabaseReadError` to `except Exception`, matching the CPI trio's own
+    # M1 fix above -- a JSONDecodeError here (same 200-with-HTML-body class
+    # M1 fixed) is NOT a SupabaseReadError and would otherwise escape this
+    # try block entirely, aborting _write_macro_monthly_append with an
+    # unhandled exception BEFORE its final `return upsert_metric_history_
+    # monthly(rows_to_write)` -- discarding the CPI trio's already-computed
+    # rows_to_write along with it, even though the CPI sub-path succeeded
+    # cleanly above. The M4-specific "remittance read failed" message is
+    # unchanged; only the caught exception TYPE is broadened.
     try:
         existing_remit_rows = get_metric_history_monthly(_REMITTANCE_MONTHLY_ID)
-    except SupabaseReadError as e:
+    except Exception as e:  # noqa: BLE001 -- review R1: must not let ANY
+        # exception here escape and discard the CPI trio's already-computed
+        # rows_to_write (see comment above).
         logger.warning("macro monthly append: remittance existing-rows read failed: %s", e)
         skip_reasons.append(f"remittance: existing-rows read failed ({type(e).__name__}: {e})")
         notify(
