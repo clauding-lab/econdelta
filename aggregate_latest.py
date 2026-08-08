@@ -1684,6 +1684,36 @@ _YIELD_LADDER_SOURCE = "bb_auction"
 # occupy different plausible ranges).
 _YIELD_VALUE_MIN = 0.0
 _YIELD_VALUE_MAX = 25.0
+# H1 (2026-08-08 re-review): carry-forward across months is EXPECTED (see
+# the module-level docstring), but UNBOUNDED carry-forward is not. Proven
+# live: with auction_results dead since some past date, the appender would
+# happily keep writing new months using an ever-more-stale cutoff forever
+# -- as_of advances every month, the sentinel classes all 8 ids as FRESH
+# (it only looks at as_of, never at how old the underlying auction is), and
+# CHART_FEEDING_METRIC_IDS's alert tier never fires. A frozen ladder would
+# become an INVISIBLY FABRICATED-FRESH one -- worse than the original
+# frozen-charts incident, not better. 6 calendar months is generous even
+# for the thinnest-traded tenor (20y bonds auction far less often than
+# 91d bills) while still catching a genuinely dead source within two
+# fiscal quarters.
+_YIELD_LADDER_MAX_CARRY_FORWARD_MONTHS = 6
+
+
+def _yield_ladder_staleness_floor(month_end: date) -> date:
+    """``month_end`` shifted back ``_YIELD_LADDER_MAX_CARRY_FORWARD_MONTHS``
+    calendar months, clamping the day-of-month if the target month is
+    shorter (mirrors ``_month_end``'s own use of ``monthrange``). A tenor
+    whose latest auction predates this floor is treated as ABSENT by the
+    H1 staleness guard, not as a valid (if old) carry-forward value.
+    """
+    months = _YIELD_LADDER_MAX_CARRY_FORWARD_MONTHS
+    year = month_end.year
+    month = month_end.month - months
+    while month <= 0:
+        month += 12
+        year -= 1
+    day = min(month_end.day, monthrange(year, month)[1])
+    return date(year, month, day)
 
 
 def _yield_ladder_rows_for_month(
@@ -1703,10 +1733,14 @@ def _yield_ladder_rows_for_month(
     this is simply the FIRST row seen per tenor.
 
     Stage 1 -- ALL-OR-NOTHING DERIVATION: if any tenor has no matching row,
-    or its cutoff fails the [0, 25) range check, NO rows are returned for
-    ANY tenor and a single reason names every failing tenor (never partial
-    -- see the module-level docstring above for why a partial ladder is
-    worse than no update at all).
+    its latest auction predates the H1 staleness floor (more than
+    ``_YIELD_LADDER_MAX_CARRY_FORWARD_MONTHS`` months before month_end --
+    see that constant's comment for why unbounded carry-forward is a
+    correctness bug, not just a staleness one), or its cutoff fails the
+    [0, 25) range check, NO rows are returned for ANY tenor and a single
+    reason names every failing tenor (never partial -- see the module-level
+    docstring above for why a partial ladder is worse than no update at
+    all).
 
     Stage 2 -- APPEND-ONLY FILTER (only reached if Stage 1 fully succeeds):
     drops any (monthly_id, month_start) pair already present in
@@ -1715,6 +1749,13 @@ def _yield_ladder_rows_for_month(
     guards against fabricating a partial CURVE; this guards against
     clobbering an existing value for a tenor that happens to already have
     this exact month.
+
+    ``source_as_of`` on each written row is the REAL auction_date for that
+    tenor (2026-08-08 review M2), not month_start -- matches the CPI leg's
+    true-vintage convention and makes the H1 staleness guard auditable
+    directly from the row (a chart-feeding row whose source_as_of trails
+    its as_of by nearly 6 months is exactly the H1 scenario approaching its
+    limit).
 
     Returns (rows_to_write, skip_reasons) -- an empty reasons list with an
     empty (or partial, 1-8 row) rows list means "derivation fully
@@ -1740,8 +1781,10 @@ def _yield_ladder_rows_for_month(
             continue
         latest_by_tenor[tenor] = (auction_date, cutoff)
 
+    staleness_floor = _yield_ladder_staleness_floor(month_end)
     problems: list[str] = []
     values: dict[str, float] = {}
+    auction_dates: dict[str, date] = {}
     for tenor, monthly_id in _YIELD_TENOR_TO_MONTHLY_ID.items():
         found = latest_by_tenor.get(tenor)
         if found is None:
@@ -1749,7 +1792,14 @@ def _yield_ladder_rows_for_month(
                 f"{tenor} ({monthly_id}): no auction_results row on or before {month_end}"
             )
             continue
-        _auction_date, cutoff = found
+        auction_date, cutoff = found
+        if auction_date < staleness_floor:
+            problems.append(
+                f"{tenor} ({monthly_id}): latest auction_date {auction_date} is more "
+                f"than {_YIELD_LADDER_MAX_CARRY_FORWARD_MONTHS} months before "
+                f"{month_end} -- treating as absent (H1 staleness guard)"
+            )
+            continue
         if not (_YIELD_VALUE_MIN < cutoff < _YIELD_VALUE_MAX):
             problems.append(
                 f"{tenor} ({monthly_id}): latest cutoff {cutoff} outside "
@@ -1757,6 +1807,7 @@ def _yield_ladder_rows_for_month(
             )
             continue
         values[tenor] = cutoff
+        auction_dates[tenor] = auction_date
 
     if problems:
         return [], [
@@ -1775,7 +1826,7 @@ def _yield_ladder_rows_for_month(
             "as_of": month_start_iso,
             "value": values[tenor],
             "source": _YIELD_LADDER_SOURCE,
-            "source_as_of": month_start_iso,
+            "source_as_of": auction_dates[tenor].isoformat(),
         })
     return rows, []
 
@@ -1793,9 +1844,17 @@ def _write_yield_ladder_monthly_append(today: date | None = None) -> int:
     short-circuiting before ever reading auction_results.
 
     Pure DB reads only -- no Playwright, no live HTTP fetch (unlike the
-    remittance leg). Two separate read failure points, each with its own
-    notify message (M4 lesson): the append-only existing-rows check, and
-    the auction_results read itself.
+    remittance leg). Two separate read failure points, each with its OWN
+    distinct notify TITLE (2026-08-08 review M3 -- the two originally
+    shared one title; ``utils.notifier.notify`` dedups on ``(level,
+    title)`` for 3600s, so the second failure of a run would have been
+    silently suppressed by the first): the append-only existing-rows
+    check, and the auction_results read itself.
+
+    L3 (2026-08-08 re-review, no behavior change): every run within a
+    still-incomplete month re-reads auction_results' FULL history through
+    month_end (not just rows since the last check) -- acceptable for now
+    given the table's size, but a real cost if it grows much larger.
     """
     if today is None:
         today = datetime.now(timezone.utc).date()
@@ -1821,7 +1880,7 @@ def _write_yield_ladder_monthly_append(today: date | None = None) -> int:
         logger.warning("yield ladder append: existing-rows read failed: %s", e)
         notify(
             "warning",
-            "aggregate — macro monthly append: yield ladder read failed",
+            "aggregate — macro monthly append: yield ladder existing-rows read failed",
             "Could not read metric_history_monthly for the yield-ladder "
             f"append-only check; yield ladder skipped this run. {type(e).__name__}: {e}",
         )
@@ -1835,12 +1894,14 @@ def _write_yield_ladder_monthly_append(today: date | None = None) -> int:
         return 0
 
     try:
+        # L3: full-history re-read through month_end on every run this
+        # month isn't fully written yet -- see this function's docstring.
         auction_rows = get_auction_results_through(month_end)
     except Exception as e:  # noqa: BLE001 -- same reasoning as above.
         logger.warning("yield ladder append: auction_results read failed: %s", e)
         notify(
             "warning",
-            "aggregate — macro monthly append: yield ladder read failed",
+            "aggregate — macro monthly append: yield ladder auction_results read failed",
             f"Could not read auction_results (through {month_end}) for the "
             f"yield-ladder append; skipped this run. {type(e).__name__}: {e}",
         )

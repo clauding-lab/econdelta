@@ -192,6 +192,16 @@ def get_auction_results_through(
     page failure -- a partial read must never be silently treated as "this
     tenor has no auction history" (that would trip the all-or-nothing
     guard for a reason that has nothing to do with the data itself).
+
+    Ordered by ``auction_date.desc, tenor.asc`` (2026-08-08 review M1) --
+    ``auction_date`` alone is NOT a unique sort key (the table's primary
+    key is ``(auction_date, tenor)``, and up to 8 tenors share the same
+    date), so a plain ``order=auction_date.desc`` gives PostgREST no
+    defined tie-break order for same-date rows. OFFSET pagination is only
+    stable across pages when the ORDER BY is itself deterministic; without
+    the tenor tiebreaker, rows sharing the page-boundary date could be
+    silently dropped or duplicated once the table exceeds ``page_size``,
+    exactly like an unstable sort losing rows across a paged scan.
     """
     rows: list[dict[str, Any]] = []
     offset = 0
@@ -200,7 +210,7 @@ def get_auction_results_through(
     while True:
         path = (
             "auction_results?select=auction_date,tenor,cutoff"
-            f"&auction_date=lte.{as_of_iso}&order=auction_date.desc"
+            f"&auction_date=lte.{as_of_iso}&order=auction_date.desc,tenor.asc"
             f"&limit={page_size}&offset={offset}"
         )
         page = _get(path, url=url, key=key, session=sess)

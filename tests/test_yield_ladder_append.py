@@ -12,7 +12,7 @@ tests/test_macro_monthly_append.py's conventions.
 from __future__ import annotations
 
 import sys
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 import pytest
@@ -189,18 +189,30 @@ class TestYieldLadderRowsForMonth:
         )
         assert all(r["source"] == "bb_auction" for r in rows)
 
-    def test_source_as_of_matches_day_1_as_of(self):
-        """Unlike the CPI trio (which recovers a true intra-month source
-        vintage), the yield ladder's source_as_of is the same day-1 value
-        as as_of -- the derivation IS month-level by construction (latest
-        auction on or before month-end), not a specific auction date."""
+    def test_source_as_of_is_the_real_auction_date_per_tenor(self):
+        """2026-08-08 review M2: source_as_of must be the ACTUAL auction_date
+        for that tenor, not month_start -- matches the CPI leg's
+        true-vintage convention and makes the H1 staleness guard auditable
+        directly from the row (a chart-feeding row whose source_as_of
+        trails its as_of by nearly 6 months is exactly the H1 scenario
+        approaching its limit). as_of stays day-1-of-data-month regardless."""
         month_start = date(2026, 7, 1)
         month_end = date(2026, 7, 31)
-        auction_rows = _full_ladder_rows(date(2026, 7, 10))
+        # Different tenors auction on different real dates within the month.
+        auction_rows = [
+            _auction_row("91d", date(2026, 7, 10), 9.8),
+            _auction_row("182d", date(2026, 7, 12), 9.9),
+            *[_auction_row(t, date(2026, 7, 15), 10.0)
+              for t in agg._YIELD_TENOR_TO_MONTHLY_ID if t not in ("91d", "182d")],
+        ]
         rows, _reasons = agg._yield_ladder_rows_for_month(
             auction_rows, month_start=month_start, month_end=month_end, existing_pairs=set(),
         )
-        assert all(r["source_as_of"] == r["as_of"] == "2026-07-01" for r in rows)
+        by_id = {r["metric_id"]: r for r in rows}
+        assert all(r["as_of"] == "2026-07-01" for r in rows)  # as_of always day-1
+        assert by_id["tbill_91d_yield_monthly"]["source_as_of"] == "2026-07-10"
+        assert by_id["tbill_182d_yield_monthly"]["source_as_of"] == "2026-07-12"
+        assert by_id["yield_20y_monthly"]["source_as_of"] == "2026-07-15"
 
     def test_unrecognised_tenor_in_auction_rows_is_ignored(self):
         """A stray/typo'd tenor label in auction_results (e.g. a future
@@ -228,6 +240,98 @@ class TestYieldLadderRowsForMonth:
         )
         assert rows == []
         assert "5y" in reasons[0]
+
+    # --- H1 (2026-08-08 re-review): bounded carry-forward -------------------
+    # Reviewer proof: with auction_results dead since a past date, the
+    # appender would happily keep writing new months forever using an
+    # ever-more-stale cutoff -- as_of advances every month, the sentinel
+    # (which only ever looks at as_of, never at how old the underlying
+    # auction is) classes all 8 ids as FRESH, and the chart-feeding alert
+    # tier never fires. A frozen ladder becomes an INVISIBLY
+    # fabricated-fresh one. Bound: 6 calendar months before month_end.
+
+    def test_h1a_all_tenors_stale_writes_nothing_and_flags_all(self):
+        """(a) All 8 tenors' latest auction predates the 6-month floor
+        (auction_results has effectively gone dead) -- zero rows, one
+        batched all-or-nothing reason naming every tenor."""
+        month_start = date(2026, 7, 1)
+        month_end = date(2026, 7, 31)
+        # Latest auction for every tenor was back in December 2025 -- 7
+        # months before July 2026's month-end, past the 6-month floor.
+        auction_rows = _full_ladder_rows(date(2025, 12, 15))
+        rows, reasons = agg._yield_ladder_rows_for_month(
+            auction_rows, month_start=month_start, month_end=month_end, existing_pairs=set(),
+        )
+        assert rows == []
+        assert len(reasons) == 1
+        assert "all-or-nothing" in reasons[0]
+        for tenor in agg._YIELD_TENOR_TO_MONTHLY_ID:
+            assert tenor in reasons[0]
+        assert "2025-12-15" in reasons[0]
+
+    def test_h1b_one_tenor_stale_blocks_the_whole_ladder(self):
+        """(b) Only ONE tenor (20y, plausibly the thinnest-traded) has gone
+        stale -- the all-or-nothing rule still refuses the WHOLE month, and
+        the reason names that specific tenor and its last auction_date."""
+        month_start = date(2026, 7, 1)
+        month_end = date(2026, 7, 31)
+        auction_rows = [
+            *[_auction_row(t, date(2026, 7, 10), 10.0)
+              for t in agg._YIELD_TENOR_TO_MONTHLY_ID if t != "20y"],
+            _auction_row("20y", date(2025, 12, 20), 11.0),  # 7+ months stale
+        ]
+        rows, reasons = agg._yield_ladder_rows_for_month(
+            auction_rows, month_start=month_start, month_end=month_end, existing_pairs=set(),
+        )
+        assert rows == []
+        assert len(reasons) == 1
+        assert "20y" in reasons[0]
+        assert "yield_20y_monthly" in reasons[0]
+        assert "2025-12-20" in reasons[0]
+        assert "6 months" in reasons[0]
+
+    def test_h1c_five_months_old_still_passes(self):
+        """(c) 5 months old is still within the 6-month bound -- generous
+        for the thinnest tenor, must NOT be treated as absent."""
+        month_start = date(2026, 7, 1)
+        month_end = date(2026, 7, 31)
+        # 5 months before 2026-07-31 is 2026-02-28 (Feb has 28 days in
+        # 2026) -- use a date safely inside that window.
+        auction_rows = _full_ladder_rows(date(2026, 3, 1))
+        rows, reasons = agg._yield_ladder_rows_for_month(
+            auction_rows, month_start=month_start, month_end=month_end, existing_pairs=set(),
+        )
+        assert reasons == []
+        assert len(rows) == 8
+
+    def test_h1_staleness_floor_boundary(self):
+        """Pin the exact boundary: 6 calendar months before 2026-07-31 is
+        2026-01-31. An auction exactly ON that floor date passes; one day
+        older fails."""
+        month_end = date(2026, 7, 31)
+        floor = agg._yield_ladder_staleness_floor(month_end)
+        assert floor == date(2026, 1, 31)
+
+        month_start = date(2026, 7, 1)
+        on_floor_rows = _full_ladder_rows(floor)
+        rows, reasons = agg._yield_ladder_rows_for_month(
+            on_floor_rows, month_start=month_start, month_end=month_end, existing_pairs=set(),
+        )
+        assert reasons == []
+        assert len(rows) == 8
+
+        one_day_older_rows = _full_ladder_rows(floor - timedelta(days=1))
+        rows2, reasons2 = agg._yield_ladder_rows_for_month(
+            one_day_older_rows, month_start=month_start, month_end=month_end, existing_pairs=set(),
+        )
+        assert rows2 == []
+        assert reasons2 != []
+
+    def test_h1_staleness_floor_clamps_shorter_target_month(self):
+        """monthrange-clamping sanity check: 6 months before March 31 lands
+        in September (30 days), so day 31 must clamp to day 30, not raise."""
+        floor = agg._yield_ladder_staleness_floor(date(2026, 3, 31))
+        assert floor == date(2025, 9, 30)
 
 
 # ---------------------------------------------------------------------------
@@ -341,7 +445,11 @@ class TestWriteYieldLadderMonthlyAppend:
         assert incomplete_calls, notify_calls
         assert "15y" in incomplete_calls[0][2]
 
-    def test_existing_rows_read_failure_has_its_own_message_and_skips_auction_read(self, monkeypatch):
+    def test_existing_rows_read_failure_has_its_own_distinct_message(self, monkeypatch):
+        """2026-08-08 review M3: the title must be DISTINCT from the
+        auction_results-read-failure title below -- utils.notifier.notify
+        dedups on (level, title) for 3600s, so two failures sharing one
+        title in the same run would silently suppress the second."""
         import utils.supabase_reader as reader
         import utils.supabase_writer as writer
 
@@ -359,9 +467,10 @@ class TestWriteYieldLadderMonthlyAppend:
 
         n = agg._write_yield_ladder_monthly_append(today=TODAY)
         assert n == 0
-        assert any("yield ladder read failed" in title for _level, title in notify_calls)
+        assert any("yield ladder existing-rows read failed" in title for _level, title in notify_calls)
+        assert not any("auction_results read failed" in title for _level, title in notify_calls)
 
-    def test_auction_results_read_failure_has_its_own_message(self, monkeypatch):
+    def test_auction_results_read_failure_has_its_own_distinct_message(self, monkeypatch):
         import utils.supabase_reader as reader
         import utils.supabase_writer as writer
 
@@ -377,7 +486,17 @@ class TestWriteYieldLadderMonthlyAppend:
 
         n = agg._write_yield_ladder_monthly_append(today=TODAY)
         assert n == 0
-        assert any("yield ladder read failed" in title for _level, title in notify_calls)
+        assert any("yield ladder auction_results read failed" in title for _level, title in notify_calls)
+        assert not any("existing-rows read failed" in title for _level, title in notify_calls)
+
+    def test_m3_the_two_read_failure_titles_are_never_identical(self):
+        """Direct pin of the M3 fix: format the two literal title strings
+        the function uses and assert they differ -- catches a future
+        accidental re-merge of the two messages even if the mocked-failure
+        tests above somehow both pass."""
+        existing_rows_title = "aggregate — macro monthly append: yield ladder existing-rows read failed"
+        auction_results_title = "aggregate — macro monthly append: yield ladder auction_results read failed"
+        assert existing_rows_title != auction_results_title
 
     def test_writes_all_8_in_one_upsert_batch(self, monkeypatch):
         import utils.supabase_reader as reader
