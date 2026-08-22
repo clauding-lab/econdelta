@@ -62,9 +62,15 @@ def _commodity_price(price: float, prev: float | None = None) -> CommodityPrice:
 # ---------------------------------------------------------------------------
 
 def _history_df(dates: list[str], closes: list[float]) -> pd.DataFrame:
-    """A history()-shaped DataFrame: DatetimeIndex + a Close column, matching
-    real yfinance output (never a bare RangeIndex)."""
-    return pd.DataFrame({"Close": closes}, index=pd.to_datetime(dates))
+    """A history()-shaped DataFrame: a tz-AWARE DatetimeIndex localized to
+    America/New_York (the real yfinance exchange timezone for BZ=F/CL=F/
+    GC=F, all NYMEX/COMEX-listed) + a Close column -- never a bare naive or
+    RangeIndex. MEDIUM-6 (2026-08-22 round-1 review): pinning this as the
+    DEFAULT test fixture (not just one dedicated edge-case test) means any
+    future refactor that naively normalizes to UTC before taking .date()
+    fails broadly across this file, not just in one targeted test."""
+    index = pd.to_datetime(dates).tz_localize("America/New_York")
+    return pd.DataFrame({"Close": closes}, index=index)
 
 
 def test_fetch_commodity_returns_price_and_prev_close():
@@ -151,6 +157,25 @@ def test_fetch_commodity_raises_on_empty_history():
         # Act / Assert
         with pytest.raises(FetchError):
             fetch_commodity("BZ=F")
+
+
+def test_quote_date_uses_exchange_local_calendar_day_not_utc():
+    """MEDIUM-6 (2026-08-22 round-1 review): real yfinance history() rows
+    carry a tz-AWARE America/New_York timestamp (NYMEX/COMEX exchange
+    timezone). A future refactor that naively normalizes to UTC before
+    taking .date() would shift the calendar date near the day boundary --
+    pin the NY-local date explicitly with a timestamp chosen to differ
+    under each interpretation, so that exact regression fails the suite."""
+    from scrapers.commodity_prices import _quote_date_from_history
+
+    # 2026-06-10 23:30 America/New_York (EDT, UTC-4) == 2026-06-11 03:30 UTC.
+    ny_ts = pd.Timestamp("2026-06-10 23:30:00", tz="America/New_York")
+    df = pd.DataFrame({"Close": [85.0]}, index=[ny_ts])
+
+    assert _quote_date_from_history(df) == date(2026, 6, 10)
+    # Sanity check on the test's own premise: the two interpretations really
+    # do disagree for this timestamp.
+    assert ny_ts.tz_convert("UTC").date() == date(2026, 6, 11)
 
 
 def test_quote_date_from_history_defensive_on_non_datetime_index():
