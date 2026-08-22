@@ -762,18 +762,23 @@ def _build_tier1_source_as_of_map(
 
     dse = snapshots.get("dse_market")
     if dse is not None:
-        # DseSnapshot.date is set to date.today() on EVERY scraper run,
-        # trading day or not (scrapers/dse_market.py:227-236 sets it on the
-        # non-trading path too) — it is NOT "only on trading days". What
-        # distinguishes a trading day is `indices`/`market` being populated,
-        # which is exactly what's checked below; a non-trading snapshot has
-        # both None so no override is added for it regardless. Where `date`
-        # actually matters is the FAILURE case: if the scraper doesn't run
-        # at all today, `find_latest_snapshot` returns the newest EXISTING
-        # file, and THAT file's `date` field honestly reflects the day it
-        # was written on — not today. Using `scraped_at` here would be wrong
-        # on exactly that carry-forward path, where a stale file re-read
-        # today would otherwise get today's timestamp.
+        # MEDIUM-7 (2026-08-22 round-1 review): corrected -- the previous
+        # version of this comment described PRE-fix/date-integrity-monitoring
+        # behaviour that no longer exists. scrapers/dse_market.py now parses
+        # the SOURCE page's own "TODAY'S SHARE MARKET : YYYY-MM-DD" trading
+        # date and stamps DseSnapshot.date with it -- never date.today(), and
+        # there is no longer a non-trading "write a trading_day=False marker
+        # dated today" path at all (a non-trading/already-seen session is a
+        # pure no-op now: nothing new is written). What still distinguishes a
+        # real trading session is `indices`/`market` being populated, exactly
+        # as checked below. Where `date` still matters most is the FAILURE
+        # case: if the scraper doesn't run at all today (or the parsed
+        # session is already on disk and it no-ops), `find_latest_snapshot`
+        # returns the newest EXISTING file, and THAT file's `date` field
+        # honestly reflects the trading day it was captured for — not today.
+        # Using `scraped_at` here would be wrong on exactly that carry-
+        # forward path, where a stale file re-read today would otherwise get
+        # today's timestamp instead of the session it actually describes.
         if dse.indices is not None:
             for dse_key in ("dsex", "dsex_change", "dsex_change_pct", "ds30", "dses"):
                 result[dse_key] = dse.date
@@ -789,18 +794,28 @@ def _build_tier1_source_as_of_map(
         # `commodities.scraped_at.date()` (a UTC timestamp). Since the
         # date-integrity fix (fix/date-integrity-monitoring),
         # scrapers/commodity_prices.py sets `date` to the yfinance QUOTE's own
-        # trading date (history()'s DatetimeIndex, per-ticker, maxed across
-        # brent/WTI/gold) -- never date.today() unless every ticker's
-        # history() call failed this run, in which case it degrades to the
-        # run date exactly as before this fix. `scraped_at` remains a plain
-        # UTC capture timestamp and stays unsuitable as an as_of source
-        # regardless: the commodity timer fires ~23:08 UTC, close enough to
-        # the UTC day boundary that scraped_at's UTC calendar date can land a
-        # day behind either the quote date or the intended local reporting day.
+        # trading date (history()'s DatetimeIndex, MAXED across brent/WTI/
+        # gold) -- never date.today() unless every ticker's history() call
+        # failed this run, in which case it degrades to the run date exactly
+        # as before this fix. `scraped_at` remains a plain UTC capture
+        # timestamp and stays unsuitable as an as_of source regardless: the
+        # commodity timer fires ~23:08 UTC, close enough to the UTC day
+        # boundary that scraped_at's UTC calendar date can land a day behind
+        # either the quote date or the intended local reporting day.
+        #
+        # L1 (2026-08-22 round-1 review): prefer each commodity's OWN
+        # `cp.quote_date` over the snapshot-wide max when it's available --
+        # brent/WTI/gold virtually always agree, but on the rare run where
+        # one ticker's quote genuinely lags the others, this stamps THAT
+        # metric with its own true date instead of borrowing a sibling
+        # ticker's (possibly later) one. Falls back to the snapshot-wide
+        # `commodity_date` only for a ticker whose own quote_date is None
+        # (its history() call failed this run) -- never leaves a metric
+        # entirely undated when the snapshot itself has SOME usable date.
         commodity_date = commodities.date
         for key, cp in commodities.prices.items():
             unit_suffix = f"{cp.currency.lower()}_{cp.unit.replace(' ', '_')}"
-            result[f"{key}_{unit_suffix}"] = commodity_date
+            result[f"{key}_{unit_suffix}"] = cp.quote_date or commodity_date
 
     return result
 

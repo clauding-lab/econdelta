@@ -148,6 +148,16 @@ class CommodityPrice(BaseModel):
     change_pct: float | None = None
     currency: str
     unit: str  # e.g. "barrel", "oz", "ton"
+    # This ticker's OWN yfinance quote date (history()'s DatetimeIndex),
+    # independent of the other tickers in the same snapshot. L1 (2026-08-22
+    # round-1 review): CommoditySnapshot.date is the MAX across all three
+    # tickers (brent/WTI/gold trade nearly 24/5 so they virtually always
+    # agree) -- this per-id field is what lets a consumer stamp each
+    # commodity's own as_of from ITS quote, not a shared snapshot-wide max,
+    # for the rare run where one ticker's quote genuinely lags the others.
+    # None when this ticker's own history() call failed this run (never
+    # fabricated -- see scrapers/commodity_prices.py::_quote_date_from_history).
+    quote_date: date | None = None
 
 
 class CommoditySnapshot(BaseModel):

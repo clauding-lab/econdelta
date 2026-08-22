@@ -167,6 +167,7 @@ def main() -> int:
                 change_pct=change_pct,
                 currency=currency,
                 unit=unit,
+                quote_date=quote_date,
             )
             if quote_date is not None:
                 quote_dates.append(quote_date)

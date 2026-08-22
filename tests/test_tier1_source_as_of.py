@@ -257,6 +257,51 @@ class TestCommoditySnapshotDate:
         assert m["brent_crude_usd_barrel"] != scraped_at_utc.date()
 
 
+class TestCommodityPerTickerQuoteDate:
+    """L1 (2026-08-22 round-1 review): each commodity's OWN quote_date wins
+    over the snapshot-wide max(...) date when it's available -- brent/WTI/
+    gold virtually always agree, but a ticker whose quote genuinely lags the
+    others must be stamped with ITS OWN date, not borrow a sibling's."""
+
+    def test_per_ticker_quote_date_overrides_the_snapshot_wide_date(self):
+        commodities = CommoditySnapshot(
+            date=date(2026, 6, 11),  # the snapshot-wide max (gold's date)
+            scraped_at=_NOW,
+            prices={
+                "brent_crude": CommodityPrice(
+                    price=85.0, currency="USD", unit="barrel",
+                    quote_date=date(2026, 6, 10),  # brent lagged a day
+                ),
+                "gold": CommodityPrice(
+                    price=2300.0, currency="USD", unit="oz",
+                    quote_date=date(2026, 6, 11),
+                ),
+            },
+            provider="yfinance",
+        )
+        m = agg._build_tier1_source_as_of_map({"commodity_prices": commodities}, bb_forex_ok=False)
+        assert m["brent_crude_usd_barrel"] == date(2026, 6, 10)
+        assert m["gold_usd_oz"] == date(2026, 6, 11)
+
+    def test_falls_back_to_snapshot_wide_date_when_ticker_quote_date_is_none(self):
+        """A ticker whose OWN history() call failed this run (quote_date is
+        None, per scrapers/commodity_prices.py's documented "never
+        fabricate" contract) still gets a usable date from the snapshot-wide
+        fallback, rather than going undated entirely."""
+        commodities = CommoditySnapshot(
+            date=date(2026, 6, 11),
+            scraped_at=_NOW,
+            prices={
+                "brent_crude": CommodityPrice(
+                    price=85.0, currency="USD", unit="barrel", quote_date=None,
+                ),
+            },
+            provider="yfinance",
+        )
+        m = agg._build_tier1_source_as_of_map({"commodity_prices": commodities}, bb_forex_ok=False)
+        assert m["brent_crude_usd_barrel"] == date(2026, 6, 11)
+
+
 class TestAliasPropagation:
     """Review round 1, item 1 (HIGH): the two force-overwrite alias keys
     (usd_bdt_exchange_rate, fx_reserve_gross_and_bpm6) get their VALUE from
