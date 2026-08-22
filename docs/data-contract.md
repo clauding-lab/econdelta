@@ -885,6 +885,21 @@ this PR does not pick an option — it hands off the anchor, the consequences,
 and the third-candidate trap, ready for a sign-off. See also
 `AGENT_LEARNINGS.md` (2026-08-05 entry) for the incident writeup.
 
+**RESOLVED (2026-08-22, PR-C):** the dynamic-row blocker above was
+sidestepped rather than solved on the MEI PDF's own terms — `general_inflation`
+was repointed away from the PDF entirely to BB's live `econdata/inflation`
+HTML page (`parsers/html_dated_table_row.py`), which presents the two
+concepts as two SEPARATE ROWS ("Point to point" / "Monthly Average(Twelve
+Month)") rather than two column-groups sharing the "General" leaf label —
+removing the ambiguity structurally instead of picking between the two
+options above. **Option B was the effective outcome**: `general_inflation`
+anchors to the "Monthly Average(Twelve Month)" row, preserving series
+continuity with its own pre-existing history. `point_to_point_inflation`
+anchors to the "Point to point" row on the same page. The third-candidate
+trap (the Wage Rate Index table's own "Point to Point → General" column)
+is moot for this pair now that neither reads the MEI PDF at all. See
+AGENTS.md landmine 52 and the 2026-08-22 AGENT_LEARNINGS.md entry.
+
 ---
 
 **Questions, schema requests, new consumer onboarding**: open an issue
