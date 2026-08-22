@@ -724,6 +724,18 @@ def main() -> int:
                 reserves_for_snapshot = prev_res
                 exit_code = 2
 
+    # date=date.today() is intentional here, not an oversight: BB's exchange-
+    # rates page (parse_exchange_rates, Currency/Bid/Ask/WAR table) carries no
+    # date column or per-row timestamp of any kind for the rates leg -- unlike
+    # reserves (reserves.reserves_date, parsed from the table's own period
+    # label and already used for the reserves as_of override in
+    # aggregate_latest._build_tier1_source_as_of_map). Landmine 39 already
+    # ruled out the homepage panel's "Last update" stamp as a substitute (it
+    # was observed 5 months stale while the value itself was current) -- there
+    # is no OTHER date-bearing element on this source to recover from. If BB
+    # ever adds a genuine per-quote timestamp to this page, wire it in here
+    # the same way DseSnapshot.date / CommoditySnapshot.date now use their
+    # own source's real date instead of the run date.
     snapshot = ForexSnapshot(
         schema_version="1.0",
         date=date.today(),

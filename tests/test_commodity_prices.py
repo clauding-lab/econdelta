@@ -61,28 +61,68 @@ def _commodity_price(price: float, prev: float | None = None) -> CommodityPrice:
 # fetch_commodity tests
 # ---------------------------------------------------------------------------
 
+def _history_df(dates: list[str], closes: list[float]) -> pd.DataFrame:
+    """A history()-shaped DataFrame: DatetimeIndex + a Close column, matching
+    real yfinance output (never a bare RangeIndex)."""
+    return pd.DataFrame({"Close": closes}, index=pd.to_datetime(dates))
+
+
 def test_fetch_commodity_returns_price_and_prev_close():
-    """fast_info dict path: returns (last_price, previous_close)."""
+    """fast_info dict path: returns (last_price, previous_close, quote_date)."""
     # Arrange
     fi = _FastInfoDict({"last_price": 75.50, "previous_close": 74.20})
     mock_ticker = MagicMock()
     mock_ticker.fast_info = fi
+    mock_ticker.history.return_value = _history_df(
+        ["2026-04-17", "2026-04-18", "2026-04-19"], [73.0, 74.20, 75.50]
+    )
 
     with patch("scrapers.commodity_prices.yf.Ticker", return_value=mock_ticker):
         # Act
-        last, prev = fetch_commodity("BZ=F")
+        last, prev, quote_date = fetch_commodity("BZ=F")
 
     # Assert
     assert last == pytest.approx(75.50)
     assert prev == pytest.approx(74.20)
+    assert quote_date == date(2026, 4, 19)
+
+
+def test_fetch_commodity_recovers_quote_date_even_via_fast_info_path():
+    """The date always comes from history()'s index, even when fast_info
+    supplied the price -- fast_info itself carries no date at all."""
+    fi = _FastInfoDict({"last_price": 2300.0, "previous_close": 2290.0})
+    mock_ticker = MagicMock()
+    mock_ticker.fast_info = fi
+    mock_ticker.history.return_value = _history_df(["2026-06-05"], [2300.0])
+
+    with patch("scrapers.commodity_prices.yf.Ticker", return_value=mock_ticker):
+        _, _, quote_date = fetch_commodity("GC=F")
+
+    assert quote_date == date(2026, 6, 5)
+    mock_ticker.history.assert_called_once_with(period="5d", auto_adjust=False)
+
+
+def test_fetch_commodity_quote_date_none_when_history_unavailable():
+    """history() raising -> quote_date is None, never date.today()
+    (fast_info still supplies the price)."""
+    fi = _FastInfoDict({"last_price": 75.50, "previous_close": 74.20})
+    mock_ticker = MagicMock()
+    mock_ticker.fast_info = fi
+    mock_ticker.history.side_effect = RuntimeError("network blip")
+
+    with patch("scrapers.commodity_prices.yf.Ticker", return_value=mock_ticker):
+        last, prev, quote_date = fetch_commodity("BZ=F")
+
+    assert last == pytest.approx(75.50)
+    assert quote_date is None
 
 
 def test_fetch_commodity_fallback_to_history_when_fast_info_missing():
-    """When fast_info raises KeyError, falls back to history()."""
+    """When fast_info raises KeyError, falls back to history() for BOTH the
+    price and the quote_date -- only ONE history() call is made either way."""
     # Arrange
     bad_fi = _FastInfoDict({})  # no last_price — __contains__ returns False
-    close_series = pd.Series([70.0, 72.0, 74.0])
-    mock_hist = pd.DataFrame({"Close": close_series})
+    mock_hist = _history_df(["2026-04-17", "2026-04-18", "2026-04-19"], [70.0, 72.0, 74.0])
 
     mock_ticker = MagicMock()
     mock_ticker.fast_info = bad_fi
@@ -90,11 +130,12 @@ def test_fetch_commodity_fallback_to_history_when_fast_info_missing():
 
     with patch("scrapers.commodity_prices.yf.Ticker", return_value=mock_ticker):
         # Act
-        last, prev = fetch_commodity("BZ=F")
+        last, prev, quote_date = fetch_commodity("BZ=F")
 
     # Assert
     assert last == pytest.approx(74.0)
     assert prev == pytest.approx(72.0)
+    assert quote_date == date(2026, 4, 19)
     mock_ticker.history.assert_called_once_with(period="5d", auto_adjust=False)
 
 
@@ -112,14 +153,32 @@ def test_fetch_commodity_raises_on_empty_history():
             fetch_commodity("BZ=F")
 
 
+def test_quote_date_from_history_defensive_on_non_datetime_index():
+    """A non-datetime index (e.g. a bare RangeIndex) must degrade to None,
+    never raise -- date recovery must not break price extraction."""
+    from scrapers.commodity_prices import _quote_date_from_history
+
+    bad_index_df = pd.DataFrame({"Close": [1.0, 2.0, 3.0]})  # default RangeIndex
+    assert _quote_date_from_history(bad_index_df) is None
+    assert _quote_date_from_history(None) is None
+    assert _quote_date_from_history(pd.DataFrame({"Close": pd.Series([], dtype=float)})) is None
+
+
 # ---------------------------------------------------------------------------
 # main() integration tests
 # ---------------------------------------------------------------------------
 
-def _make_ticker_mock(last: float, prev: float) -> MagicMock:
+def _make_ticker_mock(last: float, prev: float, quote_date: str | None = None) -> MagicMock:
     fi = _FastInfoDict({"last_price": last, "previous_close": prev})
     m = MagicMock()
     m.fast_info = fi
+    if quote_date is not None:
+        m.history.return_value = _history_df([quote_date], [last])
+    else:
+        # No quote_date supplied -> history() returns an empty frame, so
+        # _quote_date_from_history degrades to None (matching "no date
+        # available" behaviour) without needing every existing test to opt in.
+        m.history.return_value = pd.DataFrame({"Close": pd.Series([], dtype=float)})
     return m
 
 
@@ -157,6 +216,78 @@ def test_main_writes_snapshot_with_all_commodities(
     assert "wti_crude" in snapshot_arg.prices
     assert "gold" in snapshot_arg.prices
     mock_notify.assert_not_called()
+
+
+@patch("scrapers.commodity_prices.load_previous_snapshot", return_value=None)
+@patch("scrapers.commodity_prices.write_snapshot")
+@patch("scrapers.commodity_prices.notify")
+@patch("scrapers.commodity_prices.yf.Ticker")
+def test_main_stamps_snapshot_with_quote_date_not_run_date(
+    mock_ticker_cls, mock_notify, mock_write, mock_prev, monkeypatch
+):
+    """snapshot.date is the yfinance QUOTE date (max across the 3 tickers),
+    not date.today() -- proven by patching date.today() to a totally
+    different day and confirming it has zero effect on the result."""
+    prices = {
+        "BZ=F": (85.0, 84.0, "2026-06-10"),
+        "CL=F": (80.0, 79.0, "2026-06-10"),
+        "GC=F": (2300.0, 2290.0, "2026-06-11"),  # gold quoted a day later
+    }
+
+    def _side_effect(ticker_sym):
+        last, prev, qd = prices[ticker_sym]
+        return _make_ticker_mock(last, prev, quote_date=qd)
+
+    mock_ticker_cls.side_effect = _side_effect
+    mock_write.return_value = Path("/fake/2026-06-11.json")
+
+    class _FixedDate(date):
+        @classmethod
+        def today(cls):
+            return date(2099, 1, 1)
+
+    monkeypatch.setattr("scrapers.commodity_prices.date", _FixedDate)
+
+    result = main()
+
+    assert result == 0
+    snapshot_arg: CommoditySnapshot = mock_write.call_args[0][0]
+    # Latest of the three quote dates wins, never the (patched, wildly
+    # different) run date.
+    assert snapshot_arg.date == date(2026, 6, 11)
+
+
+@patch("scrapers.commodity_prices.load_previous_snapshot", return_value=None)
+@patch("scrapers.commodity_prices.write_snapshot")
+@patch("scrapers.commodity_prices.notify")
+@patch("scrapers.commodity_prices.yf.Ticker")
+def test_main_falls_back_to_run_date_when_no_quote_date_available(
+    mock_ticker_cls, mock_notify, mock_write, mock_prev, monkeypatch
+):
+    """When yfinance offers no quote date for ANY ticker this run, the
+    snapshot degrades to date.today() -- the documented "source genuinely
+    has no date" case, not a crash or a fabricated date."""
+    prices = {"BZ=F": (85.0, 84.0), "CL=F": (80.0, 79.0), "GC=F": (2300.0, 2290.0)}
+
+    def _side_effect(ticker_sym):
+        last, prev = prices[ticker_sym]
+        return _make_ticker_mock(last, prev)  # no quote_date -> empty history
+
+    mock_ticker_cls.side_effect = _side_effect
+    mock_write.return_value = Path("/fake/2026-06-11.json")
+
+    class _FixedDate(date):
+        @classmethod
+        def today(cls):
+            return date(2026, 6, 11)
+
+    monkeypatch.setattr("scrapers.commodity_prices.date", _FixedDate)
+
+    result = main()
+
+    assert result == 0
+    snapshot_arg: CommoditySnapshot = mock_write.call_args[0][0]
+    assert snapshot_arg.date == date(2026, 6, 11)
 
 
 @patch("scrapers.commodity_prices.load_previous_snapshot", return_value=None)

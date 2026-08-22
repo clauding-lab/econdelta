@@ -30,7 +30,7 @@ from utils.schema import (
     LatestBundle,
     SourceStatus,
 )
-from utils.staleness import check_value_staleness
+from utils.staleness import check_value_staleness, check_watchlist_staleness
 
 REPO_ROOT = Path(__file__).resolve().parent
 DATA_DIR = REPO_ROOT / "data"
@@ -39,6 +39,10 @@ ARCHIVE_DIR = DATA_DIR / "archive"
 # Cross-run tracker for the stillness alarm (utils/staleness.py). Not a data
 # artifact — losing it only costs the alarm its warm-up window.
 STALENESS_STATE_PATH = DATA_DIR / "staleness_state.json"
+# Separate cross-run tracker for the watchlist staleness gate
+# (utils/staleness.check_watchlist_staleness) — a different shape from the
+# stillness alarm's state file, so it gets its own file rather than sharing.
+WATCHLIST_STALENESS_STATE_PATH = DATA_DIR / "watchlist_staleness_state.json"
 CONFIG_PATH = REPO_ROOT / "config" / "sources.json"
 SOURCES_V3_PATH = REPO_ROOT / "config" / "sources-v3.json"
 HOLIDAYS_PATH = REPO_ROOT / "config" / "holidays_2026.json"
@@ -781,14 +785,18 @@ def _build_tier1_source_as_of_map(
 
     commodities = snapshots.get("commodity_prices")
     if commodities is not None:
-        # `commodities.date` (the scraper's own calendar-day field), not
-        # `commodities.scraped_at.date()` (a UTC timestamp) -- the same
-        # pre-midnight off-by-one risk that justified the forex change above:
-        # scrapers/commodity_prices.py sets both at the same moment
-        # (`date=date.today(), scraped_at=datetime.now(timezone.utc)`), and
-        # the commodity timer fires ~23:08 UTC, close enough to the UTC day
-        # boundary that scraped_at's UTC calendar date can land a day behind
-        # the intended local reporting day.
+        # `commodities.date` (the scraper's own quote-date field), not
+        # `commodities.scraped_at.date()` (a UTC timestamp). Since the
+        # date-integrity fix (fix/date-integrity-monitoring),
+        # scrapers/commodity_prices.py sets `date` to the yfinance QUOTE's own
+        # trading date (history()'s DatetimeIndex, per-ticker, maxed across
+        # brent/WTI/gold) -- never date.today() unless every ticker's
+        # history() call failed this run, in which case it degrades to the
+        # run date exactly as before this fix. `scraped_at` remains a plain
+        # UTC capture timestamp and stays unsuitable as an as_of source
+        # regardless: the commodity timer fires ~23:08 UTC, close enough to
+        # the UTC day boundary that scraped_at's UTC calendar date can land a
+        # day behind either the quote date or the intended local reporting day.
         commodity_date = commodities.date
         for key, cp in commodities.prices.items():
             unit_suffix = f"{cp.currency.lower()}_{cp.unit.replace(' ', '_')}"
@@ -2302,6 +2310,17 @@ def main() -> int:
     # time, so this never rejects the run.
     check_corridor_coherence(data)
 
+    # Per-metric publication-date overrides, built once here (moved up from
+    # the Supabase-write block below, which still uses this SAME variable) so
+    # the watchlist staleness check can see each id's real as_of even on a
+    # dry-run/test invocation that skips the Supabase write entirely (the
+    # value-only stillness alarm below has never needed this; the watchlist
+    # check below it does, since predicates (a)/(b) are as_of-aware).
+    source_as_of_map = {
+        **_build_tier1_source_as_of_map(snapshots, bb_forex_ok=bb_forex_ok),
+        **_build_source_as_of_map(domains),
+    }
+
     # Stillness alarm: the threshold checks above all ask "did this value move
     # too much?". Every freeze this project has shipped — 93 days of identical
     # food prices, 65 days of a pre-cut policy rate — was a failure of the
@@ -2321,6 +2340,22 @@ def main() -> int:
         )
     except Exception as e:  # observability must never take down the aggregate
         logger.warning("staleness check failed: %s: %s", type(e).__name__, e)
+
+    # Watchlist staleness: a sharper, as_of/ingest-aware test for a small set
+    # of financially load-bearing ids the blanket check above either can't
+    # reach at all (gross_reserves_usd_bn / nbr_fytd_collected_cr are Tier-1/
+    # alias-derived keys, never v3 registry ids) or can only judge by raw
+    # value equality. See utils/staleness.py's module docstring for the three
+    # predicates. Detect-and-alert only, same as the stillness alarm above.
+    try:
+        check_watchlist_staleness(
+            data,
+            source_as_of_map,
+            today=now.date(),
+            state_path=WATCHLIST_STALENESS_STATE_PATH,
+        )
+    except Exception as e:  # observability must never take down the aggregate
+        logger.warning("watchlist staleness check failed: %s: %s", type(e).__name__, e)
 
     try:
         bundle = LatestBundle(
@@ -2434,22 +2469,20 @@ def main() -> int:
                 upsert_metric_history,
                 verify_landed_count,
             )
-            # Build per-metric publication-date overrides from v3 snapshot metadata.
-            # Slow-cadence metrics (quarterly FSAR, monthly news) carry source_as_of
-            # from the parser so metric_history.as_of reflects the true publication
-            # date rather than today's run date — fixing the freshness-pill lie.
-            #
-            # Merged with the Tier-1 map (bb_forex/dse_market/commodity_prices —
-            # SCRAPER_SPEC), which never enters the v3 `domains` dict above and so
-            # could never get an override here otherwise. Tier-1 keys and v3
-            # registry keys should never collide (the two pipelines cover disjoint
-            # indicator ids), but if sources-v3.json ever grows an entry that
-            # shadows a Tier-1 flatten_data key, the v3-recovered date (parsed
-            # from the source document's own text) wins — it merges LAST.
-            source_as_of_map = {
-                **_build_tier1_source_as_of_map(snapshots, bb_forex_ok=bb_forex_ok),
-                **_build_source_as_of_map(domains),
-            }
+            # source_as_of_map is built earlier in main() now (immediately
+            # before the stillness/watchlist staleness checks, which need it
+            # too) — reused here unchanged. Slow-cadence metrics (quarterly
+            # FSAR, monthly news) carry source_as_of from the parser so
+            # metric_history.as_of reflects the true publication date rather
+            # than today's run date — fixing the freshness-pill lie. Merged
+            # from the Tier-1 map (bb_forex/dse_market/commodity_prices —
+            # SCRAPER_SPEC, which never enters the v3 `domains` dict and so
+            # could never get an override here otherwise) and the v3 map;
+            # Tier-1 keys and v3 registry keys should never collide (the two
+            # pipelines cover disjoint indicator ids), but if sources-v3.json
+            # ever grows an entry that shadows a Tier-1 flatten_data key, the
+            # v3-recovered date (parsed from the source document's own text)
+            # wins — it was merged LAST when this map was built.
             # Explicit write timestamp so the E2.2 landed-count read-back counts
             # exactly this upsert's rows.
             write_ts = datetime.now(timezone.utc)

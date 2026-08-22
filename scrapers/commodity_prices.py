@@ -34,15 +34,54 @@ class FetchError(Exception):
     pass
 
 
-def fetch_commodity(ticker: str) -> tuple[float, float | None]:
-    """Return (latest_price, prev_close) from yfinance.
+def _fetch_history(t: yf.Ticker):
+    """Best-effort ``history(period="5d")`` fetch; None on any failure.
 
-    Tries yf.Ticker(ticker).fast_info for a cheap lookup first.
-    Falls back to yf.Ticker(ticker).history(period="5d") if fast_info
-    is missing fields. Returns prev_close=None if unavailable.
-    Raises FetchError if latest price cannot be determined.
+    Isolated so both the date-recovery step and the fast_info-failure
+    fallback below can share ONE history() call instead of two. Returns a
+    pandas DataFrame (or None) -- pandas isn't imported here for a type hint
+    alone since it's only ever passed through, never constructed.
+    """
+    try:
+        return t.history(period="5d", auto_adjust=False)
+    except Exception:  # noqa: BLE001 -- any yfinance/network failure, never fatal here
+        return None
+
+
+def _quote_date_from_history(hist) -> date | None:
+    """The latest trading day yfinance's own history() reports for this ticker.
+
+    ``fast_info.last_price`` carries NO associated timestamp (confirmed against
+    yfinance's own source: FastInfo has no last-trade-date property) -- the
+    DatetimeIndex on history() is the only place yfinance exposes a real
+    per-quote date. Returns None (never date.today()) when history is
+    unavailable, empty, or its index isn't date-like for any reason -- this
+    is pure date-RECOVERY, so a failure here must never bubble up and break
+    the price extraction it runs alongside.
+    """
+    if hist is None or hist.empty:
+        return None
+    try:
+        return hist.index[-1].date()
+    except (AttributeError, TypeError, IndexError):
+        return None
+
+
+def fetch_commodity(ticker: str) -> tuple[float, float | None, date | None]:
+    """Return (latest_price, prev_close, quote_date) from yfinance.
+
+    Tries yf.Ticker(ticker).fast_info for a cheap price lookup first, falling
+    back to yf.Ticker(ticker).history(period="5d") if fast_info is missing
+    fields. ``quote_date`` is always sourced from history() (see
+    _quote_date_from_history) regardless of which path supplied the price,
+    since fast_info itself never carries a date. Returns prev_close=None /
+    quote_date=None if unavailable. Raises FetchError if latest price cannot
+    be determined by EITHER path.
     """
     t = yf.Ticker(ticker)
+    hist = _fetch_history(t)
+    quote_date = _quote_date_from_history(hist)
+
     try:
         fi = t.fast_info
         # fast_info exposes attributes; also supports dict-style access on some versions.
@@ -65,17 +104,16 @@ def fetch_commodity(ticker: str) -> tuple[float, float | None]:
         if raw_prev is not None:
             prev = float(raw_prev)
 
-        return last, prev
+        return last, prev, quote_date
 
     except (KeyError, TypeError, ValueError, AttributeError):
-        # Fallback to history
-        hist = t.history(period="5d", auto_adjust=False)
-        if hist.empty:
+        # Fallback to history (reuse the same fetch — do not call history() again)
+        if hist is None or hist.empty:
             raise FetchError(f"no data returned for {ticker}")
         close_col = hist["Close"]
         last = float(close_col.iloc[-1])
         prev = float(close_col.iloc[-2]) if len(close_col) >= 2 else None
-        return last, prev
+        return last, prev, quote_date
 
 
 def load_previous_snapshot(today: date) -> CommoditySnapshot | None:
@@ -117,10 +155,11 @@ def main() -> int:
 
     prices: dict[str, CommodityPrice] = {}
     errors: list[str] = []
+    quote_dates: list[date] = []
 
     for key, (ticker, currency, unit, _threshold_key) in COMMODITY_SPEC.items():
         try:
-            last, prev = fetch_commodity(ticker)
+            last, prev, quote_date = fetch_commodity(ticker)
             change_pct = ((last - prev) / prev) if (prev is not None and prev != 0) else None
             prices[key] = CommodityPrice(
                 price=last,
@@ -129,14 +168,17 @@ def main() -> int:
                 currency=currency,
                 unit=unit,
             )
+            if quote_date is not None:
+                quote_dates.append(quote_date)
             logger.info(
-                "%s (%s): %.4f %s (prev=%.4f, chg=%.2f%%)",
+                "%s (%s): %.4f %s (prev=%.4f, chg=%.2f%%, quote_date=%s)",
                 key,
                 ticker,
                 last,
                 currency,
                 prev if prev is not None else float("nan"),
                 (change_pct * 100) if change_pct is not None else float("nan"),
+                quote_date.isoformat() if quote_date is not None else "unavailable",
             )
         except Exception as exc:
             logger.warning("fetch failed for %s (%s): %s", key, ticker, exc)
@@ -146,8 +188,17 @@ def main() -> int:
         notify("error", "commodity_prices all tickers failed", "\n".join(errors))
         return 1
 
+    # Snapshot date = the QUOTE's own trading date (yfinance history()'s latest
+    # DatetimeIndex entry), not the run date -- brent/WTI/gold trade nearly
+    # 24/5, so their quote dates virtually always agree; take the latest when
+    # they don't (a genuinely live market beats a stale one). Falls back to
+    # date.today() ONLY when every ticker's history() call failed this run --
+    # the source genuinely offered no date this time, so the run date is the
+    # best available label, same as the pre-fix behaviour.
+    snapshot_date = max(quote_dates) if quote_dates else date.today()
+
     # Anomaly check vs previous snapshot
-    prev_snap = load_previous_snapshot(date.today())
+    prev_snap = load_previous_snapshot(snapshot_date)
     if prev_snap is not None:
         anomalies: list[str] = []
         for key, cp in prices.items():
@@ -162,7 +213,7 @@ def main() -> int:
 
     snapshot = CommoditySnapshot(
         schema_version="1.0",
-        date=date.today(),
+        date=snapshot_date,
         scraped_at=datetime.now(timezone.utc),
         prices=prices,
         provider="yfinance",
