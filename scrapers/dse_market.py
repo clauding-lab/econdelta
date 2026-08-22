@@ -125,12 +125,12 @@ def parse_homepage_indices(html: str) -> DseIndices:
     )
 
 
-def parse_market_stats(html: str) -> DseMarket:
-    """Extract turnover/trades/advancing/declining/unchanged from market-statistics.php.
+def _extract_code_block_text(html: str) -> str:
+    """Return the plaintext of the <code> block on market-statistics.php.
 
-    The data is inside a <code> element nested in a table. Contents are preformatted
-    plaintext under the heading "TOTAL TRANSACTIONS" and "All Category".
-    Turnover is in Taka — divide by _TAKA_PER_CRORE (10M) to get crore.
+    Shared by parse_market_stats and parse_trading_date -- both read different
+    lines out of the SAME preformatted block, so a bad/missing selector only
+    needs fixing in one place.
     """
     soup = BeautifulSoup(html, "html.parser")
 
@@ -143,7 +143,59 @@ def parse_market_stats(html: str) -> DseMarket:
     if code_block is None:
         raise ParseError("no <code> block found on market-statistics.php")
 
-    text = code_block.get_text("\n")
+    return code_block.get_text("\n")
+
+
+# DSE stamps every market-statistics.php snapshot with its own session date:
+# "                  TODAY'S SHARE MARKET : 2026-04-20". This is the SOURCE's
+# own trading date -- extracting it here (rather than trusting date.today())
+# is the whole point of this fix. See parse_trading_date's docstring.
+_TRADING_DATE_RE = re.compile(
+    r"TODAY[’']S\s+SHARE\s+MARKET\s*:\s*(\d{4}-\d{2}-\d{2})", re.IGNORECASE
+)
+
+
+def parse_trading_date(text: str) -> date:
+    """Extract the page's own trading date from market-statistics.php's code block.
+
+    The systemd timer fires at 19:21 UTC (01:21 BDT the NEXT calendar day) to
+    capture that day's already-closed session, so ``date.today()`` at run time
+    is reliably one day ahead of the session the page describes -- every
+    dse_market snapshot was stamped with the wrong day until this fix (see
+    AGENTS.md landmine 33 / AGENT_LEARNINGS.md 2026-08-08 "one trading day
+    late"). This function reads the page's own "TODAY'S SHARE MARKET : YYYY-
+    MM-DD" line instead, so the snapshot is stamped with the SESSION's real
+    date regardless of what the run clock or run-date/BDT-offset math says.
+
+    Args:
+        text: the plaintext of the <code> block (see _extract_code_block_text).
+
+    Raises:
+        ParseError: if the label is missing or its value isn't a valid ISO
+            date. NEVER falls back to date.today() -- a silent run-date
+            fallback is exactly the bug this function exists to prevent from
+            reappearing.
+    """
+    m = _TRADING_DATE_RE.search(text)
+    if m is None:
+        raise ParseError(
+            "could not find \"TODAY'S SHARE MARKET\" date in market-statistics code block"
+        )
+    raw = m.group(1)
+    try:
+        return date.fromisoformat(raw)
+    except ValueError as exc:
+        raise ParseError(f"TODAY'S SHARE MARKET date {raw!r} is not a valid ISO date") from exc
+
+
+def parse_market_stats(html: str) -> DseMarket:
+    """Extract turnover/trades/advancing/declining/unchanged from market-statistics.php.
+
+    The data is inside a <code> element nested in a table. Contents are preformatted
+    plaintext under the heading "TOTAL TRANSACTIONS" and "All Category".
+    Turnover is in Taka — divide by _TAKA_PER_CRORE (10M) to get crore.
+    """
+    text = _extract_code_block_text(html)
 
     # --- Trades: "A. NO. OF TRADES : 223903" ---
     trades_m = re.search(r"NO\.\s+OF\s+TRADES\s*:\s*([\d,]+)", text)
@@ -213,28 +265,18 @@ def write_snapshot(snapshot: DseSnapshot) -> Path:
     return target
 
 
+def _already_ingested(trading_date: date) -> bool:
+    """True if a snapshot for this trading date is already on disk."""
+    return (DATA_DIR / f"{trading_date.isoformat()}.json").exists()
+
+
 def main() -> int:
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
 
-    today = date.today()
     holidays = load_holidays(HOLIDAYS_PATH)
-
-    if not is_bd_trading_day(today, holidays):
-        logger.info("non-trading day %s; skipping", today.isoformat())
-        snapshot = DseSnapshot(
-            schema_version="1.0",
-            date=today,
-            scraped_at=datetime.now(timezone.utc),
-            trading_day=False,
-            indices=None,
-            market=None,
-            source_url="https://www.dse.com.bd/",
-        )
-        write_snapshot(snapshot)
-        return 0
 
     with CONFIG_PATH.open() as f:
         sources = json.load(f)["sources"]
@@ -243,20 +285,19 @@ def main() -> int:
 
     thresholds = load_thresholds(THRESHOLDS_PATH)
 
+    # Fetch + parse market-statistics FIRST -- it carries the page's own
+    # trading date, which is what the gate below evaluates against. There is
+    # no cheap way to know the trading date without fetching, so (unlike the
+    # old run-date pre-check this replaces) every invocation attempts the
+    # fetch; the skip/no-op decision happens AFTER a successful parse, not
+    # before it.
     try:
-        home_html = DEFAULT_CLIENT.fetch_html(homepage_url)
-        indices = parse_homepage_indices(home_html)
-        logger.info(
-            "Parsed indices: DSEX=%.5f DS30=%.5f DSES=%.5f",
-            indices.dsex,
-            indices.ds30 or 0,
-            indices.dses or 0,
-        )
-
         stats_html = DEFAULT_CLIENT.fetch_html(summary_url)
+        trading_date = parse_trading_date(_extract_code_block_text(stats_html))
         market = parse_market_stats(stats_html)
         logger.info(
-            "Parsed market: trades=%d turnover=%.4f crore adv=%d dec=%d unc=%d",
+            "Parsed market: date=%s trades=%d turnover=%.4f crore adv=%d dec=%d unc=%d",
+            trading_date.isoformat(),
             market.total_trades,
             market.turnover_crore,
             market.advancing,
@@ -268,9 +309,68 @@ def main() -> int:
         notify("error", "dse_market fetch failed", f"{type(e).__name__}: {e}")
         return 1
 
-    # Anomaly check vs previous trading day
-    prev = load_previous_snapshot_for(today, holidays)
+    # Idempotency gate, evaluated on the PARSED trading date, never the run
+    # date. This session may already be on disk -- a re-run later the same
+    # day, or DSE re-serving the last real session's page on a weekend/
+    # holiday when nothing new traded (the site always reports the latest
+    # actual session, so a closed day naturally parses to an already-seen
+    # date). Either way there is nothing new to write; no-op cleanly.
+    if _already_ingested(trading_date):
+        logger.info("session %s already ingested; no-op", trading_date.isoformat())
+        return 0
+
+    # This is the ONLY other case the gate considers, and it is observability
+    # only -- it never blocks the write. config/holidays_2026.json's Sun-Thu
+    # default is a DEFAULT, not a hard rule: DSE runs makeup sessions on
+    # weekends around Eid (AGENT_LEARNINGS.md 2026-08-08), and a moon-sighting
+    # holiday can also simply be missing from the calendar file. Either way,
+    # the source just reported a REAL, never-before-seen session on this
+    # date -- trusting the calendar over the source here would silently drop
+    # a genuine trading day, which is the exact failure this fix replaces.
+    if not is_bd_trading_day(trading_date, holidays):
+        logger.warning(
+            "parsed trading date %s falls on a day config/holidays_2026.json "
+            "treats as non-trading (weekend/uncalendared holiday), but DSE "
+            "just reported a new session for it -- writing anyway",
+            trading_date.isoformat(),
+        )
+
+    try:
+        home_html = DEFAULT_CLIENT.fetch_html(homepage_url)
+        indices = parse_homepage_indices(home_html)
+        logger.info(
+            "Parsed indices: DSEX=%.5f DS30=%.5f DSES=%.5f",
+            indices.dsex,
+            indices.ds30 or 0,
+            indices.dses or 0,
+        )
+    except (FetchError, ParseError) as e:
+        logger.exception("fetch/parse failed")
+        notify("error", "dse_market fetch failed", f"{type(e).__name__}: {e}")
+        return 1
+
+    # Anomaly check vs previous trading day. MEDIUM-2 (2026-08-22 round-1
+    # review): the threshold was calibrated for a ONE-trading-day move.
+    # config/holidays_2026.json now carries the 7-day Eid-ul-Fitr and
+    # Eid-ul-Adha closures (this PR's holiday-calendar completion), so
+    # `load_previous_snapshot_for` can legitimately walk back a week or more
+    # to find the last real session -- a week's worth of accumulated market
+    # movement compressed into one same-day comparison is not the anomaly
+    # this threshold exists to catch, and hard-blocking the write would
+    # silently skip DSE data for the whole re-opening week. Past a 3-
+    # calendar-day baseline gap, downgrade a threshold breach from a write-
+    # block to a write+warning: the number still lands, flagged for a human
+    # to sanity-check, instead of vanishing. A genuine DSE makeup weekend
+    # session (e.g. Sat 23 May 2026) is unaffected either way -- item 1's
+    # parsed-date design means the weekday/holiday calendar only ever
+    # produces a WARNING there, never a gate; this downgrade is scoped
+    # purely to the anomaly-threshold hard-block.
+    _ANOMALY_BASELINE_GAP_GRACE_DAYS = 3
+    prev = load_previous_snapshot_for(trading_date, holidays)
     if prev is not None and prev.indices is not None:
+        baseline_gap_days = (trading_date - prev.date).days
+        hard_block = baseline_gap_days <= _ANOMALY_BASELINE_GAP_GRACE_DAYS
+        anomalies: list[str] = []
         for metric, new_val, old_val in [
             ("dsex", indices.dsex, prev.indices.dsex),
             ("ds30", indices.ds30, prev.indices.ds30),
@@ -280,16 +380,21 @@ def main() -> int:
                 continue
             ok, pct = check_threshold(metric, new_val, old_val, thresholds)
             if not ok:
-                notify(
-                    "warning",
-                    "dse_market anomaly — write skipped",
-                    f"{metric}: {old_val} → {new_val} ({pct:.2%} exceeds threshold)",
-                )
-                return 2
+                detail = f"{metric}: {old_val} → {new_val} ({pct:.2%} exceeds threshold)"
+                if hard_block:
+                    notify("warning", "dse_market anomaly — write skipped", detail)
+                    return 2
+                anomalies.append(detail)
+        if anomalies:
+            notify(
+                "warning",
+                f"dse_market anomaly across a {baseline_gap_days}-day baseline gap — writing anyway",
+                "\n".join(anomalies),
+            )
 
     snapshot = DseSnapshot(
         schema_version="1.0",
-        date=today,
+        date=trading_date,
         scraped_at=datetime.now(timezone.utc),
         trading_day=True,
         indices=indices,

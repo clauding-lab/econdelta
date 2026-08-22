@@ -36,13 +36,24 @@ import logging
 import os
 import uuid as _uuid
 from datetime import date, datetime, timezone
+from pathlib import Path
 from typing import Callable as _Callable
 from typing import Mapping
 from typing import Optional as _Optional
 
 import requests
 
+from utils.alert_dedup import should_alert_today
 from utils.run_log_capture import RingBufferHandler, scrub_secrets
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+# Cross-process dedup for wrap_run's uncaught-exception alert (MEDIUM-5,
+# 2026-08-22 round-1 review) -- systemd's Restart=on-failure can retry a
+# crashed unit up to 4 times inside its StartLimit window (landmine 48),
+# each a fresh process, so without this the same crash alerts up to 4 times.
+# Keyed per-SOURCE (not a single global key) so a bb_forex crash the same
+# day as a dse_market crash doesn't suppress the second one's alert.
+_WRAP_RUN_CRASH_ALERT_STATE_PATH = _REPO_ROOT / "data" / "wrap_run_crash_alert_state.json"
 
 logger = logging.getLogger("supabase_writer")
 
@@ -816,6 +827,36 @@ def wrap_run(source: str, unit: str, main_func: _Callable[[], int]) -> int:
         tail = handler.tail()
         error = _finalize_run_error(tail, head=head)
         log_run_end(run_id, started_at, status="fail", exit_code=1, error=error)
+        # Confirmed gap (2026-08-22 date-integrity audit): a scraper crashing
+        # OUTSIDE its own narrower try/except (e.g. bb_forex.py's guarded
+        # fetch+parse block catches everything there, but the anomaly-check
+        # code that runs AFTER it is unguarded) landed here with a run_logs
+        # row and nothing else -- no Discord alert, invisible unless someone
+        # went looking. Every scraper's OWN try/except already notifies at
+        # its own failure sites (see e.g. scrapers/dse_market.py,
+        # scrapers/bb_forex.py) and never reaches this branch, so this can
+        # never double-notify for those -- it only fires for the failure
+        # class those sites structurally cannot see: an exception that
+        # escaped them entirely. Same channel the aggregate hard-reject uses.
+        # Deduped to one alert per source per day (MEDIUM-5, 2026-08-22
+        # round-1 review): Restart=on-failure can retry a crashed unit up to
+        # 4 times inside its StartLimit window (landmine 48), each a fresh
+        # process with no shared in-memory state.
+        try:
+            if should_alert_today(
+                f"wrap_run_crash:{source}",
+                _WRAP_RUN_CRASH_ALERT_STATE_PATH,
+                today=datetime.now(timezone.utc).date(),
+            ):
+                _lazy_notify()(
+                    "error",
+                    f"{source} crashed — run_logs status=fail",
+                    f"Uncaught exception in {source} (unit: {unit}): {error}",
+                )
+        except Exception as notify_exc:  # noqa: BLE001 — never mask the real exception
+            logger.warning(
+                "wrap_run: failed to notify about %s crash: %s", source, notify_exc
+            )
         raise
     finally:
         root_logger.removeHandler(handler)

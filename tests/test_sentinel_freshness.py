@@ -141,6 +141,89 @@ def test_future_as_of_is_excluded_from_latest():
     assert fresh["debt_gdp_ratio"].latest_as_of == date(2025, 12, 31)
 
 
+def test_future_as_of_is_flagged_not_silently_discarded():
+    """A NEW future-dated id (not in ACCEPTED_FUTURE_DATED_METRIC_IDS) must
+    ALSO surface the future row as its own breach type -- excluding it from
+    `latest_as_of` is still correct, but it must leave a record instead of
+    vanishing entirely. Uses general_inflation, not debt_gdp_ratio, so this
+    test stays meaningful once debt_gdp_ratio's KNOWN mis-parse is excluded
+    (see test_accepted_future_dated_id_is_excluded below)."""
+    m = load_cadence_map()
+    report = assess(
+        rows_daily=[_row("general_inflation", "2099-12-31"),
+                    _row("general_inflation", "2026-01-31")],
+        rows_monthly=[],
+        cadence_map=m,
+        today=date(2026, 2, 1),
+    )
+    future = {f.metric_id: f for f in report.future_dated}
+    assert "general_inflation" in future
+    assert future["general_inflation"].latest_as_of == date(2099, 12, 31)
+    assert future["general_inflation"].age_days < 0  # negative age = in the future
+    # Still correctly fresh on its REAL (non-future) vintage too -- this is a
+    # cross-cutting flag, not a replacement classification.
+    assert "general_inflation" in {f.metric_id for f in report.fresh}
+
+
+def test_accepted_future_dated_id_is_excluded_from_future_dated():
+    """debt_gdp_ratio's future row is a KNOWN, already-diagnosed mis-parse
+    (landmine 40) -- HIGH-2, 2026-08-22 round-1 review: it must NOT appear
+    in future_dated at all, so it can never itself make the sentinel nag
+    about a defect that's already understood."""
+    m = load_cadence_map()
+    report = assess(
+        rows_daily=[_row("debt_gdp_ratio", "2031-12-31"),
+                    _row("debt_gdp_ratio", "2025-12-31")],
+        rows_monthly=[],
+        cadence_map=m,
+        today=date(2026, 2, 1),
+    )
+    assert "debt_gdp_ratio" not in {f.metric_id for f in report.future_dated}
+    # Still correctly fresh on its real (non-future) vintage -- only the
+    # future_dated SURFACING is suppressed, not the underlying classification.
+    assert "debt_gdp_ratio" in {f.metric_id for f in report.fresh}
+
+
+def test_run_with_only_accepted_future_dated_rows_has_empty_future_dated():
+    """A run where the ONLY future-dated anomaly is the known debt_gdp_ratio
+    row must leave future_dated completely empty -- this is what lets
+    should_send stay quiet on a non-heartbeat day (see test_sentinel_report.py)."""
+    m = load_cadence_map()
+    report = assess(
+        rows_daily=[_row("debt_gdp_ratio", "2031-12-31"),
+                    _row("debt_gdp_ratio", "2025-12-31")],
+        rows_monthly=[],
+        cadence_map=m,
+        today=date(2026, 2, 1),
+    )
+    assert report.future_dated == []
+
+
+def test_metric_with_only_future_rows_is_both_unmapped_and_future_dated():
+    """gdp has no non-future vintage at all -- unmapped for scoring purposes,
+    but the future row itself must still be visible."""
+    m = load_cadence_map()
+    report = assess(
+        rows_daily=[_row("gdp", "2099-12-31")],
+        rows_monthly=[],
+        cadence_map=m,
+        today=date(2026, 7, 4),
+    )
+    assert {u.metric_id for u in report.unmapped} == {"gdp"}
+    assert {f.metric_id for f in report.future_dated} == {"gdp"}
+
+
+def test_no_future_rows_leaves_future_dated_empty():
+    m = load_cadence_map()
+    report = assess(
+        rows_daily=[_row("dsex", "2026-07-01")],
+        rows_monthly=[],
+        cadence_map=m,
+        today=date(2026, 7, 4),
+    )
+    assert report.future_dated == []
+
+
 def test_metric_only_in_monthly_table_resolves_monthly():
     m = load_cadence_map()
     report = assess(
