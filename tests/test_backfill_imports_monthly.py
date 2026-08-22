@@ -1,6 +1,8 @@
 """Tests for scripts/backfill_imports_monthly.py -- the cross-check + row
-build logic, and the CLI's --dry-run path (mocked fetch, no network, no
-Supabase credentials needed). NEVER exercises the real --write path.
+build logic, and the CLI's --dry-run and --write paths. NEVER touches a
+REAL Supabase credential or network call -- --write coverage (LOW-2, Opus
+review round 2) mocks utils.supabase_writer's functions directly, which
+bypasses credential resolution entirely.
 
 Unlike scripts/backfill_cpi_july_2026.py (pure hardcoded values), this
 script RE-READS its two months' values from a live PDF fetch every run --
@@ -166,17 +168,66 @@ class TestDryRunCliAgainstRealFixture:
         PDF, which needs explicit grid lines for pdfplumber's line-based
         table detection to find anything at all) -- the fetch is still
         mocked to the real fixture path just so _fetch_imports_mei_pdf
-        itself is never exercised for real."""
+        itself is never exercised for real. Round 2: the function returns
+        (p_rows, r_by_month) now -- this script ignores r_by_month."""
         with patch(
             "scripts.backfill_imports_monthly._fetch_imports_mei_pdf",
             return_value=MEI_FIXTURE,
         ), patch(
             "scripts.backfill_imports_monthly.parse_imports_c_and_f_table",
-            return_value=[(date(2026, 7, 1), 6270.46)],
+            return_value=([(date(2026, 7, 1), 6270.46)], {date(2025, 7, 1): 6270.46}),
         ):
             exit_code = run(["--dry-run"])
         assert exit_code == 0
         out = capsys.readouterr().out
         assert "DRY RUN" in out
         assert "0 total" in out
-        assert "0 total" in out
+
+
+class TestWritePathZeroRowsGuard:
+    """LOW-2 (Opus review round 2): the --write path must skip the
+    metric_history_monthly upsert call explicitly when there's nothing to
+    write, rather than relying on upsert_metric_history_monthly's own
+    internal `if not rows: return 0` short-circuit (utils/supabase_
+    writer.py) to make an empty-list call harmless. Every Supabase writer
+    function is mocked directly -- no real credential or network path is
+    touched."""
+
+    def _write_with(self, monkeypatch, *, parsed_return):
+        import scripts.backfill_imports_monthly as script
+
+        monkeypatch.setattr(script, "_fetch_imports_mei_pdf", lambda: MEI_FIXTURE)
+        monkeypatch.setattr(script, "parse_imports_c_and_f_table", lambda pdf_path: parsed_return)
+
+        import utils.supabase_writer as writer
+
+        hist_calls = []
+        monkeypatch.setattr(
+            writer, "upsert_metric_history_monthly",
+            lambda rows, **k: (hist_calls.append(rows), len(rows))[1],
+        )
+        defs_calls = []
+        monkeypatch.setattr(
+            writer, "upsert_metric_definitions_monthly",
+            lambda defs, **k: (defs_calls.append(defs), len(defs))[1],
+        )
+        exit_code = run(["--write"])
+        return exit_code, hist_calls, defs_calls
+
+    def test_zero_rows_skips_the_history_upsert_call_entirely(self, monkeypatch):
+        exit_code, hist_calls, defs_calls = self._write_with(
+            monkeypatch, parsed_return=([(date(2026, 7, 1), 6270.46)], {}),
+        )
+        assert exit_code == 0
+        assert hist_calls == []  # never called at all -- not called-with-[]
+        assert len(defs_calls) == 1  # the definitions repoint still runs
+
+    def test_nonzero_rows_still_calls_the_history_upsert(self, monkeypatch):
+        exit_code, hist_calls, defs_calls = self._write_with(
+            monkeypatch,
+            parsed_return=([(date(2026, 4, 1), 7066.10), (date(2026, 5, 1), 6108.22)], {}),
+        )
+        assert exit_code == 0
+        assert len(hist_calls) == 1
+        assert len(hist_calls[0]) == 2
+        assert len(defs_calls) == 1

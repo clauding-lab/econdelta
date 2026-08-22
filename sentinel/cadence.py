@@ -112,6 +112,23 @@ _SCRAPER_CADENCE: dict[str, str] = {
     # staleness exemption, so a live leg that stops working can still
     # breach.
     "imports_usd_mn_monthly": "quarterly",
+    # PR-C (build-brief item 4, Opus review round 2, MEDIUM-2): same
+    # structural-lag rationale as imports_usd_mn_monthly directly above --
+    # aggregate_latest._m2_monthly_append_rows' closed-month guard means
+    # m2_growth_yoy_monthly's freshest-POSSIBLE as_of already lags ~83 days
+    # by the time this leg is even allowed to write it (BB's econdata/
+    # moneysupply page's own multi-month lag, stacked with the guard only
+    # accepting an already-closed month). The `_monthly`-suffix prefix rule
+    # (45-day grace) would brand every fresh row stale the moment it
+    # landed. "quarterly" (165-day grace) comfortably covers the real lag
+    # while still catching a genuinely dead leg within two fiscal quarters
+    # -- a cadence choice, not a staleness exemption, so this id can still
+    # breach for real. NOTE: this id also carries a KNOWN Feb-Jun 2026 data
+    # hole this PR does not backfill (see aggregate_latest.py's M2 section
+    # header comment) -- the cadence override does not paper over that gap,
+    # it only stops the LIVE leg's own fresh writes from reading as false
+    # breaches.
+    "m2_growth_yoy_monthly": "quarterly",
     # world_bank_pink_sheet — monthly
     "lng_price_usd_mmbtu": "monthly",
     "palm_oil_price_usd_mt": "monthly",

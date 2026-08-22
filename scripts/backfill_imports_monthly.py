@@ -195,7 +195,13 @@ def run(argv: list[str] | None = None) -> int:
     logger.info("fetching the live BB MEI PDF...")
     pdf_path = _fetch_imports_mei_pdf()
     logger.info("parsing %s for the 'Custom based import (c&f)' table...", pdf_path)
-    parsed = dict(parse_imports_c_and_f_table(pdf_path))
+    # parse_imports_c_and_f_table now returns (p_rows, r_by_month) -- round
+    # 2, HIGH-1. This backfill script only ever targets specific hardcoded
+    # months (April/May 2026) against hardcoded expected values, with no
+    # DB-comparison splice logic of its own, so the revised (R) column
+    # fallback that _imports_splice_check needs is irrelevant here.
+    p_rows, _revised_rows = parse_imports_c_and_f_table(pdf_path)
+    parsed = dict(p_rows)
 
     history_rows = build_history_rows(parsed)
     if history_rows:
@@ -224,7 +230,19 @@ def run(argv: list[str] | None = None) -> int:
     )
 
     try:
-        sent_hist = upsert_metric_history_monthly(history_rows)
+        # LOW-2 (Opus review round 2): skip the history upsert explicitly
+        # when there's nothing to write -- self-evident from reading this
+        # script alone, rather than relying on upsert_metric_history_
+        # monthly's OWN internal `if not rows: return 0` short-circuit
+        # (utils/supabase_writer.py) to make an empty call harmless. The
+        # definitions repoint still runs regardless -- it's a one-time
+        # metadata correction unrelated to whether THIS run found new
+        # months to backfill.
+        if history_rows:
+            sent_hist = upsert_metric_history_monthly(history_rows)
+        else:
+            logger.info("skipping metric_history_monthly upsert -- 0 rows to write")
+            sent_hist = 0
         sent_defs = upsert_metric_definitions_monthly([DEFINITION_UPDATE])
     except SupabaseWriteError as e:
         logger.error("write failed: %s", e)

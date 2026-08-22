@@ -42,7 +42,7 @@ TODAY = date(2026, 8, 22)
 
 class TestParseImportsCAndFTable:
     def test_parses_every_provisional_month_from_the_real_fixture(self):
-        rows = agg.parse_imports_c_and_f_table(MEI_FIXTURE)
+        rows, _revised = agg.parse_imports_c_and_f_table(MEI_FIXTURE)
         by_date = dict(rows)
         # Values verified live 2026-08-22 against the real June-2026 MEI PDF
         # (the source scout's numbers, independently reconfirmed here).
@@ -53,17 +53,27 @@ class TestParseImportsCAndFTable:
         assert by_date[date(2025, 7, 1)] == pytest.approx(6270.46)
 
     def test_only_the_provisional_fy26_block_is_returned_not_the_fy25_comparator(self):
-        """The table's 'R' column (FY25 revised, the SAME months one year
-        earlier) must NEVER be returned -- reading it would double-count a
-        month this leg already captured a year prior under its own 'P'
-        reading."""
-        rows = agg.parse_imports_c_and_f_table(MEI_FIXTURE)
+        """The 'p_rows' half must NEVER contain the table's 'R' column (FY25
+        revised, the SAME months one year earlier) -- reading it into P
+        would double-count a month this leg already captured a year prior
+        under its own 'P' reading."""
+        rows, _revised = agg.parse_imports_c_and_f_table(MEI_FIXTURE)
         values = {v for _as_of, v in rows}
         # FY25's comparator value for March (5896.66) must not appear.
         assert 5896.66 not in values
 
+    def test_revised_half_carries_the_fy25_comparator_column(self):
+        """Round 2, HIGH-1: the SECOND return value is the table's revised
+        (R) column, keyed by its OWN true month -- anchor-use only, never
+        written. March 2026's comparator (FY25, i.e. March 2025) is
+        5896.66 in the real fixture."""
+        _rows, revised = agg.parse_imports_c_and_f_table(MEI_FIXTURE)
+        assert revised[date(2025, 3, 1)] == pytest.approx(5896.66)
+        assert revised[date(2025, 4, 1)] == pytest.approx(5820.45)
+        assert revised[date(2025, 5, 1)] == pytest.approx(5787.32)
+
     def test_annual_summary_rows_are_not_month_rows(self):
-        rows = agg.parse_imports_c_and_f_table(MEI_FIXTURE)
+        rows, _revised = agg.parse_imports_c_and_f_table(MEI_FIXTURE)
         values = {v for _as_of, v in rows}
         # The 'July-May' cumulative total (67727.60) must never be mistaken
         # for a single month's reading.
@@ -80,6 +90,63 @@ class TestParseImportsCAndFTable:
         with pytest.raises(ValueError, match="no table"):
             agg.parse_imports_c_and_f_table(pdf_path)
         del pdfplumber  # imported only to fail fast if the dep is missing
+
+
+class TestParseImportsPAndRRows:
+    """Direct coverage of the new P+R extraction (Opus review round 2,
+    HIGH-1) -- _parse_imports_rows/parse_imports_c_and_f_table are thin
+    wrappers around this."""
+
+    def test_r_column_resolves_to_its_own_true_month_one_year_back(self):
+        table = [
+            ["", "Custom based import (c&f)", None],
+            ["Month", "FY26P", "FY25R"],
+            ["July", "100.0", "90.0"],
+            ["January", "200.0", "190.0"],
+        ]
+        p_rows, r_by_month = agg._parse_imports_p_and_r_rows(table)
+        assert dict(p_rows) == {date(2025, 7, 1): 100.0, date(2026, 1, 1): 200.0}
+        assert r_by_month == {date(2024, 7, 1): 90.0, date(2025, 1, 1): 190.0}
+
+    def test_post_roll_shape_p_has_only_the_new_fy_month_r_has_the_prior_fy(self):
+        """The REAL post-roll shape (Opus review round 2 finding): BB does
+        NOT duplicate the monthly block -- it RE-LABELS the SAME block's
+        two columns in place. Only ONE 'Month' sub-header, now reading
+        'FY27P'/'FY26R' instead of 'FY26P'/'FY25R'."""
+        table = [
+            ["(USD in million)", None, None, None, None],
+            ["", "Custom based import (c&f)", None, "Import LCs opening", "Import LCs settlement"],
+            ["Month", "FY26R", "FY25R", "FY26R1", "FY26R1"],
+            ["July-June", "73553.70", "68354.21", "74000.00", "72000.00"],
+            ["", "(+7.61)", "(+2.44)", "(+0.18)", "(+4.18)"],
+            ["Month", "FY27P", "FY26R", "FY27P2", "FY27P2"],
+            ["July", "6501.00", "6270.46", "6600.00", "6400.00"],
+        ]
+        p_rows, r_by_month = agg._parse_imports_p_and_r_rows(table)
+        assert dict(p_rows) == {date(2026, 7, 1): 6501.00}
+        assert r_by_month == {date(2025, 7, 1): 6270.46}
+
+    def test_empty_r_when_no_r_column_present(self):
+        table = [
+            ["", "Custom based import (c&f)", None],
+            ["Month", "FY26P"],
+            ["July", "100.0"],
+        ]
+        p_rows, r_by_month = agg._parse_imports_p_and_r_rows(table)
+        assert dict(p_rows) == {date(2025, 7, 1): 100.0}
+        assert r_by_month == {}
+
+    def test_no_raise_on_empty_p_unlike_the_require_wrapper(self):
+        """_parse_imports_p_and_r_rows itself never raises -- only
+        _require_imports_p_rows (used by the back-compat wrappers) does."""
+        table = [
+            ["", "Custom based import (c&f)", None],
+            ["Month", "FY25R", "FY24R"],
+            ["July", "999.0", "888.0"],
+        ]
+        p_rows, r_by_month = agg._parse_imports_p_and_r_rows(table)
+        assert p_rows == []
+        assert r_by_month == {date(2024, 7, 1): 999.0}
 
 
 class TestFindImportsTable:
@@ -235,62 +302,174 @@ class TestImportsSpliceCheck:
         assert "unavailable" in problem
 
     def test_survives_a_hardcoded_march_anchor_that_no_longer_exists(self):
-        """The exact regression this fix prevents: March 2026 is no longer
-        in the PDF's provisional column (it rolled to 'R'), but a LATER
-        month the DB already has (June) still is -- the old hardcoded-
-        March-anchor design would have failed closed here forever; the
-        dynamic anchor must still succeed."""
+        """Regression pin (would only pass under a P-only or P-then-R
+        anchor -- proves the OLD hardcoded-March design is what's being
+        replaced, not a claim that P-only alone survives every roll shape;
+        see TestImportsSpliceCheckAcrossFYRoll for the REAL roll shape,
+        where P alone does NOT have an overlap and the R fallback is what
+        actually saves the day)."""
         pdf_rows = {
-            date(2026, 6, 1): 9440.0,  # still in 'P' post-roll (last FY26 month)
-            date(2026, 7, 1): 6270.46,  # first FY27 month, not yet in DB
+            date(2026, 6, 1): 9440.0,
+            date(2026, 7, 1): 6270.46,
         }
         db_rows = {
             date(2026, 5, 1): 6108.22,
             date(2026, 6, 1): 9440.0,
         }
         problem = agg._imports_splice_check(pdf_rows, db_rows)
-        assert problem is None  # anchored on June -- March is irrelevant now
+        assert problem is None  # anchored on June (still in P here) -- March is irrelevant now
+
+    # --- Opus review round 2, HIGH-1: revised (R) column fallback anchor ---
+
+    def test_r_fallback_used_when_p_has_no_overlap(self):
+        pdf_rows = {date(2026, 7, 1): 6501.00}  # P: only the new FY27 month
+        pdf_revised_rows = {date(2025, 7, 1): 6270.46}  # R: FY26's July, already in DB
+        db_rows = {date(2025, 7, 1): 6270.46, date(2026, 6, 1): 9440.0}
+        problem = agg._imports_splice_check(pdf_rows, db_rows, pdf_revised_rows)
+        assert problem is None
+
+    def test_r_fallback_enforces_the_same_2pct_band(self):
+        pdf_rows = {date(2026, 7, 1): 6501.00}
+        pdf_revised_rows = {date(2025, 7, 1): 9999.0}  # drifted > 2% vs db
+        db_rows = {date(2025, 7, 1): 6270.46}
+        problem = agg._imports_splice_check(pdf_rows, db_rows, pdf_revised_rows)
+        assert problem is not None
+        assert "FAILED" in problem
+        assert "revised (R)" in problem
+
+    def test_p_preferred_over_r_when_both_have_overlap(self):
+        """P is tried FIRST -- R is a fallback only, never preferred even
+        when both happen to have a usable overlap."""
+        pdf_rows = {date(2026, 6, 1): 9440.0}  # P has an overlap
+        pdf_revised_rows = {date(2026, 6, 1): 1.0}  # would FAIL if wrongly chosen
+        db_rows = {date(2026, 6, 1): 9440.0}
+        problem = agg._imports_splice_check(pdf_rows, db_rows, pdf_revised_rows)
+        assert problem is None
+
+    def test_no_overlap_in_either_column_fails_closed(self):
+        problem = agg._imports_splice_check(
+            {date(2026, 7, 1): 6501.00}, {date(2020, 1, 1): 1.0}, {date(2025, 7, 1): 6270.46},
+        )
+        assert problem is not None
+        assert "unavailable" in problem
+
+    def test_missing_revised_rows_argument_defaults_to_no_fallback(self):
+        """Backward compatible: omitting the 3rd argument entirely behaves
+        exactly like round 1 -- P-only, fail closed if P has no overlap."""
+        problem = agg._imports_splice_check(
+            {date(2026, 7, 1): 6501.00}, {date(2026, 6, 1): 9440.0},
+        )
+        assert problem is not None
+        assert "unavailable" in problem
 
 
 class TestImportsSpliceCheckAcrossFYRoll:
-    """End-to-end: _parse_imports_rows already handles a table with an OLD
-    'Month FY26P FY25R' block's tail followed by a NEW 'Month FY27P FY26R'
-    block (it re-resolves the active P/R column at every 'Month' header it
-    encounters, so this needs no parser change) -- this proves the dynamic
-    splice anchor correctly finds the shared month across that boundary."""
+    """Opus review round 2, HIGH-1: the round-1 version of this class
+    certified a FICTIONAL shape (two separate 'Month' blocks, an old
+    FY26P-tail block followed by a new FY27P block, as if BB duplicated
+    the monthly block at rollover). A reviewer simulation against the
+    REAL fixture re-labelled forward one fiscal year proved BB does NOT
+    duplicate the block -- it RE-LABELS the SAME block's two columns in
+    place. There is only ever ONE monthly 'Month' sub-header, and the
+    instant the first FY27 month publishes, EVERY FY26 month (including
+    whatever the DB most recently has) moves to 'R' in that SAME update.
+    Under a P-only anchor this is a permanent deadlock (P ∩ db is empty
+    forever, not just for one run) -- this class now pins the REAL shape
+    and proves the R-fallback (added to _imports_splice_check above) is
+    what actually resolves it."""
 
-    def test_rolled_fy27p_header_still_finds_a_valid_anchor(self):
-        table = [
-            ["(USD in million)"],
-            ["", "Custom based import (c&f)", None],
-            # Tail of the OLD FY26 monthly block (still 'P' at this point).
-            ["Month", "FY26P", "FY25R"],
-            ["May", "6108.22", "5787.32"],
-            ["June", "9440.00", "6453.82"],
-            # The FY rolls: a NEW block opens, June/May now excluded (they
-            # would show up under FY26R here in the real document -- this
-            # synthetic table omits that column since _parse_imports_rows
-            # never reads 'R').
-            ["Month", "FY27P", "FY26R"],
-            ["July", "6270.46", "6270.46"],
-        ]
-        parsed = dict(agg._parse_imports_rows(table))
-        assert parsed[date(2026, 6, 1)] == pytest.approx(9440.0)
-        assert parsed[date(2026, 7, 1)] == pytest.approx(6270.46)
-        assert date(2026, 3, 1) not in parsed  # March is long gone from 'P'
+    # The REAL post-roll table shape: ONE annual block (now FY26R/FY25R)
+    # + ONE monthly block, re-labelled FY27P/FY26R, carrying only July so
+    # far (BB's first post-roll issue).
+    ROLLED_TABLE = [
+        ["(USD in million)", None, None, None, None],
+        ["", "Custom based import (c&f)", None, "Import LCs opening", "Import LCs settlement"],
+        ["Month", "FY26R", "FY25R", "FY26R1", "FY26R1"],
+        ["July-June", "73553.70", "68354.21", "74000.00", "72000.00"],
+        ["", "(+7.61)", "(+2.44)", "(+0.18)", "(+4.18)"],
+        ["Month", "FY27P", "FY26R", "FY27P2", "FY27P2"],
+        ["July", "6501.00", "6270.46", "6600.00", "6400.00"],
+    ]
 
-        # The DB already has everything through June (appended before the
-        # roll) -- the dynamic anchor must land on June, not March.
-        db_rows = {date(2026, 5, 1): 6108.22, date(2026, 6, 1): 9440.0}
-        problem = agg._imports_splice_check(parsed, db_rows)
+    # The DB state on the day of the roll: appended through June 2026 (the
+    # last FY26 month, captured from the PREVIOUS issue) plus older
+    # pre-freeze seeded history -- July 2026 is NOT yet present (that's
+    # exactly the row this leg is trying to write this run).
+    DB_AT_ROLL = {
+        date(2025, 7, 1): 6270.46,
+        date(2026, 3, 1): 5826.2,
+        date(2026, 4, 1): 7066.10,
+        date(2026, 5, 1): 6108.22,
+        date(2026, 6, 1): 9440.0,
+    }
+
+    def test_p_only_has_zero_overlap_with_the_db_this_is_the_deadlock(self):
+        """Confirms the failure mode this fix addresses: with ONLY the P
+        column considered, the DB and the PDF share NOTHING -- not a
+        one-run gap, a permanent one (every FY26 month the DB has just
+        moved to R in this SAME update; no future run's P column can ever
+        contain it again)."""
+        p_rows, _revised = agg._parse_imports_p_and_r_rows(self.ROLLED_TABLE)
+        assert set(dict(p_rows)) & set(self.DB_AT_ROLL) == set()
+
+    def test_anchor_found_via_revised_column_and_july_is_written(self):
+        p_rows, revised = agg._parse_imports_p_and_r_rows(self.ROLLED_TABLE)
+        assert dict(p_rows) == {date(2026, 7, 1): 6501.00}
+        assert revised[date(2025, 7, 1)] == pytest.approx(6270.46)
+
+        # The mandatory splice check must ANCHOR VIA R (July 2025, which the
+        # DB already has from a year ago) and PASS (6270.46 vs 6270.46 --
+        # exact match).
+        problem = agg._imports_splice_check(dict(p_rows), self.DB_AT_ROLL, revised)
         assert problem is None
 
-        # And July becomes the one genuinely new row to append.
+        # With the check passing, July 2026 (the one new P-column month) is
+        # the row that gets WRITTEN.
         rows, reasons = agg._select_new_imports_rows(
-            list(parsed.items()), existing_as_of=set(db_rows), today=date(2026, 9, 15),
+            p_rows, existing_as_of=set(self.DB_AT_ROLL), today=date(2026, 10, 15),
         )
         assert [r["as_of"] for r in rows] == ["2026-07-01"]
+        assert rows[0]["value"] == pytest.approx(6501.00)
         assert reasons == []
+
+    def test_band_enforced_when_revised_column_value_has_drifted(self):
+        """The R-fallback anchor is NOT a rubber stamp -- if the PDF's own
+        revised-column reading for July 2025 disagrees with the DB's by
+        more than 2%, the whole leg still refuses, exactly like the P-path
+        already does."""
+        drifted_table = [row[:] for row in self.ROLLED_TABLE]
+        # Replace July's R-column reading (index 2) with a value that
+        # diverges >2% from the DB's 6270.46 for that same month.
+        july_row_idx = next(i for i, r in enumerate(drifted_table) if r and r[0] == "July")
+        drifted_table[july_row_idx] = ["July", "6501.00", "9999.00", "6600.00", "6400.00"]
+
+        p_rows, revised = agg._parse_imports_p_and_r_rows(drifted_table)
+        assert revised[date(2025, 7, 1)] == pytest.approx(9999.00)
+
+        problem = agg._imports_splice_check(dict(p_rows), self.DB_AT_ROLL, revised)
+        assert problem is not None
+        assert "FAILED" in problem
+        assert "revised (R)" in problem
+
+        # And nothing gets written this run -- _write_macro_monthly_append's
+        # caller-level contract (proven at the sub-path level elsewhere):
+        # a non-None splice_problem means the whole leg is skipped.
+
+    def test_self_heals_as_more_fy27_months_publish(self):
+        """Once a SECOND FY27 month is available, the P-column itself
+        starts to reconnect with what the leg is now writing under its own
+        progression -- proving this isn't a one-off, R-only crutch."""
+        two_month_table = [row[:] for row in self.ROLLED_TABLE]
+        two_month_table.append(["August", "5200.00", "5222.73", "5300.00", "5100.00"])
+        db_after_july_written = dict(self.DB_AT_ROLL)
+        db_after_july_written[date(2026, 7, 1)] = 6501.00  # last run's write
+
+        p_rows, revised = agg._parse_imports_p_and_r_rows(two_month_table)
+        # August run: P now overlaps the DB directly on July -- no R
+        # fallback needed any more.
+        assert set(dict(p_rows)) & set(db_after_july_written) == {date(2026, 7, 1)}
+        problem = agg._imports_splice_check(dict(p_rows), db_after_july_written, revised)
+        assert problem is None
 
 
 # ---------------------------------------------------------------------------

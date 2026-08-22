@@ -10,6 +10,8 @@ python3 scripts/build_catalog.py > docs/indicator-catalog.md
 
 Read the data contract for column semantics and query examples: [`data-contract.md`](data-contract.md).
 
+**Not listed below** (LOW-3, Opus review round 2, PR-C): the 5 auction-derived yield ids — `bill_bond_rates`, `tbill_182d_yield`, `tbill_364d_yield`, `tbond_5y_yield`, `tbond_10y_yield` — left `config/sources-v3.json` entirely (landmine 49's two-column trap fix) and are now derived from the `auction_results` table by `aggregate_latest._derive_daily_yields_from_auctions` instead of scraped. Their cadence still lives in `sentinel/cadence.py`'s `_SCRAPER_CADENCE`, not here.
+
 ---
 
 | Section | metric_id | Unit | Cadence | Source | Valid range | Description |

@@ -1638,44 +1638,62 @@ def _to_imports_float(cell: str | None) -> float | None:
         return None
 
 
-def _parse_imports_rows(table: list[list]) -> list[tuple[date, float]]:
+def _parse_imports_p_and_r_rows(
+    table: list[list],
+) -> tuple[list[tuple[date, float]], dict[date, float]]:
     """Pure transform: the 'Custom based import (c&f)' table's raw
-    pdfplumber rows -> [(as_of, value_usd_mn), ...] for every REAL,
-    PROVISIONAL month row found.
+    pdfplumber rows -> (p_rows, r_by_month).
 
-    Table shape (verified live 2026-08-22 against the June-2026 MEI PDF): a
-    GROUP header cell reading 'Custom based import (c&f)' opens a span of
-    TWO columns -- the CURRENT fiscal year's provisional actual ('FYnnP')
-    and the PRIOR fiscal year's revised comparator ('FYnnR', the SAME
-    months one year earlier, printed purely so the document's own prose can
-    quote a y/y percentage). Only the 'P' column is real, new,
-    un-superseded data -- the 'R' column repeats a figure this same leg (or
-    a prior run) already captured as its OWN 'P' reading a year earlier;
-    reading it here would double-count it under the wrong as_of.
+    ``p_rows`` is [(as_of, value_usd_mn), ...] for every REAL, PROVISIONAL
+    month row found -- this is the ONLY data this leg ever WRITES.
+    ``r_by_month`` is {as_of: value_usd_mn} for the SAME table's REVISED
+    prior-year comparator column -- ANCHOR-USE ONLY (Opus review round 2,
+    HIGH-1), NEVER written to metric_history_monthly. See
+    _imports_splice_check for why the revised column exists as a fallback
+    anchor source at all.
+
+    Table shape (verified live 2026-08-22 against the June-2026 MEI PDF; a
+    round-2 review simulation additionally confirmed the POST-ROLL shape
+    against the real fixture re-labelled forward one fiscal year): a GROUP
+    header cell reading 'Custom based import (c&f)' opens a span of TWO
+    columns -- the CURRENT fiscal year's provisional actual ('FYnnP') and
+    the PRIOR fiscal year's revised comparator ('FYnnR', the SAME months
+    one year earlier, printed purely so the document's own prose can quote
+    a y/y percentage). Critically, BB does NOT duplicate the monthly block
+    when the fiscal year rolls -- there is only ever ONE active monthly
+    block at a time, and its OWN two columns simply get RE-LABELLED
+    (e.g. 'FY26P'/'FY25R' becomes 'FY27P'/'FY26R' the moment the first FY27
+    month is published), never both bracketed at once.
 
     'Month' sub-header rows re-declare which of the group's two columns is
     'P' vs 'R' for the block of month-name rows that follows -- the table
-    interleaves an ANNUAL 'July-June' comparison block first, then the
-    in-progress fiscal year's monthly block -- so which column is 'P' is
-    re-resolved at each 'Month' row, never assumed constant for the whole
-    table.
+    interleaves an ANNUAL 'July-June' comparison block first (itself
+    P-or-R-labelled but never contributing rows, since 'July-June' isn't a
+    month name), then the in-progress fiscal year's monthly block -- so
+    which column is 'P' vs 'R' is re-resolved at each 'Month' row, never
+    assumed constant for the whole table. Both columns are tracked
+    independently: a table could in principle carry only one of the two
+    (though every real capture so far has carried both).
 
     Fiscal year: BD's FY runs July-June (e.g. 'FY26' = July 2025-June
-    2026), so a month row's real calendar year is derived from the ACTIVE
-    block's own 'FYnn' label -- July-December belong to (nn-1), January-
-    June belong to nn. Never inferred from the run clock (landmine 26/47).
+    2026), so a month row's real calendar year is derived from EACH
+    column's OWN 'FYnn' label independently -- July-December belong to
+    (nn-1), January-June belong to nn. Never inferred from the run clock
+    (landmine 26/47). This is why the P and R columns for the SAME row
+    resolve to DIFFERENT real months one year apart (e.g. post-roll,
+    'July' under 'FY27P'/'FY26R' gives P=2026-07-01 and R=2025-07-01).
 
     A row whose first cell isn't an exact month name (the annual
     'July-June'/'July-May' summary rows, blank rows, the Source/Note
-    footer) is skipped -- it is not a month row. Raises ValueError if the
-    table matched by _find_imports_table produces zero usable rows (a
-    structural change silently dropping every month, mirroring
-    parse_remittance_table's own H3 guard).
+    footer) is skipped -- it is not a month row.
     """
-    rows: list[tuple[date, float]] = []
+    p_rows: list[tuple[date, float]] = []
+    r_by_month: dict[date, float] = {}
     group_col: int | None = None
-    active_col: int | None = None
-    active_fy_end: int | None = None
+    active_p_col: int | None = None
+    active_p_fy_end: int | None = None
+    active_r_col: int | None = None
+    active_r_fy_end: int | None = None
 
     for row in table:
         if not row:
@@ -1689,59 +1707,87 @@ def _parse_imports_rows(table: list[list]) -> list[tuple[date, float]]:
 
         first = (row[0] or "").strip()
         if first.lower() == "month":
-            # L1 (Opus review round 1): collect EVERY 'P' candidate among
-            # the group's two columns and prefer the MAX FY-end-year, never
-            # just the first one found. Both columns being 'P' isn't the
-            # normal shape (the group is provisional-vs-revised, so
-            # normally only one side is 'P'), but a transition edition
-            # that briefly shows two provisional columns side by side
+            # L1 (Opus review round 1): collect EVERY 'P' (and, HIGH-1
+            # round 2, every 'R') candidate among the group's two columns
+            # and prefer the MAX FY-end-year for each, never just the
+            # first one found. Both columns being the SAME letter isn't
+            # the normal shape (the group is provisional-vs-revised, so
+            # normally the two differ), but a transition edition that
+            # briefly shows two columns of the same letter side by side
             # should never silently pick the OLDER one just because it
             # happens to sit first in iteration order.
             p_candidates: list[tuple[int, int]] = []  # (fy_end, col_idx)
+            r_candidates: list[tuple[int, int]] = []
             for idx in (group_col, group_col + 1):
                 if idx >= len(row) or row[idx] is None:
                     continue
                 m = _IMPORTS_HEADER_RE.search(str(row[idx]))
-                if m and m.group(2).upper() == "P":
-                    p_candidates.append((2000 + int(m.group(1)), idx))
-            if p_candidates:
-                active_fy_end, active_col = max(p_candidates)
-            else:
-                active_col, active_fy_end = None, None
+                if not m:
+                    continue
+                fy_end = 2000 + int(m.group(1))
+                (p_candidates if m.group(2).upper() == "P" else r_candidates).append((fy_end, idx))
+            active_p_fy_end, active_p_col = max(p_candidates) if p_candidates else (None, None)
+            active_r_fy_end, active_r_col = max(r_candidates) if r_candidates else (None, None)
             continue
 
-        if active_col is None:
+        if active_p_col is None and active_r_col is None:
             continue
         month_num = _REMIT_MONTH_NAME_TO_NUM.get(first)
-        if month_num is None or active_col >= len(row):
+        if month_num is None:
             continue
-        value = _to_imports_float(row[active_col])
-        if value is None:
-            continue
-        year = active_fy_end - 1 if month_num >= 7 else active_fy_end
-        rows.append((date(year, month_num, 1), value))
+        if active_p_col is not None and active_p_col < len(row):
+            value = _to_imports_float(row[active_p_col])
+            if value is not None:
+                year = active_p_fy_end - 1 if month_num >= 7 else active_p_fy_end
+                p_rows.append((date(year, month_num, 1), value))
+        if active_r_col is not None and active_r_col < len(row):
+            value = _to_imports_float(row[active_r_col])
+            if value is not None:
+                year = active_r_fy_end - 1 if month_num >= 7 else active_r_fy_end
+                r_by_month[date(year, month_num, 1)] = value
 
-    if not rows:
+    return p_rows, r_by_month
+
+
+def _require_imports_p_rows(p_rows: list[tuple[date, float]]) -> list[tuple[date, float]]:
+    """Raises ValueError if ``p_rows`` (the provisional/writable column) is
+    empty -- a structural change silently dropped every month, mirroring
+    parse_remittance_table's own H3 guard. The revised column is anchor-
+    use only and never gates this check on its own."""
+    if not p_rows:
         raise ValueError(
             "imports table parsed to ZERO provisional month rows despite a "
             f"matching {_IMPORTS_HEADER_MARKER!r} header -- likely a structural "
             "change silently dropped every month (mirrors parse_remittance_table's H3 guard)"
         )
-    return rows
+    return p_rows
 
 
-def parse_imports_c_and_f_table(pdf_path: Path) -> list[tuple[date, float]]:
-    """Pure parse: the MEI PDF's 'Custom based import (c&f)' table -> [(as_of,
-    value_usd_mn), ...] for every real, provisional month found. Raises
-    ValueError on any structural failure -- the caller treats any exception
-    the same way parse_remittance_table's caller does: parse failed,
-    notify, write nothing.
+def _parse_imports_rows(table: list[list]) -> list[tuple[date, float]]:
+    """Back-compat convenience: the provisional ('P') column only -- what
+    this leg WRITES. See _parse_imports_p_and_r_rows for the full P+R
+    extraction (needed by the splice check's R-fallback, HIGH-1 round 2)."""
+    p_rows, _r_by_month = _parse_imports_p_and_r_rows(table)
+    return _require_imports_p_rows(p_rows)
+
+
+def parse_imports_c_and_f_table(pdf_path: Path) -> tuple[list[tuple[date, float]], dict[date, float]]:
+    """Pure parse: the MEI PDF's 'Custom based import (c&f)' table -> (p_rows,
+    r_by_month). ``p_rows`` -- [(as_of, value_usd_mn), ...] for every real,
+    provisional month found -- is what gets WRITTEN. ``r_by_month`` --
+    {as_of: value_usd_mn} for the revised prior-year comparator column --
+    is ANCHOR-USE ONLY for _imports_splice_check's fallback (HIGH-1 round
+    2); it is NEVER written to metric_history_monthly. Raises ValueError
+    if ``p_rows`` is empty -- the caller treats any exception the same way
+    parse_remittance_table's caller does: parse failed, notify, write
+    nothing.
     """
     import pdfplumber
 
     with pdfplumber.open(pdf_path) as pdf:
         table = _find_imports_table(pdf)
-    return _parse_imports_rows(table)
+    p_rows, r_by_month = _parse_imports_p_and_r_rows(table)
+    return _require_imports_p_rows(p_rows), r_by_month
 
 
 def _download_mei_index_html() -> str:
@@ -1784,58 +1830,89 @@ def _fetch_imports_mei_pdf() -> Path:
     return result.artifact_path
 
 
-def _imports_splice_check(pdf_rows: dict[date, float], db_rows: dict[date, float]) -> str | None:
+def _imports_splice_check(
+    pdf_rows: dict[date, float],
+    db_rows: dict[date, float],
+    pdf_revised_rows: dict[date, float] | None = None,
+) -> str | None:
     """MANDATORY pre-write guard (build-brief item 1) -- see the module
     constants above for the full rationale.
 
-    DYNAMIC ANCHOR (Opus review round 1, H1 -- 2026-08-23 fix): the anchor
-    month is the LATEST month present in BOTH the PDF's own provisional
-    ('P') column and the DB's already-appended history -- ``max(pdf_rows
-    & db_rows)`` -- never a hardcoded calendar month. The original version
-    hardcoded 2026-03-01 (the DB's seeded pre-freeze value); that anchor
-    self-destructs the moment BB's fiscal year rolls (expected ~Oct 2026,
-    when the MEI table's active block moves from "Month FY26P FY25R" to
-    "Month FY27P FY26R" -- see _parse_imports_rows): EVERY one of FY26's
-    months, including March, moves from the 'P' column to the 'R'
-    (revised-comparator) column at that instant, so
-    ``pdf_rows.get(2026-03-01)`` would return ``None`` PERMANENTLY
-    afterward -- every future run would fail closed forever on a hardcoded
-    anchor that can never be satisfied again. Anchoring dynamically to
-    whatever month BOTH sides can currently see survives the roll: as long
-    as the appender's own append-only progression has already recorded at
-    least one month the PDF's CURRENT provisional block still covers
-    (true in the normal case -- the appender runs daily and the most
-    recently appended month stays visible in 'P' until the NEXT fiscal
-    year rolls it to 'R'), the splice check keeps working across the
-    boundary with no code change needed at rollover time.
+    DYNAMIC ANCHOR, PROVISIONAL-THEN-REVISED FALLBACK (Opus review round 2,
+    HIGH-1 -- 2026-08-23 fix, replacing round 1's P-only dynamic anchor):
+    prefer the LATEST month present in BOTH the PDF's provisional ('P')
+    column and the DB's already-appended history -- ``max(pdf_rows &
+    db_rows)``. round 1 believed this alone "survives the [fiscal-year]
+    roll with no code change needed at rollover time" -- FALSE, per a
+    round-2 reviewer simulation against the REAL post-roll table shape:
+    BB does NOT duplicate the monthly block when the fiscal year rolls: it
+    RE-LABELS the SAME block's two columns in place (e.g. 'FY26P'/'FY25R'
+    becomes 'FY27P'/'FY26R' the instant the first FY27 month publishes).
+    At that instant, EVERY FY26 month the DB already has (including
+    whatever the append-only progression most recently wrote) moves from
+    'P' to 'R' in the SAME table update that introduces the first FY27
+    month into 'P' -- so ``pdf_rows`` (P only) and ``db_rows`` share NO
+    month at all, forever: the DB can never gain an FY27 month without
+    passing this check, and the check can never pass without the DB
+    already having one. A P-only anchor is a permanent deadlock, not a
+    one-run gap.
+
+    The fix: when the provisional column has no overlap with the DB, fall
+    back to ``max(pdf_revised_rows & db_rows)`` -- the REVISED column,
+    which (structurally, by construction of how BB labels the block)
+    carries the SAME months the DB already has, one calendar year removed
+    in the table's own printed dates but resolved to their TRUE real
+    months by _parse_imports_p_and_r_rows (which reads each column's own
+    'FYnn' label independently, never assuming the two differ by exactly
+    one year -- though in every observed case they do). This is exactly
+    as sound as the provisional-column check: it is still comparing the
+    PDF's own printed reading for a specific month against the DB's own
+    reading for that SAME month, just sourced from the column BB happens
+    to be using for it Right now. The 2% band is identical either way.
 
     Returns None when the check passes; an explanation string when it
     doesn't (the caller treats a non-None return as "refuse the whole leg
-    this run"). No overlapping month at all (e.g. the narrow window right
-    at an FY roll before any new month has been appended past it) is
-    itself a fail-closed condition -- there is nothing to verify
-    continuity against, so nothing is written, and the caller notifies.
+    this run"). No overlap in EITHER column (a narrower, genuinely-
+    unresolvable window -- e.g. the DB is missing enough recent history
+    that not even the revised column reaches back far enough) is itself a
+    fail-closed condition -- there is nothing to verify continuity
+    against, so nothing is written, and the caller notifies.
     """
-    overlap = set(pdf_rows) & set(db_rows)
-    if not overlap:
-        return (
-            "splice check unavailable: no month is present in BOTH the PDF's "
-            "provisional column and metric_history_monthly -- refusing to "
-            f"write any new {_IMPORTS_MONTHLY_ID} row without a shared month "
-            "to verify continuity against (fail-closed)"
+    pdf_revised_rows = pdf_revised_rows or {}
+    overlap_p = set(pdf_rows) & set(db_rows)
+    if overlap_p:
+        anchor = max(overlap_p)
+        pdf_value = pdf_rows[anchor]
+        anchor_column = "provisional (P)"
+    else:
+        overlap_r = set(pdf_revised_rows) & set(db_rows)
+        if not overlap_r:
+            return (
+                "splice check unavailable: no month is present in the DB AND "
+                "either the PDF's provisional (P) or revised (R) column -- "
+                f"refusing to write any new {_IMPORTS_MONTHLY_ID} row without a "
+                "shared month to verify continuity against (fail-closed)"
+            )
+        anchor = max(overlap_r)
+        pdf_value = pdf_revised_rows[anchor]
+        anchor_column = "revised (R) fallback"
+        logger.info(
+            "macro monthly append: imports splice check anchored on the "
+            "REVISED (R) column at %s -- the provisional (P) column had no "
+            "overlap with the DB (expected right after a BB fiscal-year roll)",
+            anchor,
         )
-    anchor = max(overlap)
-    pdf_value = pdf_rows[anchor]
     db_value = db_rows[anchor]
     if db_value == 0:
         return f"splice check: db value for {anchor} is 0 -- cannot compute a ratio"
     diff_pct = abs(pdf_value - db_value) / abs(db_value)
     if diff_pct > _IMPORTS_SPLICE_TOLERANCE_PCT:
         return (
-            f"splice check FAILED at anchor {anchor}: PDF's c&f reading "
-            f"({pdf_value}) differs from the DB's own value ({db_value}) by "
-            f"{diff_pct:.2%}, exceeding the {_IMPORTS_SPLICE_TOLERANCE_PCT:.0%} "
-            "tolerance -- refusing to write ANY new month this run"
+            f"splice check FAILED at anchor {anchor} (matched via the "
+            f"{anchor_column} column): PDF's c&f reading ({pdf_value}) differs "
+            f"from the DB's own value ({db_value}) by {diff_pct:.2%}, exceeding "
+            f"the {_IMPORTS_SPLICE_TOLERANCE_PCT:.0%} tolerance -- refusing to "
+            "write ANY new month this run"
         )
     return None
 
@@ -1889,6 +1966,31 @@ def _select_new_imports_rows(
 # cross-column equality guard is needed here (unlike the CPI trio's
 # general/p2p confusion, landmine 49) since M2 has no sibling column to be
 # confused with.
+#
+# KNOWN GAP (Opus review round 2, MEDIUM-2, 2026-08-23): BB's econdata/
+# moneysupply page only ever carries the LATEST published month -- there is
+# no archive table to read back-months from, and this PR ships no separate
+# backfill source for the Feb-to-Jun 2026 stretch that piled up while this
+# id sat frozen. The live leg above will append forward from whatever month
+# the page reads as of first run onward, but the chart will show an HONEST
+# GAP across Feb-Jun 2026 rather than a silently-interpolated or
+# hand-guessed value. If an owner later finds a trustworthy point-in-time
+# source for those specific months, backfill it the same
+# hand-verified-official-values way scripts/backfill_imports_monthly.py
+# and scripts/backfill_cpi_july_2026.py did -- never derive it from a proxy.
+#
+# CADENCE (Opus review round 2, MEDIUM-2): m2_growth_yoy_monthly's
+# freshest-POSSIBLE as_of already lags ~83 days by the time this leg's
+# closed-month guard lets it write (BB's own multi-month publication lag on
+# top of the guard only accepting an already-closed month) -- the default
+# "monthly" cadence the `_monthly`-suffix prefix rule would otherwise assign
+# (45-day grace, sentinel/cadence.py) brands every fresh row stale on
+# arrival, before the leg has even had a chance to fail for real. Given a
+# `quarterly` override below (165-day grace, sentinel/cadence.py's
+# _SCRAPER_CADENCE), mirroring imports_usd_mn_monthly's identical rationale
+# (build-brief item 1) for the identical reason: a structural source lag,
+# not a staleness exemption -- a live leg that genuinely stops working can
+# still breach, just not on every healthy run.
 # ============================================================================
 
 _M2_DAILY_ID = "m2_growth_yoy_pct"
@@ -2136,7 +2238,7 @@ def _write_macro_monthly_append(today: date | None = None) -> int:
         else:
             try:
                 pdf_path = _fetch_imports_mei_pdf()
-                parsed_imports = parse_imports_c_and_f_table(pdf_path)
+                parsed_imports, revised_imports = parse_imports_c_and_f_table(pdf_path)
             except Exception as e:  # noqa: BLE001 -- fetch/parse must never crash the daily run
                 logger.warning("macro monthly append: imports fetch/parse failed: %s", e)
                 skip_reasons.append(f"imports: fetch/parse failed ({type(e).__name__}: {e})")
@@ -2148,7 +2250,10 @@ def _write_macro_monthly_append(today: date | None = None) -> int:
                 )
             else:
                 pdf_imports = dict(parsed_imports)
-                splice_problem = _imports_splice_check(pdf_imports, existing_imports)
+                # HIGH-1 (Opus review round 2): pass the revised (R) column
+                # too, as the splice check's fallback anchor source for the
+                # BB fiscal-year-roll window (see _imports_splice_check).
+                splice_problem = _imports_splice_check(pdf_imports, existing_imports, revised_imports)
                 if splice_problem is not None:
                     logger.warning("macro monthly append: %s", splice_problem)
                     skip_reasons.append(splice_problem)
