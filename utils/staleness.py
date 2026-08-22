@@ -604,14 +604,27 @@ def _watchlist_present_run(
     if as_of_moved:
         frozen_advances = frozen_advances + 1 if value_same else 0
     if frozen_advances >= _MIN_CONSECUTIVE_FROZEN_ADVANCES:
+        # Phrase by what happened THIS run: the date-pair reading only makes
+        # sense on a run where as_of actually moved. On the ~29 intervening
+        # daily runs of a monthly id the pair would read "advanced X -> X",
+        # which looks like a bug in the alarm itself (round-2 review,
+        # 2026-08-22: 42 of 44 simulated alerts carried the degenerate pair).
+        if as_of_moved:
+            _detail = (
+                f"value stuck at {value!r} while as_of advanced "
+                f"{prior_as_of.isoformat()} -> {as_of.isoformat()} "
+                f"({frozen_advances} consecutive advances) — possible as_of forgery"
+            )
+        else:
+            _detail = (
+                f"value stuck at {value!r} across {frozen_advances} consecutive "
+                f"as_of advances (latest as_of {as_of.isoformat()}) "
+                f"— possible as_of forgery"
+            )
         breach = WatchlistBreach(
             indicator_id=indicator_id,
             predicate="value_frozen_as_of_advanced",
-            detail=(
-                f"value stuck at {value!r} while as_of advanced "
-                f"{prior_as_of.isoformat()} -> {as_of.isoformat()} "
-                f"({frozen_advances} consecutive times) — possible as_of forgery"
-            ),
+            detail=_detail,
             value=value,
             as_of=as_of,
         )

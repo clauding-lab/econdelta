@@ -38,12 +38,14 @@ _DAILY_TRADING_DAY_GRACE = GRACE_DAYS_BY_CADENCE["daily"]
 # about a known, already-diagnosed defect instead of alerting on a genuinely
 # NEW future-dated id -- the exact alert-fatigue failure mode
 # ACCEPTED_STALE_METRIC_IDS above already exists to prevent for ordinary
-# staleness. `debt_gdp_ratio_proj` is included per 2026-08-22 round-1 review
-# (HIGH-2) on the reviewer's claim that it carries the same future-dated
-# rows; NOT independently confirmed against config/sources-v3.json as of
-# this PR (no `debt_gdp_ratio_proj` id was found there) -- harmless if wrong
-# (an unmatched id in this set simply never excludes anything), kept in
-# pending the owner/reviewer confirming or removing it.
+# staleness. BOTH ids are CONFIRMED load-bearing against production
+# metric_history (anon SELECT, 2026-08-22 round-2 review): debt_gdp_ratio_proj
+# carries six future-dated rows (2026-12-31=41.8 ... 2031-12-31=48.8), the
+# same mis-parse family as debt_gdp_ratio. The id does NOT appear in
+# config/sources-v3.json -- it exists only as DB rows, which is exactly why
+# the sentinel (which reads Supabase, not the scraper registry) needs the
+# exclusion. Do NOT remove either entry until the underlying rows are
+# corrected, or the daily-nag defect (HIGH-2) comes straight back.
 ACCEPTED_FUTURE_DATED_METRIC_IDS: frozenset[str] = frozenset(
     {"debt_gdp_ratio", "debt_gdp_ratio_proj"}
 )
