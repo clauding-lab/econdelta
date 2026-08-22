@@ -203,12 +203,25 @@ def check_value_staleness(
             continue
 
         value = data.get(indicator_id)
+        prior = state.get(indicator_id) or {}
         # bool is an int subclass; no v3 indicator is boolean, but an accidental
         # True would otherwise compare equal to 1.0 forever.
         if not isinstance(value, (int, float)) or isinstance(value, bool):
+            # Missing/non-numeric THIS RUN (a transient parse hiccup, a fetch
+            # failure, an Opus quarantine of just this field) -- carry the
+            # prior entry forward UNCHANGED rather than dropping it. Dropping
+            # it here (the old behaviour) let a metric's `unchanged_since`
+            # clock silently reset to today the moment it reappeared, even
+            # with the exact same stale value it had before the gap -- this
+            # is how a genuinely 63-day-frozen metric was once reported as
+            # merely "15d" frozen (one missing run zeroed the counter, and it
+            # had re-accumulated only 15 more days by the time anyone looked).
+            # A brand-new id (never seen before) has no prior entry and stays
+            # correctly absent from fresh_state -- only an id THIS RUN found
+            # missing but that HAD state carries it forward.
+            if prior:
+                fresh_state[indicator_id] = prior
             continue
-
-        prior = state.get(indicator_id) or {}
         prior_value = prior.get("value")
         unchanged_since = _parse_day(prior.get("unchanged_since"), today=today)
         runs = prior.get("runs")
@@ -297,4 +310,348 @@ def _send_report(stale: list[StaleMetric], *, notifier: Callable[..., Any]) -> N
             "worst": f"{worst.indicator_id} ({worst.days_unchanged}d)",
             "count": str(len(ordered)),
         },
+    )
+
+
+# ---------------------------------------------------------------------------
+# Watchlist staleness — as_of/ingest-aware predicates for load-bearing ids
+# ---------------------------------------------------------------------------
+#
+# check_value_staleness above answers one question — "has this VALUE stopped
+# changing?" — for every v3-registry indicator, budgeted purely by cadence.
+# That is deliberately coarse: it can't reach a few financially load-bearing
+# ids at all (``gross_reserves_usd_bn`` is a Tier-1/bb_forex flatten_data key,
+# never a v3 registry id; ``nbr_fytd_collected_cr`` is a BRIEF_ALIASES COPY of
+# ``tax_revenue`` — the registry watches the source key, never the alias The
+# Brief actually reads, the same "verify the key the consumer reads" class of
+# gap as AGENTS.md landmine 47), and for the ids it DOES reach, it can only
+# tell "frozen" from "moving" by raw value equality — a monthly rate that
+# happens to print the same number twice in a row (9.2% inflation two months
+# running) looks identical to a genuinely stuck parser.
+#
+# This section adds a SHARPER, THREE-PREDICATE test for a small, explicit
+# watchlist of ids, using each metric's own ``as_of`` (the source's reporting
+# period, already computed in-process by aggregate_latest's
+# `_build_tier1_source_as_of_map` / `_build_source_as_of_map` before the
+# Supabase write) alongside its value:
+#
+#   (a) value frozen while as_of advances  — the source claims a NEW
+#       reporting period arrived, but the number is bit-for-bit identical to
+#       the last one. For a genuinely live monthly flow/rate this is
+#       vanishingly unlikely twice running — it is the signature of as_of
+#       FORGERY (a parser re-stamping a stale read with a fresh-looking date,
+#       landmine 26/47's failure class) more than of real stability.
+#   (b) as_of frozen while ingested_at advances — the pipeline keeps running
+#       and writing every day, but the reporting period itself has not moved
+#       in far longer than this id's normal publish cycle. Distinct from (a):
+#       this is the classic "the document itself never got a newer edition"
+#       bug (landmine 34), not a forged date.
+#   (c) no ingest at all for N days — the id is missing from `data` entirely,
+#       a stronger signal than "present but unchanged".
+#
+# ``ingested_at`` is never re-read from Supabase here (this module has no DB
+# access and none is needed): a watchlist id present in `data` this run WILL
+# be posted with ``ingested_at=now()`` by upsert_metric_history's per-row
+# stamping (fixed for exactly this reason by the 2026-07-09 "22 indicators
+# frozen" incident) — so "present in `data` this run" IS "ingested_at
+# advanced this run", and no live read is needed to know it. The one edge
+# this simplification doesn't cover: an Opus hard-reject discards the WHOLE
+# run's write after this check has already run (see aggregate_latest.py) —
+# that failure mode has its own, separate Discord alert already, so it is
+# out of scope here rather than double-covered.
+
+
+@dataclass(frozen=True)
+class _WatchlistBudget:
+    """Per-id-class thresholds for check_watchlist_staleness."""
+
+    as_of_frozen_days: int
+    no_ingest_days: int
+
+
+# All nine ids below share one real-world class — "monthly cadence, ~30-day
+# publish cycle" (BB reserves, BB credit-growth print, EPB/BB trade & FYTD
+# flashes, the CPI trio) — so one budget set covers them for now. A future
+# addition with a materially different cadence should get its OWN
+# _WatchlistBudget, not reuse this default blindly.
+#
+# as_of_frozen_days=60 is double the ~30-day publish cycle (one full missed
+# release before alerting, mirroring check_value_staleness's "budget clears
+# several publication periods" discipline) so a single late release never
+# trips it; no_ingest_days=10 is short because the DAILY aggregate pipeline
+# touches every one of these ids every run regardless of whether the
+# underlying source has moved — a stretch with literally nothing written
+# means the scrape/parse step itself broke, not that the source is merely
+# slow.
+_MONTHLY_WATCHLIST_BUDGET = _WatchlistBudget(as_of_frozen_days=60, no_ingest_days=10)
+
+# indicator_id -> budget. Extend this dict (never config/sources-v3.json —
+# several of these ids are not even v3 registry entries) to widen the
+# watchlist.
+WATCHLIST_IDS: dict[str, _WatchlistBudget] = {
+    "gross_reserves_usd_bn": _MONTHLY_WATCHLIST_BUDGET,
+    "private_sector_credit_yoy_pct": _MONTHLY_WATCHLIST_BUDGET,
+    "monthly_export": _MONTHLY_WATCHLIST_BUDGET,
+    "monthly_import": _MONTHLY_WATCHLIST_BUDGET,
+    "monthly_remittance": _MONTHLY_WATCHLIST_BUDGET,
+    "nbr_fytd_collected_cr": _MONTHLY_WATCHLIST_BUDGET,
+    "general_inflation": _MONTHLY_WATCHLIST_BUDGET,
+    "food_inflation": _MONTHLY_WATCHLIST_BUDGET,
+    "non_food_inflation": _MONTHLY_WATCHLIST_BUDGET,
+}
+
+# Predicate (a) requires this many CONSECUTIVE occurrences before alerting —
+# guards against a single coincidental repeat (two consecutive genuinely
+# identical prints) being mistaken for forgery on its very first sighting.
+_MIN_CONSECUTIVE_FROZEN_ADVANCES = 2
+
+# Re-alert throttle, mirroring check_value_staleness's _REALERT_AFTER_DAYS:
+# without this, a persistent breach would notify every single day forever,
+# since each run is a fresh systemd-launched process and notify()'s own
+# (level, title) dedup cannot collapse repeats across process boundaries.
+_WATCHLIST_REALERT_AFTER_DAYS = _REALERT_AFTER_DAYS
+
+
+@dataclass(frozen=True)
+class WatchlistBreach:
+    """One watchlist id's date-integrity anomaly on this run."""
+
+    indicator_id: str
+    predicate: str  # "value_frozen_as_of_advanced" | "as_of_frozen" | "no_ingest"
+    detail: str
+    value: Any = None
+    as_of: date | None = None
+
+
+def check_watchlist_staleness(
+    data: dict[str, Any],
+    source_as_of: dict[str, date],
+    *,
+    today: date,
+    state_path: Path,
+    notifier: Callable[..., Any] = notify,
+    watchlist: dict[str, _WatchlistBudget] | None = None,
+) -> list[WatchlistBreach]:
+    """Run the three as_of/ingest-aware failure-shape predicates over a small,
+    explicit watchlist of load-bearing ids.
+
+    Args:
+        data: the flat metric_id -> value dict aggregate_latest assembles
+            (post v3-merge and post brief-alias application, so alias ids
+            like ``nbr_fytd_collected_cr`` are present under their own name).
+        source_as_of: metric_id -> the source's reporting-period date for
+            THIS run, if recovered (the merged
+            ``_build_tier1_source_as_of_map`` / ``_build_source_as_of_map``
+            output aggregate_latest builds before its Supabase write). An id
+            absent here means "no as_of recovered this run" — predicates
+            (a)/(b) are skipped for it that run, never guessed at.
+        today: run date (UTC), injected so tests are not clock-dependent.
+        state_path: where this tracker's per-id state lives across runs
+            (a SEPARATE file from check_value_staleness's — the two trackers
+            have different shapes and must not collide).
+        notifier: seam for tests; defaults to the real Discord notifier.
+        watchlist: override for tests; defaults to ``WATCHLIST_IDS``.
+
+    Returns:
+        Every breach detected on THIS run, whether or not an alert was
+        actually sent (an id inside its re-alert quiet period is still
+        returned).
+    """
+    watchlist = WATCHLIST_IDS if watchlist is None else watchlist
+    state = _load_state(state_path)
+    fresh_state: dict[str, dict[str, Any]] = {}
+    breached: list[WatchlistBreach] = []
+    to_report: list[WatchlistBreach] = []
+
+    for indicator_id, budget in watchlist.items():
+        prior = state.get(indicator_id) or {}
+        raw_value = data.get(indicator_id)
+        has_value = isinstance(raw_value, (int, float)) and not isinstance(raw_value, bool)
+        as_of = source_as_of.get(indicator_id)
+
+        if not has_value:
+            entry, breach = _watchlist_missing_run(indicator_id, prior, budget, today=today)
+            if entry is not None:
+                fresh_state[indicator_id] = entry
+            if breach is not None:
+                breached.append(breach)
+                if _should_report(prior, today=today):
+                    to_report.append(breach)
+                    fresh_state[indicator_id]["last_alerted"] = today.isoformat()
+            continue
+
+        entry, breach = _watchlist_present_run(
+            indicator_id, raw_value, as_of, prior, budget, today=today
+        )
+        fresh_state[indicator_id] = entry
+        if breach is not None:
+            breached.append(breach)
+            if _should_report(prior, today=today):
+                to_report.append(breach)
+                entry["last_alerted"] = today.isoformat()
+            elif isinstance(prior.get("last_alerted"), str):
+                entry["last_alerted"] = prior["last_alerted"]
+
+    _write_state(state_path, fresh_state, today)
+
+    if breached:
+        logger.warning(
+            "%d watchlist metric(s) show a date-integrity anomaly: %s",
+            len(breached),
+            ", ".join(f"{b.indicator_id}[{b.predicate}]" for b in breached),
+        )
+
+    if to_report:
+        _send_watchlist_report(to_report, notifier=notifier)
+
+    return breached
+
+
+def _should_report(prior: dict[str, Any], *, today: date) -> bool:
+    """True if enough time has passed since this id's last alert (or it has
+    never alerted) to speak again."""
+    last_alerted = _parse_day(prior.get("last_alerted"), today=today)
+    if last_alerted is None:
+        return True
+    return today >= last_alerted + timedelta(days=_WATCHLIST_REALERT_AFTER_DAYS)
+
+
+def _watchlist_missing_run(
+    indicator_id: str, prior: dict[str, Any], budget: _WatchlistBudget, *, today: date,
+) -> tuple[dict[str, Any] | None, WatchlistBreach | None]:
+    """Predicate (c): the id is absent from `data` entirely this run.
+
+    Carries the prior entry forward UNCHANGED (never resets it — the exact
+    counter-reset bug fixed in check_value_staleness above) and separately
+    tracks how long it has been since this id last had a real value, which is
+    what predicate (c) actually measures.
+    """
+    if not prior:
+        # Never once seen with a value -- nothing to measure a gap against yet.
+        return None, None
+
+    entry = dict(prior)
+    last_seen = _parse_day(prior.get("last_seen"), today=today)
+    if last_seen is None:
+        return entry, None
+
+    days_missing = (today - last_seen).days
+    if days_missing < budget.no_ingest_days:
+        return entry, None
+
+    return entry, WatchlistBreach(
+        indicator_id=indicator_id,
+        predicate="no_ingest",
+        detail=(
+            f"no ingest for {days_missing}d (budget {budget.no_ingest_days}d) — "
+            f"last real value {entry.get('value')!r} seen {last_seen.isoformat()}"
+        ),
+        value=entry.get("value"),
+        as_of=_parse_day(entry.get("as_of"), today=today),
+    )
+
+
+def _watchlist_present_run(
+    indicator_id: str,
+    value: Any,
+    as_of: date | None,
+    prior: dict[str, Any],
+    budget: _WatchlistBudget,
+    *,
+    today: date,
+) -> tuple[dict[str, Any], WatchlistBreach | None]:
+    """Predicates (a) and (b): the id has a value this run (== ingested this
+    run, see the module-level note on why no live ingested_at read is
+    needed)."""
+    prior_value = prior.get("value")
+    prior_as_of = _parse_day(prior.get("as_of"), today=today)
+    as_of_unchanged_since = _parse_day(prior.get("as_of_unchanged_since"), today=today)
+    frozen_advances = prior.get("frozen_advances", 0)
+    frozen_advances = frozen_advances if isinstance(frozen_advances, int) else 0
+
+    value_same = prior_value is not None and value == prior_value
+    as_of_moved = as_of is not None and prior_as_of is not None and as_of > prior_as_of
+    as_of_same = as_of is not None and prior_as_of is not None and as_of == prior_as_of
+
+    breach: WatchlistBreach | None = None
+
+    # Predicate (a): value frozen while as_of advances.
+    frozen_advances = frozen_advances + 1 if (value_same and as_of_moved) else 0
+    if frozen_advances >= _MIN_CONSECUTIVE_FROZEN_ADVANCES:
+        breach = WatchlistBreach(
+            indicator_id=indicator_id,
+            predicate="value_frozen_as_of_advanced",
+            detail=(
+                f"value stuck at {value!r} while as_of advanced "
+                f"{prior_as_of.isoformat()} -> {as_of.isoformat()} "
+                f"({frozen_advances} consecutive times) — possible as_of forgery"
+            ),
+            value=value,
+            as_of=as_of,
+        )
+
+    # Predicate (b): as_of frozen for far longer than this id's publish cycle,
+    # while the pipeline keeps ingesting it every run (this branch IS an
+    # ingest, by construction). Skipped entirely if the run has no as_of at
+    # all for this id (nothing to judge staleness of).
+    #
+    # `as_of_unchanged_since` tracks the RUN DATE (`today`) on which this
+    # as_of value was FIRST observed -- never the as_of value itself. Setting
+    # it to `as_of` would compare a reporting-period date against a run date
+    # on the very first sighting (e.g. as_of=Jan-31 vs today=May-1 reads as
+    # "frozen 90 days" immediately, before the metric has been observed even
+    # twice) -- exactly the same "wrong clock" mistake `unchanged_since`
+    # in check_value_staleness above deliberately avoids.
+    if as_of is None:
+        as_of_unchanged_since = None
+    elif as_of_same:
+        if as_of_unchanged_since is None:
+            as_of_unchanged_since = today
+    else:
+        as_of_unchanged_since = today
+
+    if breach is None and as_of is not None and as_of_unchanged_since is not None:
+        days_frozen = (today - as_of_unchanged_since).days
+        if days_frozen >= budget.as_of_frozen_days:
+            breach = WatchlistBreach(
+                indicator_id=indicator_id,
+                predicate="as_of_frozen",
+                detail=(
+                    f"as_of stuck at {as_of.isoformat()} for {days_frozen}d "
+                    f"(budget {budget.as_of_frozen_days}d) while the pipeline "
+                    "keeps ingesting"
+                ),
+                value=value,
+                as_of=as_of,
+            )
+
+    entry: dict[str, Any] = {
+        "value": value,
+        "as_of": as_of.isoformat() if as_of is not None else None,
+        "as_of_unchanged_since": (
+            as_of_unchanged_since.isoformat() if as_of_unchanged_since is not None else None
+        ),
+        "frozen_advances": frozen_advances,
+        "last_seen": today.isoformat(),
+    }
+    return entry, breach
+
+
+def _send_watchlist_report(
+    breaches: list[WatchlistBreach], *, notifier: Callable[..., Any]
+) -> None:
+    """One batched alert for the whole run — never one notify() per id."""
+    lines = [f"- `{b.indicator_id}` [{b.predicate}]: {b.detail}" for b in breaches]
+    notifier(
+        "warning",
+        f"{len(breaches)} watchlist metric(s) show a date-integrity anomaly",
+        (
+            "These load-bearing metrics show a value/as_of/ingest pattern that "
+            "does not fit a healthy source: either the value is frozen while the "
+            "reporting period keeps advancing (possible as_of forgery), the "
+            "reporting period itself has been stuck far longer than its normal "
+            "publish cycle, or the pipeline has stopped ingesting it entirely.\n\n"
+            + "\n".join(lines)
+        ),
+        {"count": str(len(breaches))},
     )

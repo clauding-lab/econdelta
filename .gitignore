@@ -30,6 +30,10 @@ data/*.bak
 # box that runs the aggregate; committing one box's copy would seed another with
 # counters it never observed (AGENTS.md landmine 40).
 data/staleness_state.json
+# Same landmine-40 reasoning for the watchlist staleness gate's own tracker
+# (utils/staleness.check_watchlist_staleness) — a separate per-box state
+# file from staleness_state.json above, not a data artifact.
+data/watchlist_staleness_state.json
 # Same landmine-40 reasoning for the media-screen zero-insert streak counter
 # (media_screen/streak.py) — per-box runtime state, not a data artifact.
 # `data/*/` above only matches directories, so this file (a direct child of

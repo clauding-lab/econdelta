@@ -246,6 +246,56 @@ def test_state_with_a_future_unchanged_since_is_rejected(state_path):
     assert saved["runs"] == 1
 
 
+def test_missing_for_one_run_does_not_reset_the_freeze_counter(state_path):
+    """A single run where the metric is absent from `data` (a transient parse
+    hiccup) must NOT zero unchanged_since -- a genuinely 63-day-frozen metric
+    that goes missing for one run and then reappears with the SAME value must
+    still read as ~63d frozen, not restart from ~1d. This is the reproduced
+    incident: a food-price metric missing from one aggregate run was reported
+    as "15d" frozen when the DB showed 63d."""
+    n = _Notifier()
+    reg = _registry(("food_atta_packet", "daily"))
+    budget = _UNCHANGED_BUDGET_DAYS["daily"]
+
+    # Freeze for a long stretch, well past the budget were it evaluated today.
+    long_freeze_days = budget + 40
+    _drive({"food_atta_packet": 30.0}, reg, days=long_freeze_days,
+           path=state_path, notifier=n)
+    assert len(n.calls) >= 1  # already alerted at least once by now
+
+    # One run where the metric is missing entirely from `data`.
+    missing_day = DAY0 + timedelta(days=long_freeze_days)
+    breached = _run({}, reg, day=missing_day, path=state_path, notifier=n)
+    assert breached == []  # not evaluated the run it's missing
+    saved = json.loads(state_path.read_text())["metrics"]["food_atta_packet"]
+    # Carried forward UNCHANGED -- the old bug would have dropped this key
+    # entirely, so it would be absent here instead of preserving DAY0.
+    assert saved["unchanged_since"] == DAY0.isoformat()
+    assert saved["value"] == 30.0
+
+    # It reappears the next run with the SAME (still-frozen) value.
+    reappear_day = missing_day + timedelta(days=1)
+    breached = _run({"food_atta_packet": 30.0}, reg, day=reappear_day,
+                    path=state_path, notifier=n)
+    assert len(breached) == 1
+    # The bug's signature: days_unchanged must reflect the FULL frozen
+    # duration since DAY0, not a reset-then-1-day count from the gap.
+    expected_days = (reappear_day - DAY0).days
+    assert breached[0].days_unchanged == expected_days
+    assert expected_days > long_freeze_days  # sanity: this really is the long count
+
+
+def test_missing_id_with_no_prior_state_is_still_simply_skipped(state_path):
+    """A brand-new registry id that has never had a valid value must not gain
+    a state entry just because it was "missing" -- only an id that HAD state
+    is carried forward."""
+    n = _Notifier()
+    reg = _registry(("brand_new_id", "daily"))
+    breached = _run({}, reg, day=DAY0, path=state_path, notifier=n)
+    assert breached == []
+    assert json.loads(state_path.read_text())["metrics"] == {}
+
+
 def test_retired_ids_are_pruned_from_state(state_path):
     """State is rebuilt from the registry each run, so a renamed or deleted
     indicator drops out instead of accumulating forever."""
