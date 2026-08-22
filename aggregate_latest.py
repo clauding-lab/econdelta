@@ -2543,9 +2543,23 @@ BRIEF_ALIASES: dict[str, str] = {
     "macro_cpi_food":      "food_inflation",
     "macro_cpi_headline":  "general_inflation",
     "macro_cpi_nonfood":   "non_food_inflation",
-    # YoY % credit growth — Phase 3.3: dedicated scrape from BB MEI bulletin
-    # (private_sector_credit_yoy_pct), not derived from the absolute
-    # private_sector_credit BDT-crore value.
+    # YoY % credit growth — repointed PR-C (build-brief item 4) to BB's live
+    # econdata/monetarysurvey HTML page ("Claims on Private Sector (DMBs)"),
+    # not derived from the absolute private_sector_credit BDT-crore value.
+    #
+    # OWNER DECISION FLAG (2026-08-22, PR-C): June 2026 has a genuine
+    # conflict between BB's own machine-readable table and unanimous press
+    # coverage of the same concept. BB's econdata/monetarysurvey table
+    # ("Claims on Private Sector (DMBs)" YoY column) reads 4.53%; every
+    # press outlet quoted BB's own ADJUSTED headline figure of 4.47% for
+    # the same month. This PR ships 4.53% (the BB table -- machine-
+    # readable, matches the series' own prior-month trajectory: Mar 4.72,
+    # Apr 4.75, May 4.98) as the live value, per the source scout's
+    # recommendation. Do NOT average the two, and do NOT silently swap to
+    # 4.47% without a fresh sign-off -- this is a data-source judgment
+    # call on a number The Brief publishes as "private credit growth", not
+    # an engineering decision. See AGENT_LEARNINGS.md/AGENTS.md landmine 52
+    # for the fuller writeup.
     "macro_credit_growth": "private_sector_credit_yoy_pct",
     # remittance — bn→mn unit conversion is in BRIEF_CONVERSIONS below.
     # fiscal — crore→trillion conversions are in BRIEF_CONVERSIONS below.
