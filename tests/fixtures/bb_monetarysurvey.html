@@ -1,22 +1,22 @@
 <!doctype html>
 <html><head><meta charset="utf-8"><title>Monetary Survey | Bangladesh Bank</title></head><body>
-<!-- Trimmed REAL capture of https://www.bb.org.bd/en/index.php/econdata/monetarysurvey -->
+<!-- FULL REAL capture of https://www.bb.org.bd/en/index.php/econdata/monetarysurvey -->
 <!-- Fetched 2026-08-22 via fetchers.html_fetcher.fetch_html (Playwright, clears TSPD/F5 JS challenge). -->
-<!-- Rows trimmed to the essentials: the two "Claims on Private Sector" leaf -->
-<!-- rows (one under (a) BANGLADESH BANK, one under (b) DEPOSIT MONEY BANKS) -->
-<!-- this parser must disambiguate via section=, plus an unrelated top-level -->
-<!-- row (NET FOREIGN ASSETS) to prove the section tracker doesn't false- -->
-<!-- positive on the first bracketed row it sees. -->
+<!-- Opus review round 1, M4: the ENTIRE table (19 rows), not a hand-trimmed -->
+<!-- excerpt -- this is the complete real page, verified to close on its own -->
+<!-- accounting identity (row 19, "3. BROAD MONEY(1+2)"). -->
 <table class="dataTable" id="sortableTable">
 <thead class="text-center">
-<tr><th colspan="6">(Taka in Million)</th></tr>
 <tr>
-<th rowspan="2">Components</th>
-<th rowspan="2">Jun, 2026</th><th rowspan="2">May, 2026</th><th rowspan="2">Jun, 2025</th><th colspan="2">Percentage Changes</th>
+<th class="text-right" colspan="6">(Taka in Million)</th>
 </tr>
 <tr>
-<th>Jun, 2026 over May, 2026</th>
-<th>Jun, 2026 over Jun, 2025</th>
+<th rowspan="2">Components</th>
+<th rowspan="2">Jun, 2026</th><th rowspan="2">May, 2026</th><th rowspan="2">Jun, 2025</th> <th colspan="2">Percentage Changes</th>
+</tr>
+<tr>
+<th>Jun, 2026<br/>over<br/>May, 2026</th>
+<th>Jun, 2026<br/>over<br/>Jun, 2025</th>
 </tr>
 </thead>
 <tbody>
@@ -26,9 +26,19 @@
 <tr><td class="text-left">2.  NET   DOMESTIC   ASSETS</td><td>20342407</td><td>20272489</td><td>18587276</td><td>0.34</td><td>9.44</td></tr>
 <tr><td class="text-left"> A.  DOMESTIC CREDIT (a+b)</td><td>25258136</td><td>24549659</td><td>22843530</td><td>2.89</td><td>10.57</td></tr>
 <tr><td class="text-left">  (a) BANGLADESH BANK</td><td>976759</td><td>1132060</td><td>1018718</td><td>-13.72</td><td>-4.12</td></tr>
+<tr><td class="text-left">     Claims on Public Sector</td><td>888984</td><td>954715</td><td>925843</td><td>-6.88</td><td>-3.98</td></tr>
+<tr><td class="text-left">     Claims on Govt.(net)</td><td>812338</td><td>878173</td><td>854268</td><td>-7.5</td><td>-4.91</td></tr>
+<tr><td class="text-left">     Claims on Other Public</td><td>76646</td><td>76542</td><td>71575</td><td>0.14</td><td>7.08</td></tr>
 <tr><td class="text-left">     Claims on Private Sector</td><td>87775</td><td>177345</td><td>92875</td><td>-50.51</td><td>-5.49</td></tr>
 <tr><td class="text-left">  (b) DEPOSIT MONEY BANKS</td><td>24281377</td><td>23417599</td><td>21824812</td><td>3.69</td><td>11.26</td></tr>
+<tr><td class="text-left">     Claims on Public Sector</td><td>6110504</td><td>5340747</td><td>4440818</td><td>14.41</td><td>37.6</td></tr>
+<tr><td class="text-left">     Claims on Govt.(net)</td><td>5754250</td><td>4981947</td><td>4027510</td><td>15.5</td><td>42.87</td></tr>
+<tr><td class="text-left">     Claims on Other Public</td><td>356254</td><td>358800</td><td>413308</td><td>-0.71</td><td>-13.8</td></tr>
 <tr><td class="text-left">     Claims on Private Sector</td><td>18170873</td><td>18076852</td><td>17383994</td><td>0.52</td><td>4.53</td></tr>
+<tr><td class="text-left">  B. NET OTHER ASSETS</td><td>-4915729</td><td>-4277170</td><td>-4256254</td><td>-14.93</td><td>-15.49</td></tr>
+<tr><td class="text-left">  (a) BANGLADESH BANK</td><td>-1357795</td><td>-1098201</td><td>-980626</td><td>-23.64</td><td>-38.46</td></tr>
+<tr><td class="text-left">  (b) DEPOSIT MONEY BANKS</td><td>-3557934</td><td>-3178969</td><td>-3275628</td><td>-11.92</td><td>-8.62</td></tr>
+<tr><td class="text-left">3. BROAD MONEY(1+2)</td><td>24162863</td><td>23910667</td><td>21746218</td><td>1.05</td><td>11.11</td></tr>
 </tbody>
 </table>
 </body></html>

@@ -40,7 +40,15 @@ Instruction syntax: ``row="<exact label>" [section="<hint>"] col=<slot>``
   only, not a full ancestor path) — sufficient for every table shape
   actually observed, but a table nesting the SAME (label, section) pair two
   levels deep would still be ambiguous; none of the three pages this
-  parser was built for do that.
+  parser was built for do that. KNOWN LIMITATION (Opus review round 1, M4,
+  documented not fixed — see ``tests/test_html_dated_table_row.py``'s
+  ``TestBracketedLetterSectionKnownLimitation``): the section-marker regex
+  matches ANY single bracketed Latin letter, so a Roman-numeral-style
+  sub-item row like ``"(i) ..."`` between a real lettered section and its
+  child rows would incorrectly overwrite the tracked section, making rows
+  after it unreachable via their true section. None of the three pages
+  this parser currently serves contain such a row; fixing this blind would
+  need a real observed table shape to design against rather than a guess.
 - ``col=<slot>``: one of
     ``latest``  — the first value column (immediately after the label) —
                   the CURRENT/most-recent month's absolute reading.
@@ -143,49 +151,71 @@ def _to_number(text: str) -> float:
     return -value if negative else value
 
 
-def _resolve_header(rows: list[list[str]]) -> tuple[tuple[int, int] | None, int | None]:
+def _is_placeholder(text: str | None) -> bool:
+    """True for an empty cell or a dash/NA placeholder -- BB's convention
+    for "not yet published" (verified live: bare "-"/"--"/"---" on both
+    monetarysurvey and moneysupply for still-forming rows)."""
+    stripped = (text or "").strip()
+    return not stripped or set(stripped) <= {"-"} or stripped.upper() in {"N/A", "NA"}
+
+
+def _resolve_header(rows: list[list[str]]) -> tuple[list[tuple[int, tuple[int, int]]], int | None]:
     """Locate the primary header row (the first row with >=2 "Mon, YYYY"
-    cells AFTER column 0) and return (latest_month, pct_group_col).
+    cells AFTER column 0) and return (month_cols, pct_group_col).
+
+    ``month_cols`` is every (column_index, (year, month)) pair found on
+    that header row, SORTED NEWEST-FIRST by the actual parsed (year, month)
+    value (Opus review round 1, M1) -- never by column position. BB has, in
+    every page this parser serves, always put the newest month first
+    left-to-right, but a table whose column order doesn't already carry
+    that assumption in its own header text (verified live) never needs to
+    rely on it: this function reads the dates and sorts them itself.
 
     Column 0 is EXCLUDED from the month-cell scan: it is always the row's
     own label column by BB's own convention on these pages, never a data/
     month column -- and the inflation table's own label cell ("Rate of
     Inflation (as measured by CPI, from Apr,2023 base 2021-22)") happens to
     contain a real "Apr,2023" substring that would otherwise be
-    misidentified as the LATEST month column instead of the true header
-    row's real "Jul, 2026" (confirmed live 2026-08-22 -- this is not a
-    hypothetical).
+    misidentified as a month column instead of the true header row's real
+    "Jul, 2026" (confirmed live 2026-08-22 -- this is not a hypothetical).
 
     ``pct_group_col`` is the column index of the "Percentage Changes" group
     header cell — which, once trailing month columns are on the header row
     the same way they land on data rows, is also the FIRST of the two pct
     columns on every data row (BB never re-labels the group per row, so
-    this position is fixed once located, not re-derived per row). None if
-    the table has no such group.
+    this position is fixed once located, not re-derived per row). Scoped to
+    AFTER every month column (not just the newest), so the group is found
+    correctly regardless of which month column happens to sort newest.
+    None if the table has no such group.
     """
     for row in rows:
-        month_cols = [
+        month_cols_raw = [
             (idx, my)
             for idx, cell in enumerate(row)
             if idx > 0
             for my in [_month_year(cell)]
             if my
         ]
-        if len(month_cols) < 2:
+        if len(month_cols_raw) < 2:
             continue
-        latest_idx, latest_month = month_cols[0]
+        month_cols = sorted(month_cols_raw, key=lambda t: t[1], reverse=True)
+        max_month_idx = max(idx for idx, _my in month_cols)
         pct_group_col = None
         for idx, cell in enumerate(row):
-            if idx > latest_idx and _normalize(cell) == _PCT_GROUP_LABEL:
+            if idx > max_month_idx and _normalize(cell) == _PCT_GROUP_LABEL:
                 pct_group_col = idx
                 break
-        return latest_month, pct_group_col
-    return None, None
+        return month_cols, pct_group_col
+    return [], None
 
 
-def _find_row_value(
+def _find_row_cell(
     rows: list[list[str]], *, row_label: str, section_hint: str | None, target_col: int,
-) -> float:
+) -> str:
+    """Locate the row and return its RAW cell text at ``target_col`` --
+    NOT yet converted to a number, so a caller can inspect the raw text
+    (e.g. detect a dash/placeholder, M3 below) before deciding which
+    column to actually convert."""
     target_norm = _normalize(row_label)
     section_hint_norm = _normalize(section_hint) if section_hint else None
     current_section = ""
@@ -215,7 +245,19 @@ def _find_row_value(
             f"{len(matches)} rows match {row_label!r}{suffix} -- ambiguous, "
             "refusing to guess (add/narrow section=)"
         )
-    return _to_number(matches[0])
+    return matches[0]
+
+
+def _find_row_value(
+    rows: list[list[str]], *, row_label: str, section_hint: str | None, target_col: int,
+) -> float:
+    """Locate + convert in one call -- used by callers (col=yoy_pct/
+    mom_pct) that don't need the M3 placeholder fallback below (a
+    percentage-change column has no "prior column" concept the same way
+    "latest" does)."""
+    return _to_number(
+        _find_row_cell(rows, row_label=row_label, section_hint=section_hint, target_col=target_col)
+    )
 
 
 @register("html_dated_table_row")
@@ -234,12 +276,32 @@ class HtmlDatedTableRowParser:
             for tr in table.find_all("tr")
         ]
 
-        latest_month, pct_group_col = _resolve_header(rows)
-        if latest_month is None:
+        month_cols, pct_group_col = _resolve_header(rows)
+        if not month_cols:
             raise ParseError("could not locate a header row with >=2 'Mon, YYYY' columns")
+        latest_idx, latest_month = month_cols[0]
 
         if col == "latest":
-            target_col = 1
+            # M3 (Opus review round 1): the latest column can be a genuine
+            # dash/placeholder cell -- BB has published this month's
+            # column header already but not yet the figure itself (row
+            # still forming). Falling through to the LLM path on a
+            # ParseError here would ask an LLM to invent a number BB
+            # hasn't published; using the PRIOR month's column (with ITS
+            # own source_as_of, never the latest column's month) is a
+            # real, if slightly stale, reading rather than a fabricated
+            # fresh one.
+            cell_text = _find_row_cell(
+                rows, row_label=row_label, section_hint=section_hint, target_col=latest_idx,
+            )
+            source_month = latest_month
+            if _is_placeholder(cell_text) and len(month_cols) >= 2:
+                prior_idx, prior_month = month_cols[1]
+                cell_text = _find_row_cell(
+                    rows, row_label=row_label, section_hint=section_hint, target_col=prior_idx,
+                )
+                source_month = prior_month
+            value = _to_number(cell_text)
         else:
             if pct_group_col is None:
                 raise ParseError(
@@ -247,12 +309,13 @@ class HtmlDatedTableRowParser:
                     "Changes' column group"
                 )
             target_col = pct_group_col if col == "mom_pct" else pct_group_col + 1
+            value = _find_row_value(
+                rows, row_label=row_label, section_hint=section_hint, target_col=target_col,
+            )
+            source_month = latest_month
 
-        value = _find_row_value(
-            rows, row_label=row_label, section_hint=section_hint, target_col=target_col,
-        )
         return ParseResult(
             value=value,
             _parse_strategy="html_dated_table_row",
-            source_as_of=_month_end(*latest_month),
+            source_as_of=_month_end(*source_month),
         )
