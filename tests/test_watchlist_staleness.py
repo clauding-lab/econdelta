@@ -68,56 +68,85 @@ def test_watchlist_ids_match_the_task_spec():
 
 
 # ── predicate (a): value frozen while as_of advances ─────────────────────────
+#
+# These ids are MONTHLY: in production, aggregate_latest runs DAILY, so
+# as_of only actually advances on roughly 1 run in 30 -- the other ~29 are
+# "same as_of as yesterday" runs. A prior version of predicate (a) reset its
+# consecutive-repeat counter to 0 on every one of those ~29 no-advance runs
+# (not just genuine value-changed ones), so at production cadence it could
+# NEVER reach the 2-in-a-row threshold: simulated over 365 daily runs against
+# a monthly as_of, it fired zero times. The tests below run at that same
+# daily cadence rather than "one call per as_of change" (which never
+# exercised the no-advance runs and so never could have caught the bug).
 
-def test_predicate_a_fires_when_value_stuck_but_as_of_keeps_advancing(state_path):
-    """A monthly reserves figure that never actually moves while as_of stamps
-    a NEW month each time is the as_of-forgery signature."""
-    # Baseline run establishes the "prior" (nothing to compare against yet,
-    # so it can never itself count as a repeat) -- exactly
-    # _MIN_CONSECUTIVE_FROZEN_ADVANCES more runs are then needed to trip it.
-    # Three runs total, 3 days apart (inside the re-alert quiet window), so
-    # this only crosses the threshold ONCE.
+
+def _daily_cadence_run(*, days: int, value_at_month, path, notifier):
+    """Simulate `days` consecutive DAILY calls where as_of only advances
+    once every 30 days (this watchlist's real monthly cadence). Returns the
+    breach list from the run on which as_of FIRST produced a breach, or []
+    if none did across the whole window.
+
+    `value_at_month(month_index)` supplies the value for that as_of period,
+    so a caller can hold it frozen (the forgery case) or advance it (the
+    healthy case) across month boundaries.
+    """
+    first_breach: list = []
+    for i in range(days):
+        day = DAY0 + timedelta(days=i)
+        month_index = i // 30
+        as_of = date(2026, 1, 31) + timedelta(days=30 * month_index)
+        value = value_at_month(month_index)
+        breached = _run(
+            {"gross_reserves_usd_bn": value}, {"gross_reserves_usd_bn": as_of},
+            day=day, path=path, notifier=notifier,
+        )
+        if breached and not first_breach:
+            first_breach = breached
+    return first_breach
+
+
+def test_predicate_a_fires_on_the_second_as_of_advance_at_production_cadence(state_path):
+    """The reviewer's exact repro, fixed: 90 DAILY runs, as_of advancing
+    every 30 of them, value frozen throughout. Must stay silent through the
+    1st advance (only one comparison exists so far) and fire on the 2nd."""
     n = _Notifier()
-    day = DAY0
-    as_of = date(2026, 1, 31)
+    breached = _daily_cadence_run(
+        days=90, value_at_month=lambda _m: 30.0, path=state_path, notifier=n,
+    )
+    assert _MIN_CONSECUTIVE_FROZEN_ADVANCES == 2
+    assert len(breached) == 1
+    assert breached[0].predicate == "value_frozen_as_of_advanced"
+    assert breached[0].indicator_id == "gross_reserves_usd_bn"
+    assert n.calls  # actually notified, not just returned
+
+
+def test_predicate_a_silent_through_one_as_of_advance_at_production_cadence(state_path):
+    """Isolates the boundary the fix depends on: after exactly ONE as_of
+    advance (30 daily runs, all frozen), there is only one comparison on
+    record -- not yet the 2 consecutive repeats predicate (a) requires."""
+    n = _Notifier()
     breached = []
-    for i in range(1 + _MIN_CONSECUTIVE_FROZEN_ADVANCES):
+    for i in range(31):  # day 0 (baseline) .. day 30 (the 1st advance)
+        day = DAY0 + timedelta(days=i)
+        as_of = date(2026, 1, 31) if i < 30 else date(2026, 3, 2)
         breached = _run(
             {"gross_reserves_usd_bn": 30.0}, {"gross_reserves_usd_bn": as_of},
             day=day, path=state_path, notifier=n,
         )
-        day += timedelta(days=3)
-        as_of += timedelta(days=30)
-
-    assert len(breached) == 1
-    assert breached[0].predicate == "value_frozen_as_of_advanced"
-    assert len(n.calls) == 1
+    assert breached == []
+    assert n.calls == []
 
 
-def test_predicate_a_requires_consecutive_repeats_not_a_single_coincidence(state_path):
-    """A single repeat (the SECOND run, first real comparison) must not
-    alert on its own -- only sustained repetition looks like forgery."""
+def test_predicate_a_never_fires_when_value_moves_at_production_cadence(state_path):
+    """The healthy case at the SAME daily cadence: as_of advances monthly
+    and the value genuinely moves each time -- must never alert across a
+    full simulated year."""
     n = _Notifier()
-    breached = _run(
-        {"gross_reserves_usd_bn": 30.0}, {"gross_reserves_usd_bn": date(2026, 1, 31)},
-        day=DAY0, path=state_path, notifier=n,
+    breached = _daily_cadence_run(
+        days=365, value_at_month=lambda m: 30.0 + m, path=state_path, notifier=n,
     )
-    assert breached == []  # baseline run -- nothing to compare against yet
-
-    breached = _run(
-        {"gross_reserves_usd_bn": 30.0}, {"gross_reserves_usd_bn": date(2026, 2, 28)},
-        day=DAY0 + timedelta(days=3), path=state_path, notifier=n,
-    )
-    assert breached == []  # 1 repeat observed -- below the threshold of 2
-
-    breached = _run(
-        {"gross_reserves_usd_bn": 30.0}, {"gross_reserves_usd_bn": date(2026, 3, 30)},
-        day=DAY0 + timedelta(days=6), path=state_path, notifier=n,
-    )
-    # 2 consecutive repeats -- _MIN_CONSECUTIVE_FROZEN_ADVANCES trips it now.
-    assert _MIN_CONSECUTIVE_FROZEN_ADVANCES == 2
-    assert len(breached) == 1
-    assert n.calls[0]["fields"]["count"] == "1"
+    assert breached == []
+    assert n.calls == []
 
 
 def test_predicate_a_does_not_fire_when_value_genuinely_moves(state_path):

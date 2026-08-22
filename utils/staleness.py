@@ -477,7 +477,22 @@ def check_watchlist_staleness(
                 breached.append(breach)
                 if _should_report(prior, today=today):
                     to_report.append(breach)
-                    fresh_state[indicator_id]["last_alerted"] = today.isoformat()
+                    # L4 (2026-08-22 round-1 review): _watchlist_missing_run's
+                    # current contract only ever returns a non-None breach
+                    # alongside a non-None entry (which the `if entry is not
+                    # None` above has already stored), but guard the write
+                    # explicitly rather than relying on that invariant holding
+                    # forever across a future edit to that helper -- a broken
+                    # invariant here would otherwise KeyError on the very run
+                    # that most needs this alert to land.
+                    if indicator_id in fresh_state:
+                        fresh_state[indicator_id]["last_alerted"] = today.isoformat()
+                    else:
+                        logger.warning(
+                            "watchlist staleness: %s has a breach but no state "
+                            "entry was recorded for it — last_alerted not set",
+                            indicator_id,
+                        )
             continue
 
         entry, breach = _watchlist_present_run(
@@ -575,8 +590,19 @@ def _watchlist_present_run(
 
     breach: WatchlistBreach | None = None
 
-    # Predicate (a): value frozen while as_of advances.
-    frozen_advances = frozen_advances + 1 if (value_same and as_of_moved) else 0
+    # Predicate (a): value frozen while as_of advances. Only touch the
+    # counter on a run where as_of ACTUALLY moved -- these ids are monthly,
+    # so as_of only advances on roughly 1 run in 30. The bug this replaces
+    # reset frozen_advances to 0 on every run where as_of hadn't moved (the
+    # `else 0` used to fire unconditionally whenever `as_of_moved` was
+    # False), which is ~29 of every 30 daily runs for a monthly id -- the
+    # counter died every single day before it could ever reach the
+    # consecutive-occurrence threshold below. Simulated at production
+    # cadence (365 daily runs against a monthly as_of): the old code never
+    # fired once. On a run where as_of did NOT move, frozen_advances is left
+    # exactly as it was -- there is nothing new to evaluate yet.
+    if as_of_moved:
+        frozen_advances = frozen_advances + 1 if value_same else 0
     if frozen_advances >= _MIN_CONSECUTIVE_FROZEN_ADVANCES:
         breach = WatchlistBreach(
             indicator_id=indicator_id,
