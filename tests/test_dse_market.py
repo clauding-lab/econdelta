@@ -397,6 +397,65 @@ class TestMainEntryPoint:
         # No NEW snapshot written for the fixture's trading date
         assert not (tmp_path / "2026-04-20.json").exists()
 
+    def test_anomaly_across_eid_window_gap_writes_with_warning_not_blocked(
+        self, tmp_path, monkeypatch
+    ):
+        """MEDIUM-2 (2026-08-22 round-1 review): the SAME 12% DSEX move that
+        hard-blocks the write on a normal 1-day gap must instead WRITE +
+        warn when the baseline is a week old -- the config/holidays_2026.json
+        completion in this PR means a 7-day Eid closure is now a real,
+        expected baseline gap, and a week's worth of accumulated movement
+        compressed into one comparison is not the anomaly this threshold
+        exists to catch."""
+        monkeypatch.setenv("ECONDELTA_DRY_RUN", "1")
+        monkeypatch.setattr("scrapers.dse_market.DATA_DIR", tmp_path)
+
+        # Previous session 7 calendar days before the fixture's own trading
+        # date (2026-04-20) -- e.g. the last pre-Eid session.
+        prev_data = _make_snapshot(trading_day=True, dsex=5000.0)
+        prev_data["date"] = "2026-04-13"
+        prev_file = tmp_path / "2026-04-13.json"
+        prev_file.write_text(json.dumps(prev_data))
+
+        home_html = (FIXTURES_DIR / "dse_homepage.html").read_text(encoding="utf-8")
+        stats_html = (FIXTURES_DIR / "dse_market_statistics.html").read_text(encoding="utf-8")
+
+        real_indices = parse_homepage_indices(home_html)
+        inflated_dsex = 5000.0 * 1.12  # 12% jump -- same magnitude as the blocked test above
+
+        from utils.schema import DseIndices
+
+        mock_indices = DseIndices(
+            dsex=inflated_dsex,
+            dsex_change=real_indices.dsex_change,
+            dsex_change_pct=real_indices.dsex_change_pct,
+            ds30=real_indices.ds30,
+            dses=real_indices.dses,
+        )
+
+        with (
+            patch("scrapers.dse_market.load_holidays", return_value=set()),
+            patch("scrapers.dse_market.previous_trading_day", return_value=date(2026, 4, 13)),
+            patch("scrapers.dse_market.DEFAULT_CLIENT.fetch_html") as mock_fetch,
+            patch("scrapers.dse_market.parse_homepage_indices", return_value=mock_indices),
+            patch("scrapers.dse_market.notify") as mock_notify,
+        ):
+            mock_fetch.side_effect = [stats_html, home_html]
+
+            from scrapers.dse_market import main
+
+            result = main()
+
+        assert result == 0
+        mock_notify.assert_called_once()
+        call_args = mock_notify.call_args[0]
+        assert call_args[0] == "warning"
+        assert "baseline gap" in call_args[1].lower()
+        assert "dsex" in call_args[2].lower()
+
+        # The snapshot for the new trading date WAS written this time.
+        assert (tmp_path / "2026-04-20.json").exists()
+
     def test_makeup_session_on_calendar_non_trading_day_still_writes(self, tmp_path, monkeypatch):
         """A parsed trading date the calendar treats as non-trading (e.g. a
         DSE makeup Friday/Saturday session around Eid, or an uncalendared

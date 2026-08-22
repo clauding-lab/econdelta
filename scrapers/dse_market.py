@@ -349,9 +349,28 @@ def main() -> int:
         notify("error", "dse_market fetch failed", f"{type(e).__name__}: {e}")
         return 1
 
-    # Anomaly check vs previous trading day
+    # Anomaly check vs previous trading day. MEDIUM-2 (2026-08-22 round-1
+    # review): the threshold was calibrated for a ONE-trading-day move.
+    # config/holidays_2026.json now carries the 7-day Eid-ul-Fitr and
+    # Eid-ul-Adha closures (this PR's holiday-calendar completion), so
+    # `load_previous_snapshot_for` can legitimately walk back a week or more
+    # to find the last real session -- a week's worth of accumulated market
+    # movement compressed into one same-day comparison is not the anomaly
+    # this threshold exists to catch, and hard-blocking the write would
+    # silently skip DSE data for the whole re-opening week. Past a 3-
+    # calendar-day baseline gap, downgrade a threshold breach from a write-
+    # block to a write+warning: the number still lands, flagged for a human
+    # to sanity-check, instead of vanishing. A genuine DSE makeup weekend
+    # session (e.g. Sat 23 May 2026) is unaffected either way -- item 1's
+    # parsed-date design means the weekday/holiday calendar only ever
+    # produces a WARNING there, never a gate; this downgrade is scoped
+    # purely to the anomaly-threshold hard-block.
+    _ANOMALY_BASELINE_GAP_GRACE_DAYS = 3
     prev = load_previous_snapshot_for(trading_date, holidays)
     if prev is not None and prev.indices is not None:
+        baseline_gap_days = (trading_date - prev.date).days
+        hard_block = baseline_gap_days <= _ANOMALY_BASELINE_GAP_GRACE_DAYS
+        anomalies: list[str] = []
         for metric, new_val, old_val in [
             ("dsex", indices.dsex, prev.indices.dsex),
             ("ds30", indices.ds30, prev.indices.ds30),
@@ -361,12 +380,17 @@ def main() -> int:
                 continue
             ok, pct = check_threshold(metric, new_val, old_val, thresholds)
             if not ok:
-                notify(
-                    "warning",
-                    "dse_market anomaly — write skipped",
-                    f"{metric}: {old_val} → {new_val} ({pct:.2%} exceeds threshold)",
-                )
-                return 2
+                detail = f"{metric}: {old_val} → {new_val} ({pct:.2%} exceeds threshold)"
+                if hard_block:
+                    notify("warning", "dse_market anomaly — write skipped", detail)
+                    return 2
+                anomalies.append(detail)
+        if anomalies:
+            notify(
+                "warning",
+                f"dse_market anomaly across a {baseline_gap_days}-day baseline gap — writing anyway",
+                "\n".join(anomalies),
+            )
 
     snapshot = DseSnapshot(
         schema_version="1.0",
