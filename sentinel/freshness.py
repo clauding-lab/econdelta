@@ -31,6 +31,23 @@ _DAILY_TRADING_DAY_GRACE = GRACE_DAYS_BY_CADENCE["daily"]
 #     its latest actual (currently 2024) breaches the fiscal_year grace for a
 #     ~4-month window each year until the next annual vintage lands.
 # See scrapers/fiscal_gdp_ratios.py and sentinel/cadence.py.
+# Metrics with a KNOWN future-dated row that is not a live bug -- a stale
+# mis-parse (debt_gdp_ratio's 2031-12-31, landmine 40) that keeps re-surfacing
+# every run until someone corrects the underlying row. Without this
+# exclusion, future_dated (below) would turn the sentinel into a daily nag
+# about a known, already-diagnosed defect instead of alerting on a genuinely
+# NEW future-dated id -- the exact alert-fatigue failure mode
+# ACCEPTED_STALE_METRIC_IDS above already exists to prevent for ordinary
+# staleness. `debt_gdp_ratio_proj` is included per 2026-08-22 round-1 review
+# (HIGH-2) on the reviewer's claim that it carries the same future-dated
+# rows; NOT independently confirmed against config/sources-v3.json as of
+# this PR (no `debt_gdp_ratio_proj` id was found there) -- harmless if wrong
+# (an unmatched id in this set simply never excludes anything), kept in
+# pending the owner/reviewer confirming or removing it.
+ACCEPTED_FUTURE_DATED_METRIC_IDS: frozenset[str] = frozenset(
+    {"debt_gdp_ratio", "debt_gdp_ratio_proj"}
+)
+
 ACCEPTED_STALE_METRIC_IDS: frozenset[str] = frozenset(
     {"tax_gdp_ratio", "rev_gdp_ratio"}
     # bb_npl_structure (2026-08-03 spec amendment): structural source lag —
@@ -383,7 +400,13 @@ def assess(
         # metric's real (non-future) as_of exactly as before this flag
         # existed.
         future_as_of = entry.get("future_as_of")
-        if future_as_of is not None:
+        # ACCEPTED_FUTURE_DATED_METRIC_IDS is applied HERE, before
+        # should_send ever sees the report -- a known, already-diagnosed
+        # mis-parse (debt_gdp_ratio) must never itself make the sentinel
+        # speak on an otherwise-quiet non-heartbeat day (HIGH-2, 2026-08-22
+        # round-1 review). A genuinely NEW future-dated id is unaffected and
+        # still surfaces normally.
+        if future_as_of is not None and mid not in ACCEPTED_FUTURE_DATED_METRIC_IDS:
             future_dated.append(
                 MetricFreshness(
                     metric_id=mid,

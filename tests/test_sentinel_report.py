@@ -73,13 +73,13 @@ def test_heartbeat_names_unmapped_dedupe_candidates():
 def test_breach_digest_caps_via_character_budget_not_a_fixed_line_count():
     """The "Other" tier's cap is now character-budget-aware (fits as many
     lines as the remaining Discord ceiling allows), not a fixed line count --
-    enough long-id breaches must still overflow into a grouped summary."""
+    enough long-id breaches must still overflow into a hidden-count tail."""
     long_ids = [f"some_fairly_long_internal_metric_identifier_number_{i}" for i in range(60)]
     report = FreshnessReport(breaches=[_breach(mid, "daily", 100 - i) for i, mid in enumerate(long_ids)])
     _level, _title, message, fields = format_digest(report)
-    assert "…and " in message and " more (" in message
+    assert "hidden" in message and " more (" in message
     assert fields["Breached"] == "60"
-    assert len(message) <= 2000
+    assert len(message) <= 1900
 
 
 def test_heartbeat_weekday_is_sunday():
@@ -176,19 +176,53 @@ def test_no_other_breaches_omits_the_other_heading_entirely():
         assert f"`{m.metric_id}`" in message
 
 
-def test_other_tier_overflow_is_grouped_by_category_not_a_flat_count():
-    """"…and N more" now names WHAT is overflowing, not just how many."""
-    other = (
-        [_breach(f"npl_rate_sector_{i}_x_extra_padding_to_force_overflow", "quarterly", 200)
-         for i in range(40)]
-        + [_breach(f"dse_close_TICKER{i}_extra_padding_to_force_overflow", "daily", 5)
-           for i in range(40)]
-    )
+def test_other_tier_overflow_names_the_tier_it_was_trimmed_from():
+    """HIGH-3 (2026-08-22 round-1 review): the hidden-count tail line names
+    WHICH TIER was trimmed ('N other'), not a bare count and not the
+    internal-category grouping an earlier version used."""
+    other = [
+        _breach(f"npl_rate_sector_{i}_x_extra_padding_to_force_overflow", "quarterly", 200)
+        for i in range(80)
+    ]
     report = FreshnessReport(breaches=other)
     _level, _title, message, _fields = format_digest(report)
-    assert "more (" in message
-    # The grouped summary names at least one real category, not a bare count.
-    assert "NPL structure" in message or "DSE per-ticker closes" in message
+    assert "more (" in message and "other) hidden" in message
+    assert len(message) <= 1900
+
+
+def test_reader_visible_tiers_are_trimmed_only_as_a_last_resort():
+    """The reviewer's exact scenario shape: 78 reader-visible breaches (split
+    across chart-feeding and brief-surfaced) plus 40 internal-only breaches.
+    Other must be trimmed first and completely before either reader-visible
+    tier loses a single line; the top (worst) chart-feeding lines must
+    survive even if the tier ultimately has to give something up."""
+    import sentinel.report as report_mod
+
+    chart_ids = [f"chart_feeding_synth_{i}_padding_for_length" for i in range(20)]
+    brief_ids = [f"brief_surfaced_synth_{i}_padding_for_length" for i in range(58)]
+    original_chart = report_mod.CHART_FEEDING_METRIC_IDS
+    original_brief = report_mod.BRIEF_SURFACED_METRIC_IDS
+    try:
+        report_mod.CHART_FEEDING_METRIC_IDS = frozenset(chart_ids)
+        report_mod.BRIEF_SURFACED_METRIC_IDS = frozenset(brief_ids)
+
+        chart = [_breach(mid, "monthly", 300 - i) for i, mid in enumerate(chart_ids)]
+        brief = [_breach(mid, "daily", 200 - i) for i, mid in enumerate(brief_ids)]
+        other = [_breach(f"internal_parity_{i}_padding_for_length", "daily", 30 - i)
+                 for i in range(40)]
+        report = FreshnessReport(breaches=chart + brief + other)
+
+        _level, _title, message, fields = format_digest(report)
+    finally:
+        report_mod.CHART_FEEDING_METRIC_IDS = original_chart
+        report_mod.BRIEF_SURFACED_METRIC_IDS = original_brief
+
+    assert len(message) <= 1900
+    assert fields["Breached"] == str(len(chart) + len(brief) + len(other))
+    # The worst (first, lowest age_days) chart-feeding line must survive --
+    # trimming drops from the END of each tier, so the front is the last
+    # thing to go.
+    assert f"`{chart_ids[0]}`" in message
 
 
 # --- M5: accepted-stale ids that are ALSO chart-feeding are permanently ----
@@ -378,10 +412,21 @@ def _future(mid, days_in_future=1800):
 
 
 def test_should_send_on_future_dated_even_with_no_breaches_and_not_heartbeat():
-    """A future-dated as_of is itself worth alerting on -- must not wait for
-    the weekly heartbeat to surface a mis-parse."""
-    report = FreshnessReport(fresh=[_fresh("a")], future_dated=[_future("debt_gdp_ratio")])
+    """A NEW future-dated as_of is itself worth alerting on -- must not wait
+    for the weekly heartbeat to surface a mis-parse."""
+    report = FreshnessReport(fresh=[_fresh("a")], future_dated=[_future("some_new_metric")])
     assert should_send(report, is_heartbeat_day=False) is True
+
+
+def test_should_stay_silent_when_only_accepted_future_dated_rows_exist():
+    """HIGH-2 (2026-08-22 round-1 review): sentinel.freshness.assess excludes
+    ACCEPTED_FUTURE_DATED_METRIC_IDS (debt_gdp_ratio's known mis-parse)
+    before this report is even built, so a run with ONLY that known,
+    already-diagnosed anomaly must produce an EMPTY future_dated list and
+    stay silent on a non-heartbeat day -- never a daily nag about a defect
+    that's already understood."""
+    report = FreshnessReport(fresh=[_fresh("a")], future_dated=[])
+    assert should_send(report, is_heartbeat_day=False) is False
 
 
 def test_future_dated_block_appears_in_heartbeat_digest():
