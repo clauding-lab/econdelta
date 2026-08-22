@@ -3,16 +3,23 @@
 Fix-all plan Steps 11-13 (2026-08-05): 27/67 config.sources-v3.json
 extractions were LLM-only — their `fetch.task` didn't match the grammar
 their declared deterministic parser requires, so `hybrid.parse_one` always
-raised ParseError and fell through to the LLM. Batch 1 converts the 9
+raised ParseError and fell through to the LLM. Batch 1 converted the 9
 EASIEST of those 27 to real deterministic grammar.
+
+UPDATE (2026-08-22, PR-C): `point_to_point_inflation` -- one of the
+original 9 -- was later repointed away from this PDF/`pdf_component`
+entirely to BB's live `econdata/inflation` HTML page (a better source that
+didn't exist as a viable option in 2026-08-05's fix-all plan; see AGENTS.md
+landmine 52), so it is REMOVED from `BATCH1_CASES` below. The remaining 8
+still cover this exact fixture.
 
 The fixture (`tests/_pdfs/bb_mei_2026_june.pdf`) is a VERBATIM capture of
 Bangladesh Bank's "Major Economic Indicators: Monthly Update (June 2026)"
 PDF, fetched live from bb.org.bd on 2026-08-05 (sha256
 30f593863230aaa744d61652f8c8a11f198a06541bfcbf5b4fb7a81a82354b8f — matches
-the `.meta.json` sidecar recorded at fetch time). 8 of the 9 batch-1 metrics
-share this single document (3 tables + 1 narrative sentence); it is NOT
-hand-written.
+the `.meta.json` sidecar recorded at fetch time). The remaining 8 batch-1
+metrics share this single document (3 tables + 1 narrative sentence); it
+is NOT hand-written.
 
 Every test below reads the indicator's `fetch.task` straight out of
 config/sources-v3.json (not a hardcoded copy) and feeds it to the real
@@ -108,7 +115,11 @@ BATCH1_CASES = [
     ("non_bank_borrowing_for_deficit_financing", -567.67, date(2026, 6, 30)),
     ("domestic_borrowing_for_budget_deficit", 93591.23, date(2026, 6, 30)),
     ("foreign_borrowing_for_budget_deficit", 21944.28, date(2026, 6, 30)),
-    ("point_to_point_inflation", 9.16, date(2026, 6, 30)),
+    # point_to_point_inflation REMOVED 2026-08-22 (PR-C, build-brief item 2,
+    # AGENTS.md landmine 52): repointed away from this PDF/pdf_component
+    # entirely to BB's live econdata/inflation HTML page (parsers/
+    # html_dated_table_row.py) -- see tests/test_html_dated_table_row.py
+    # for its own coverage against the new source.
 ]
 
 
@@ -191,7 +202,7 @@ def test_batch1_ids_are_registered_with_a_real_parser_in_config():
         "non_bank_borrowing_for_deficit_financing": "pdf_table_row",
         "domestic_borrowing_for_budget_deficit": "pdf_table_row",
         "foreign_borrowing_for_budget_deficit": "pdf_table_row",
-        "point_to_point_inflation": "pdf_component",
+        # point_to_point_inflation removed 2026-08-22 -- see BATCH1_CASES above.
     }
     for indicator_id, expected_parser in expected_parser_by_id.items():
         assert _indicator(indicator_id)["parse"]["deterministic"] == expected_parser

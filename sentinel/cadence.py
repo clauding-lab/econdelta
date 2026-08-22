@@ -49,6 +49,25 @@ _SCRAPER_CADENCE: dict[str, str] = {
     # now stamps this with the reserves month-end, not the run date).
     "gross_reserves_usd_bn": "monthly",
     "usd_bdt_exchange_rate": "daily",
+    # PR-C (build-brief item 3, AGENTS.md landmine 49): these 5 ids were
+    # REMOVED from config/sources-v3.json (the BB treasury page's two-
+    # yield-column trap shipped wrong bond yields for weeks) and are now
+    # derived from auction_results by
+    # aggregate_latest._derive_daily_yields_from_auctions instead. "daily"
+    # would nag on every healthy gap between auctions, since these are real
+    # auction cutoffs, not a value that moves every calendar day -- but the
+    # two tenor families genuinely auction at different cadences (Opus
+    # review round 1, H2 -- 2026-08-23 fix of a self-contradicting comment
+    # that assigned BOTH "weekly" while describing bonds as "far less
+    # often"): 91d/182d/364d T-bills auction roughly weekly, so "weekly"
+    # (10-day grace) fits; 5y/10y BGTB bonds auction roughly monthly-to-
+    # quarterly, so they get "monthly" (45-day grace) instead -- the SAME
+    # split briefing/config.py's own C1 fix uses for the same reason.
+    "bill_bond_rates": "weekly",
+    "tbill_182d_yield": "weekly",
+    "tbill_364d_yield": "weekly",
+    "tbond_5y_yield": "monthly",
+    "tbond_10y_yield": "monthly",
     # import_cover_months is deliberately NOT mapped: BB's reserves page has
     # never published it (scrapers/bb_forex.py hardcodes it to None) -- zero
     # rows in metric_history, ever. The id stays in the schema/flatten harmlessly;
@@ -78,6 +97,38 @@ _SCRAPER_CADENCE: dict[str, str] = {
     "brent_crude_usd_barrel": "daily",
     "wti_crude_usd_barrel": "daily",
     "gold_usd_oz": "daily",
+    # PR-C (build-brief item 1): imports_usd_mn_monthly's live leg
+    # (aggregate_latest._write_macro_monthly_append's imports sub-path)
+    # reads BB's own MEI PDF, which genuinely publishes cif imports on a
+    # ~2-month lag (confirmed live 2026-08-22: the "June 2026" issue only
+    # carries data through May). The `_monthly`-suffix prefix rule below
+    # would otherwise classify this as plain "monthly" (45-day grace),
+    # which is TOO TIGHT for a real ~60-day lag -- every fresh row this leg
+    # writes would already read as stale the moment it landed. "quarterly"
+    # (165-day grace) comfortably covers the structural lag while still
+    # catching a genuinely dead PDF leg within two fiscal quarters. This
+    # replaces the id's old ACCEPTED_STALE_METRIC_IDS exemption (removed in
+    # the same PR that added the live leg) -- a cadence choice, not a
+    # staleness exemption, so a live leg that stops working can still
+    # breach.
+    "imports_usd_mn_monthly": "quarterly",
+    # PR-C (build-brief item 4, Opus review round 2, MEDIUM-2): same
+    # structural-lag rationale as imports_usd_mn_monthly directly above --
+    # aggregate_latest._m2_monthly_append_rows' closed-month guard means
+    # m2_growth_yoy_monthly's freshest-POSSIBLE as_of already lags ~83 days
+    # by the time this leg is even allowed to write it (BB's econdata/
+    # moneysupply page's own multi-month lag, stacked with the guard only
+    # accepting an already-closed month). The `_monthly`-suffix prefix rule
+    # (45-day grace) would brand every fresh row stale the moment it
+    # landed. "quarterly" (165-day grace) comfortably covers the real lag
+    # while still catching a genuinely dead leg within two fiscal quarters
+    # -- a cadence choice, not a staleness exemption, so this id can still
+    # breach for real. NOTE: this id also carries a KNOWN Feb-Jun 2026 data
+    # hole this PR does not backfill (see aggregate_latest.py's M2 section
+    # header comment) -- the cadence override does not paper over that gap,
+    # it only stops the LIVE leg's own fresh writes from reading as false
+    # breaches.
+    "m2_growth_yoy_monthly": "quarterly",
     # world_bank_pink_sheet — monthly
     "lng_price_usd_mmbtu": "monthly",
     "palm_oil_price_usd_mt": "monthly",
@@ -166,14 +217,29 @@ def _prefix_cadence(metric_id: str) -> str | None:
 def load_cadence_map(config_path: Path | str = SOURCES_V3_PATH) -> dict[str, str]:
     """Build metric_id → cadence for every id the config + derivations can name.
 
-    Layered so config wins over aliases wins over the scraper map. Ids the map
-    doesn't carry are resolved lazily by ``resolve_cadence`` (prefix rules +
-    monthly-table fallback).
+    Layered so config wins over the scraper map wins over aliases (PR-C
+    reorder: the scraper map now merges BEFORE the alias/conversion loops,
+    not after -- see below for why). Ids the map doesn't carry are resolved
+    lazily by ``resolve_cadence`` (prefix rules + monthly-table fallback).
     """
     cfg = json.loads(Path(config_path).read_text())
     cadence: dict[str, str] = {
         ind["id"]: ind.get("cadence", "daily") for ind in cfg.get("indicators", [])
     }
+
+    # Scraper-only ids merge in HERE (setdefault -- config still wins for any
+    # id present in both) so the alias/conversion loops just below can see
+    # them too. PR-C (build-brief item 3): bill_bond_rates/tbill_182d_yield/
+    # tbill_364d_yield/tbond_5y_yield/tbond_10y_yield left sources-v3.json
+    # entirely (landmine 49's two-column trap fix) and now live ONLY in
+    # _SCRAPER_CADENCE below -- their BRIEF_ALIASES keys (tbond_tbill_182d,
+    # tbond_bond_5y, etc.) would otherwise never see a cadence to inherit,
+    # since the alias loop used to run BEFORE this merge (this function's
+    # docstring previously read "config wins over aliases wins over the
+    # scraper map" -- true for ids config ALSO carries, but silently wrong
+    # for a scraper-only id an alias points at).
+    for mid, c in _SCRAPER_CADENCE.items():
+        cadence.setdefault(mid, c)
 
     # Import lazily so this module stays importable (and unit-testable) without
     # pulling in aggregate_latest's pydantic/util chain unless a real map is built.
@@ -191,9 +257,6 @@ def load_cadence_map(config_path: Path | str = SOURCES_V3_PATH) -> dict[str, str
             cadence[brief_key] = cadence[src_key]
     for seed in DERIVED_DEFINITION_SEEDS:
         cadence.setdefault(seed["metric_id"], seed.get("cadence", "monthly"))
-
-    for mid, c in _SCRAPER_CADENCE.items():
-        cadence.setdefault(mid, c)
 
     return cadence
 

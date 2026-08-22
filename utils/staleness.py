@@ -391,6 +391,10 @@ _MONTHLY_WATCHLIST_BUDGET = _WatchlistBudget(as_of_frozen_days=60, no_ingest_day
 WATCHLIST_IDS: dict[str, _WatchlistBudget] = {
     "gross_reserves_usd_bn": _MONTHLY_WATCHLIST_BUDGET,
     "private_sector_credit_yoy_pct": _MONTHLY_WATCHLIST_BUDGET,
+    # PR-C (Opus review round 1, M8, 2026-08-23): private_sector_credit_
+    # yoy_pct's new sibling -- same monthly cadence, same new BB econdata/*
+    # HTML-page source family (moneysupply, right beside monetarysurvey).
+    "m2_growth_yoy_pct": _MONTHLY_WATCHLIST_BUDGET,
     "monthly_export": _MONTHLY_WATCHLIST_BUDGET,
     "monthly_import": _MONTHLY_WATCHLIST_BUDGET,
     "monthly_remittance": _MONTHLY_WATCHLIST_BUDGET,

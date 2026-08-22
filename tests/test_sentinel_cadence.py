@@ -95,3 +95,57 @@ def test_monthly_table_implies_monthly_when_otherwise_unknown():
 def test_unknown_id_resolves_to_none():
     m = load_cadence_map()
     assert resolve_cadence("totally_unknown_xyz", m) is None
+
+
+def test_retired_yield_ids_split_bills_weekly_bonds_monthly():
+    """Opus review round 1, H2 (blocker): the original PR-C comment assigned
+    ALL 5 auction-derived yield ids "weekly" while simultaneously describing
+    5y/10y bonds as auctioning "far less often" than bills -- a self-
+    contradiction. Bills genuinely auction roughly weekly; 5y/10y BGTB bonds
+    auction roughly monthly-to-quarterly and need the wider grace."""
+    m = load_cadence_map()
+    assert m["bill_bond_rates"] == "weekly"
+    assert m["tbill_182d_yield"] == "weekly"
+    assert m["tbill_364d_yield"] == "weekly"
+    assert m["tbond_5y_yield"] == "monthly"
+    assert m["tbond_10y_yield"] == "monthly"
+
+
+def test_imports_monthly_override_beats_the_monthly_suffix_default():
+    """imports_usd_mn_monthly has no sources-v3.json entry and ends in
+    "_monthly" -- without the explicit _SCRAPER_CADENCE override it would
+    fall through to _prefix_cadence's default "monthly" (45-day grace),
+    too tight for BB's genuine ~2-month MEI publication lag."""
+    m = load_cadence_map()
+    assert m["imports_usd_mn_monthly"] == "quarterly"
+
+
+def test_m2_monthly_override_beats_the_monthly_suffix_default():
+    """Opus review round 2, MEDIUM-2: m2_growth_yoy_monthly has no
+    sources-v3.json entry and ends in "_monthly" -- without the explicit
+    _SCRAPER_CADENCE override it would fall through to _prefix_cadence's
+    default "monthly" (45-day grace). Its freshest-possible as_of already
+    lags ~83 days (aggregate_latest._m2_monthly_append_rows' closed-month
+    guard stacked on BB's own publication lag), so the default would brand
+    every fresh row stale on arrival -- same fix shape as imports directly
+    above."""
+    m = load_cadence_map()
+    assert m["m2_growth_yoy_monthly"] == "quarterly"
+    # sanity: confirm what the id WOULD have resolved to without the
+    # override, so this test still fails if the override is ever removed
+    # and nobody notices the id silently reverting to "monthly".
+    from sentinel.cadence import _prefix_cadence
+    assert _prefix_cadence("m2_growth_yoy_monthly") == "monthly"
+
+
+def test_retired_yield_ids_brief_aliases_inherit_the_split_cadence():
+    """The scraper-only cadence map merges BEFORE the alias loop (PR-C fix)
+    specifically so these aliases see a cadence at all -- pin that the
+    bond/bill split survives alias inheritance too."""
+    m = load_cadence_map()
+    assert m["tbond_bond_5y"] == "monthly"
+    assert m["tbond_bond_10y"] == "monthly"
+    assert m["tbond_tbill_182d"] == "weekly"
+    assert m["tbond_tbill_364d"] == "weekly"
+    assert m["tbond_tbill_91d"] == "weekly"
+    assert m["tbill_91d_yield_pct"] == "weekly"

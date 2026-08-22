@@ -57,8 +57,14 @@ _TRADING_DAY_SOURCES = frozenset({"dse_market"})
 # extract a publication date from the page they scrape, so a missing
 # source_as_of from them is an EXPECTED gap, not a bug, regardless of the
 # indicator's nominal registry cadence (a few of these back "weekly"/
-# "monthly" entries too, e.g. tbond_5y_yield/10y_yield, treasury_bill_
-# outstanding, bop_summary -- the underlying scrape is still same-day HTML).
+# "monthly" entries too, e.g. treasury_bill_outstanding, bop_summary -- the
+# underlying scrape is still same-day HTML). tbond_5y_yield/tbond_10y_yield/
+# tbill_182d_yield/tbill_364d_yield/bill_bond_rates are NO LONGER in this
+# category as of PR-C (build-brief item 3, AGENTS.md landmine 49): they
+# left the sources-v3.json/html_table_row pipeline entirely and are now
+# derived from auction_results by _derive_daily_yields_from_auctions, which
+# supplies a genuine source_as_of (the real auction date) via its own
+# dedicated merge into source_as_of_map in main(), not this allow-list.
 # NOTE: several of the live pages behind these parsers DO print a
 # recoverable date (treasury tables carry an "Issue date" column, the
 # interbank repo page an "Auction date", BoP/current-account pages a period
@@ -1160,20 +1166,34 @@ def _cpi_monthly_append_rows(
     already be STRICTLY BEFORE today's month closes this regardless of which
     day-of-month the forgery happens to land on -- BB publishes month M
     during M+1, so nothing legitimate is ever rejected), the [0, 30) range
-    check, the general_inflation == point_to_point_inflation wrong-column
-    equality guard (landmine 49 -- this exact defect happened for June 2026:
-    the extractor grabbed the Point-to-Point column instead of the
-    Twelve-month-average column) -- made FAIL-CLOSED (2026-08-08 review L6):
-    if point_to_point_inflation is unavailable, the guard cannot be
-    evaluated, so cpi_12m_avg_monthly is skipped out of caution rather than
-    written unverified -- and finally the append-only skip-if-exists check.
+    check, a general_inflation == point_to_point_inflation coincidence guard
+    (see its own comment below for what it now defends against -- Opus
+    review round 1, H5, corrects an earlier rationale that no longer
+    applies) -- made FAIL-CLOSED (2026-08-08 review L6): if point_to_point_
+    inflation is unavailable, the guard cannot be evaluated, so
+    cpi_12m_avg_monthly is skipped out of caution rather than written
+    unverified -- and finally the append-only skip-if-exists check.
 
-    Because all three daily ids are extracted from the SAME BB MEI PDF in
-    the SAME parse run, their as_of values naturally align without any
-    forced-alignment step here -- each surviving row is written under its
-    OWN correctly-derived as_of, and all three (when all pass) are returned
-    together for the caller to write in ONE upsert batch ("the same run"
-    the spec calls for).
+    SPLIT VINTAGE, BY DESIGN (Opus review round 1, H5 -- 2026-08-23,
+    corrects a stale claim below this docstring carried since PR-C):
+    general_inflation/point_to_point_inflation and food_inflation/
+    non_food_inflation are NO LONGER extracted from the same document in
+    the same run. PR-C repointed the first pair to BB's live `econdata/
+    inflation` HTML page (parsers/html_dated_table_row.py), which
+    typically has the CURRENT month before the MEI PDF does; the second
+    pair still reads the MEI PDF, which runs ~1-2 months behind. The
+    OLD claim here -- "all three daily ids come from the SAME PDF in the
+    SAME parse run, so their as_of values naturally align" -- is no longer
+    true, and was never enforced by this function anyway (there was never
+    a forced-alignment step). The three ids are, and always were, appended
+    fully independently: each surviving row is written under its OWN
+    correctly-derived as_of regardless of what the others resolve to, and
+    it is now the NORMAL case (not a rare edge case) for
+    cpi_12m_avg_monthly to advance a month or more ahead of cpi_p2p_food_
+    monthly/cpi_p2p_nonfood_monthly for a while. Reader-side mitigation is
+    the-brief's job, not this pipeline's: The Brief marks each series'
+    own staleness independently per-series (the-brief PR #166) rather than
+    assuming the CPI trio shares one vintage.
 
     Returns (rows_to_write, skip_reasons) -- skip_reasons feed the caller's
     logging so a responder can see WHY a metric wasn't appended this run.
@@ -1211,10 +1231,28 @@ def _cpi_monthly_append_rows(
             )
             continue
         if daily_id == "general_inflation":
+            # Coincidence guard, NOT a wrong-column detector anymore (Opus
+            # review round 1, H5 -- 2026-08-23 comment correction). This
+            # guard was built for the OLD MEI-PDF extraction, where
+            # general_inflation and point_to_point_inflation both came from
+            # ONE ambiguous table with two column-groups sharing the
+            # "General" leaf label (landmine 49) -- an equal reading meant
+            # the extractor had likely grabbed the wrong column-group.
+            # Since PR-C, general_inflation/point_to_point_inflation read
+            # TWO SEPARATE, unambiguous ROWS on BB's live econdata/inflation
+            # page (parsers/html_dated_table_row.py) -- that specific
+            # failure mode is now structurally impossible, not just
+            # unlikely. The guard is KEPT anyway as cheap, near-zero-cost
+            # coincidence insurance: two genuinely different BB concepts
+            # reading EXACTLY equal for the same month is itself worth a
+            # second look (it happened for real in June 2026 under the old
+            # extraction), and removing a working guard to "clean up" a
+            # stale rationale would be pure downside for the one line of
+            # protection it costs.
             if p2p_row is None:
                 reasons.append(
                     f"{monthly_id}: point_to_point_inflation unavailable -- "
-                    "cannot verify the wrong-CPI-column guard (landmine 49); "
+                    "cannot verify the general==p2p coincidence guard; "
                     "skipping out of caution (fail-closed, not fail-open, "
                     "review L6)"
                 )
@@ -1223,9 +1261,12 @@ def _cpi_monthly_append_rows(
             if p2p_as_of == as_of and p2p_value == value:
                 reasons.append(
                     f"{monthly_id}: general_inflation ({value}) exactly equals "
-                    f"point_to_point_inflation for {as_of} -- extractor likely "
-                    "grabbed the wrong CPI column (June-2026 incident class, "
-                    "landmine 49); skipping cpi_12m_avg_monthly this month"
+                    f"point_to_point_inflation for {as_of} -- suspicious "
+                    "coincidence (the historical June-2026 incident was a "
+                    "wrong-column read under the OLD MEI-PDF extraction, no "
+                    "longer structurally possible post-PR-C, but an exact "
+                    "match is still worth refusing rather than trusting); "
+                    "skipping cpi_12m_avg_monthly this month"
                 )
                 continue
         month_start = as_of.replace(day=1)
@@ -1482,18 +1523,531 @@ def _fetch_remittance_html() -> str:
     return result.artifact_path.read_text(encoding="utf-8")
 
 
+# ============================================================================
+# Imports monthly-chart LIVE APPENDER (PR-C, build-brief item 1) --
+# imports_usd_mn_monthly froze at as_of=2026-03-01 alongside remittance/
+# exports/CPI in the 2026-08-08 incident (AGENTS.md landmine 50) and was
+# routed to sentinel.ACCEPTED_STALE_METRIC_IDS because no live derivation
+# existed. One now does: BB's own Selected Macroeconomic Indicators (MEI)
+# monthly PDF -- the SAME publication 19 other sources-v3.json ids already
+# fetch 19x/day via discover=latest_pdf_link -- carries a "Custom based
+# import (c&f)" monthly time series (page 22 per the document's own
+# numbering, verified live 2026-08-22 against the June-2026 issue: April
+# 2026=7066.10, May 2026=6108.22). No new fetcher needed -- this reuses the same
+# fetchers.pdf_discovery/fetchers.pdf_fetcher primitives fetch_all.py's
+# MEI-driven ids already call, just from inside aggregate_latest so the
+# parse can run in the SAME function as the splice-check + append
+# (mirroring the remittance leg's shape immediately above).
+# ============================================================================
+
+_IMPORTS_MONTHLY_ID = "imports_usd_mn_monthly"
+_IMPORTS_MEI_INDEX_URL = "https://www.bb.org.bd/en/index.php/publication/publictn/3/11"
+_IMPORTS_SOURCE = "bb_mei_imports_cf"
+_IMPORTS_HEADER_MARKER = "custom based import (c&f)"
+# Real historical monthly range observed in the June-2026 MEI PDF's FY26
+# block: 5222.73 (Aug) .. 7066.10 (Apr) -- generous headroom both ways so a
+# genuine step-change month doesn't get rejected as "out of range".
+_IMPORTS_VALUE_MIN = 2000.0
+_IMPORTS_VALUE_MAX = 15000.0
+# imports_usd_mn_monthly's last real (pre-freeze) row is March 2026 -- this
+# leg is only ever allowed to append months AFTER that point (landmine 50's
+# append-only discipline, applied at the FLOOR rather than relying solely
+# on the per-row existing-pairs check, so a corrupted PDF table can never
+# smuggle a bogus row into the ALREADY-SETTLED pre-freeze history either).
+_IMPORTS_APPEND_FROM = date(2026, 4, 1)
+# MANDATORY pre-write splice check (build-brief item 1): the freshly-parsed
+# PDF's own reading for some already-recorded month must independently
+# agree with the DB's own value for that SAME month within 2% before ANY
+# new month is appended. Same all-or-nothing-refusal philosophy as
+# landmine 51's yield-ladder guard: a splice that doesn't check out means
+# something about EITHER the PDF's table shape OR the DB's history is not
+# what this leg assumes, and the correct response is to refuse the whole
+# write and notify -- never to publish new months on top of an unverified
+# continuity. The anchor month itself is DYNAMIC (Opus review round 1, H1
+# -- see _imports_splice_check's docstring for why a hardcoded anchor
+# self-destructs at BB's fiscal-year roll).
+_IMPORTS_SPLICE_TOLERANCE_PCT = 0.02
+
+# L2 (Opus review round 1): tolerates a trailing footnote digit after the
+# P/R letter (e.g. "FY26P2", confirmed live on this same MEI PDF's Import
+# LCs opening/settlement columns -- footnote 2 marks their OIMS retrieval
+# date). The 'Custom based import (c&f)' columns this parser reads have
+# never carried a footnote digit themselves (verified live 2026-08-22),
+# but tolerating one costs nothing and removes a plausible future trap if
+# BB ever adds one here too.
+_IMPORTS_HEADER_RE = re.compile(r"\bFY(\d{2})([PR])\d*\b", re.IGNORECASE)
+
+
+def _find_imports_table_from_tables(tables: list[list[list]]) -> list[list]:
+    """Pure half of _find_imports_table: given every table already
+    extracted from every page, return the ONE whose header names a
+    "Custom based import (c&f)" column. Raises ValueError if zero or more
+    than one matches -- ambiguity must never be guessed (the same
+    discipline landmine 45/46 apply to BB's other multi-table pages;
+    verified live 2026-08-22 that the document's OTHER "custom-based
+    import" mentions -- the executive summary prose on an earlier page,
+    and the category-wise breakdown table on a later one -- do not carry
+    this exact header text and so never collide with the real target
+    here).
+    """
+    matches: list[list[list]] = [
+        table
+        for table in tables
+        if any(
+            cell and _IMPORTS_HEADER_MARKER in re.sub(r"\s+", " ", str(cell)).strip().lower()
+            for row in table
+            for cell in (row or [])
+        )
+    ]
+    if not matches:
+        raise ValueError(
+            f"no table with a {_IMPORTS_HEADER_MARKER!r} header found in the MEI PDF "
+            "(page structure changed?)"
+        )
+    if len(matches) > 1:
+        raise ValueError(
+            f"{len(matches)} tables match the {_IMPORTS_HEADER_MARKER!r} header -- "
+            "ambiguous, refusing to guess (landmine 46 discipline)"
+        )
+    return matches[0]
+
+
+def _find_imports_table(pdf) -> list[list]:
+    """Scan every page of the MEI PDF for the ONE table whose header names
+    a "Custom based import (c&f)" column. Never trusts a fixed page number
+    (AGENTS.md landmine 46 -- BB's own page count/numbering has drifted
+    between editions before); this document's Table of Contents currently
+    names it page 22, which pdfplumber currently resolves to its own page
+    25 (a fixed +3 cover/ToC offset that is itself NOT relied upon here).
+    Delegates the actual matching to _find_imports_table_from_tables (the
+    pure half, unit-tested independently of pdfplumber).
+    """
+    tables = [table for page in pdf.pages for table in page.extract_tables()]
+    return _find_imports_table_from_tables(tables)
+
+
+def _to_imports_float(cell: str | None) -> float | None:
+    if cell is None:
+        return None
+    text = str(cell).strip()
+    if not text or set(text) <= {"-"}:
+        return None
+    try:
+        return float(text.replace(",", ""))
+    except ValueError:
+        return None
+
+
+def _parse_imports_p_and_r_rows(
+    table: list[list],
+) -> tuple[list[tuple[date, float]], dict[date, float]]:
+    """Pure transform: the 'Custom based import (c&f)' table's raw
+    pdfplumber rows -> (p_rows, r_by_month).
+
+    ``p_rows`` is [(as_of, value_usd_mn), ...] for every REAL, PROVISIONAL
+    month row found -- this is the ONLY data this leg ever WRITES.
+    ``r_by_month`` is {as_of: value_usd_mn} for the SAME table's REVISED
+    prior-year comparator column -- ANCHOR-USE ONLY (Opus review round 2,
+    HIGH-1), NEVER written to metric_history_monthly. See
+    _imports_splice_check for why the revised column exists as a fallback
+    anchor source at all.
+
+    Table shape (verified live 2026-08-22 against the June-2026 MEI PDF; a
+    round-2 review simulation additionally confirmed the POST-ROLL shape
+    against the real fixture re-labelled forward one fiscal year): a GROUP
+    header cell reading 'Custom based import (c&f)' opens a span of TWO
+    columns -- the CURRENT fiscal year's provisional actual ('FYnnP') and
+    the PRIOR fiscal year's revised comparator ('FYnnR', the SAME months
+    one year earlier, printed purely so the document's own prose can quote
+    a y/y percentage). Critically, BB does NOT duplicate the monthly block
+    when the fiscal year rolls -- there is only ever ONE active monthly
+    block at a time, and its OWN two columns simply get RE-LABELLED
+    (e.g. 'FY26P'/'FY25R' becomes 'FY27P'/'FY26R' the moment the first FY27
+    month is published), never both bracketed at once.
+
+    'Month' sub-header rows re-declare which of the group's two columns is
+    'P' vs 'R' for the block of month-name rows that follows -- the table
+    interleaves an ANNUAL 'July-June' comparison block first (itself
+    P-or-R-labelled but never contributing rows, since 'July-June' isn't a
+    month name), then the in-progress fiscal year's monthly block -- so
+    which column is 'P' vs 'R' is re-resolved at each 'Month' row, never
+    assumed constant for the whole table. Both columns are tracked
+    independently: a table could in principle carry only one of the two
+    (though every real capture so far has carried both).
+
+    Fiscal year: BD's FY runs July-June (e.g. 'FY26' = July 2025-June
+    2026), so a month row's real calendar year is derived from EACH
+    column's OWN 'FYnn' label independently -- July-December belong to
+    (nn-1), January-June belong to nn. Never inferred from the run clock
+    (landmine 26/47). This is why the P and R columns for the SAME row
+    resolve to DIFFERENT real months one year apart (e.g. post-roll,
+    'July' under 'FY27P'/'FY26R' gives P=2026-07-01 and R=2025-07-01).
+
+    A row whose first cell isn't an exact month name (the annual
+    'July-June'/'July-May' summary rows, blank rows, the Source/Note
+    footer) is skipped -- it is not a month row.
+    """
+    p_rows: list[tuple[date, float]] = []
+    r_by_month: dict[date, float] = {}
+    group_col: int | None = None
+    active_p_col: int | None = None
+    active_p_fy_end: int | None = None
+    active_r_col: int | None = None
+    active_r_fy_end: int | None = None
+
+    for row in table:
+        if not row:
+            continue
+        if group_col is None:
+            for idx, cell in enumerate(row):
+                if cell and _IMPORTS_HEADER_MARKER in re.sub(r"\s+", " ", str(cell)).strip().lower():
+                    group_col = idx
+                    break
+            continue  # the header-search rows (incl. the group-header row itself) carry no data
+
+        first = (row[0] or "").strip()
+        if first.lower() == "month":
+            # L1 (Opus review round 1): collect EVERY 'P' (and, HIGH-1
+            # round 2, every 'R') candidate among the group's two columns
+            # and prefer the MAX FY-end-year for each, never just the
+            # first one found. Both columns being the SAME letter isn't
+            # the normal shape (the group is provisional-vs-revised, so
+            # normally the two differ), but a transition edition that
+            # briefly shows two columns of the same letter side by side
+            # should never silently pick the OLDER one just because it
+            # happens to sit first in iteration order.
+            p_candidates: list[tuple[int, int]] = []  # (fy_end, col_idx)
+            r_candidates: list[tuple[int, int]] = []
+            for idx in (group_col, group_col + 1):
+                if idx >= len(row) or row[idx] is None:
+                    continue
+                m = _IMPORTS_HEADER_RE.search(str(row[idx]))
+                if not m:
+                    continue
+                fy_end = 2000 + int(m.group(1))
+                (p_candidates if m.group(2).upper() == "P" else r_candidates).append((fy_end, idx))
+            active_p_fy_end, active_p_col = max(p_candidates) if p_candidates else (None, None)
+            active_r_fy_end, active_r_col = max(r_candidates) if r_candidates else (None, None)
+            continue
+
+        if active_p_col is None and active_r_col is None:
+            continue
+        month_num = _REMIT_MONTH_NAME_TO_NUM.get(first)
+        if month_num is None:
+            continue
+        if active_p_col is not None and active_p_col < len(row):
+            value = _to_imports_float(row[active_p_col])
+            if value is not None:
+                year = active_p_fy_end - 1 if month_num >= 7 else active_p_fy_end
+                p_rows.append((date(year, month_num, 1), value))
+        if active_r_col is not None and active_r_col < len(row):
+            value = _to_imports_float(row[active_r_col])
+            if value is not None:
+                year = active_r_fy_end - 1 if month_num >= 7 else active_r_fy_end
+                r_by_month[date(year, month_num, 1)] = value
+
+    return p_rows, r_by_month
+
+
+def _require_imports_p_rows(p_rows: list[tuple[date, float]]) -> list[tuple[date, float]]:
+    """Raises ValueError if ``p_rows`` (the provisional/writable column) is
+    empty -- a structural change silently dropped every month, mirroring
+    parse_remittance_table's own H3 guard. The revised column is anchor-
+    use only and never gates this check on its own."""
+    if not p_rows:
+        raise ValueError(
+            "imports table parsed to ZERO provisional month rows despite a "
+            f"matching {_IMPORTS_HEADER_MARKER!r} header -- likely a structural "
+            "change silently dropped every month (mirrors parse_remittance_table's H3 guard)"
+        )
+    return p_rows
+
+
+def _parse_imports_rows(table: list[list]) -> list[tuple[date, float]]:
+    """Back-compat convenience: the provisional ('P') column only -- what
+    this leg WRITES. See _parse_imports_p_and_r_rows for the full P+R
+    extraction (needed by the splice check's R-fallback, HIGH-1 round 2)."""
+    p_rows, _r_by_month = _parse_imports_p_and_r_rows(table)
+    return _require_imports_p_rows(p_rows)
+
+
+def parse_imports_c_and_f_table(pdf_path: Path) -> tuple[list[tuple[date, float]], dict[date, float]]:
+    """Pure parse: the MEI PDF's 'Custom based import (c&f)' table -> (p_rows,
+    r_by_month). ``p_rows`` -- [(as_of, value_usd_mn), ...] for every real,
+    provisional month found -- is what gets WRITTEN. ``r_by_month`` --
+    {as_of: value_usd_mn} for the revised prior-year comparator column --
+    is ANCHOR-USE ONLY for _imports_splice_check's fallback (HIGH-1 round
+    2); it is NEVER written to metric_history_monthly. Raises ValueError
+    if ``p_rows`` is empty -- the caller treats any exception the same way
+    parse_remittance_table's caller does: parse failed, notify, write
+    nothing.
+    """
+    import pdfplumber
+
+    with pdfplumber.open(pdf_path) as pdf:
+        table = _find_imports_table(pdf)
+    p_rows, r_by_month = _parse_imports_p_and_r_rows(table)
+    return _require_imports_p_rows(p_rows), r_by_month
+
+
+def _download_mei_index_html() -> str:
+    """Fetch the BB MEI publication index page. Verified live 2026-08-22:
+    unlike BB's econdata/* pages (landmine 39; the egress note in the PR-C
+    build brief), this publication-index page does NOT sit behind BB's F5/
+    TSPD JS challenge -- fetch_all.py's OWN 19 MEI-driven indicators fetch
+    it the exact same plain-GET way (fetch_all._download_index_html), no
+    Playwright needed.
+    """
+    from urllib.request import Request, urlopen
+
+    from fetchers.tls import ssl_context_for
+
+    req = Request(_IMPORTS_MEI_INDEX_URL, headers={"User-Agent": "EconDelta/3.0"})
+    with urlopen(req, timeout=60, context=ssl_context_for(_IMPORTS_MEI_INDEX_URL)) as r:
+        return r.read().decode("utf-8", errors="replace")
+
+
+def _fetch_imports_mei_pdf() -> Path:
+    """Live-fetch the latest BB MEI PDF and return its local path. Mirrors
+    _fetch_remittance_html's role for the remittance leg, but for a PDF:
+    discover the latest issue link from the publication index (BB reflows
+    this monthly), then download+cache it the SAME way fetch_all.py's 19
+    other MEI-driven indicators already do (fetchers.pdf_fetcher.fetch_pdf,
+    sha256-deduped, so a same-day re-run is a cache hit). Raises FetchError/
+    ValueError on network or discovery failure; the caller treats that as
+    "fetch failed, notify, write nothing."
+    """
+    from fetchers.pdf_discovery import discover_latest_pdf
+    from fetchers.pdf_fetcher import fetch_pdf
+
+    html = _download_mei_index_html()
+    pdf_url, period = discover_latest_pdf(html=html, base_url=_IMPORTS_MEI_INDEX_URL)
+    as_of_month = datetime.now(timezone.utc).strftime("%Y-%m")
+    result = fetch_pdf(
+        url=pdf_url, indicator_id="bb_mei_imports_monthly", snapshot_dir=DATA_DIR,
+        as_of_month=as_of_month, period=period,
+    )
+    return result.artifact_path
+
+
+def _imports_splice_check(
+    pdf_rows: dict[date, float],
+    db_rows: dict[date, float],
+    pdf_revised_rows: dict[date, float] | None = None,
+) -> str | None:
+    """MANDATORY pre-write guard (build-brief item 1) -- see the module
+    constants above for the full rationale.
+
+    DYNAMIC ANCHOR, PROVISIONAL-THEN-REVISED FALLBACK (Opus review round 2,
+    HIGH-1 -- 2026-08-23 fix, replacing round 1's P-only dynamic anchor):
+    prefer the LATEST month present in BOTH the PDF's provisional ('P')
+    column and the DB's already-appended history -- ``max(pdf_rows &
+    db_rows)``. round 1 believed this alone "survives the [fiscal-year]
+    roll with no code change needed at rollover time" -- FALSE, per a
+    round-2 reviewer simulation against the REAL post-roll table shape:
+    BB does NOT duplicate the monthly block when the fiscal year rolls: it
+    RE-LABELS the SAME block's two columns in place (e.g. 'FY26P'/'FY25R'
+    becomes 'FY27P'/'FY26R' the instant the first FY27 month publishes).
+    At that instant, EVERY FY26 month the DB already has (including
+    whatever the append-only progression most recently wrote) moves from
+    'P' to 'R' in the SAME table update that introduces the first FY27
+    month into 'P' -- so ``pdf_rows`` (P only) and ``db_rows`` share NO
+    month at all, forever: the DB can never gain an FY27 month without
+    passing this check, and the check can never pass without the DB
+    already having one. A P-only anchor is a permanent deadlock, not a
+    one-run gap.
+
+    The fix: when the provisional column has no overlap with the DB, fall
+    back to ``max(pdf_revised_rows & db_rows)`` -- the REVISED column,
+    which (structurally, by construction of how BB labels the block)
+    carries the SAME months the DB already has, one calendar year removed
+    in the table's own printed dates but resolved to their TRUE real
+    months by _parse_imports_p_and_r_rows (which reads each column's own
+    'FYnn' label independently, never assuming the two differ by exactly
+    one year -- though in every observed case they do). This is exactly
+    as sound as the provisional-column check: it is still comparing the
+    PDF's own printed reading for a specific month against the DB's own
+    reading for that SAME month, just sourced from the column BB happens
+    to be using for it Right now. The 2% band is identical either way.
+
+    Returns None when the check passes; an explanation string when it
+    doesn't (the caller treats a non-None return as "refuse the whole leg
+    this run"). No overlap in EITHER column (a narrower, genuinely-
+    unresolvable window -- e.g. the DB is missing enough recent history
+    that not even the revised column reaches back far enough) is itself a
+    fail-closed condition -- there is nothing to verify continuity
+    against, so nothing is written, and the caller notifies.
+    """
+    pdf_revised_rows = pdf_revised_rows or {}
+    overlap_p = set(pdf_rows) & set(db_rows)
+    if overlap_p:
+        anchor = max(overlap_p)
+        pdf_value = pdf_rows[anchor]
+        anchor_column = "provisional (P)"
+    else:
+        overlap_r = set(pdf_revised_rows) & set(db_rows)
+        if not overlap_r:
+            return (
+                "splice check unavailable: no month is present in the DB AND "
+                "either the PDF's provisional (P) or revised (R) column -- "
+                f"refusing to write any new {_IMPORTS_MONTHLY_ID} row without a "
+                "shared month to verify continuity against (fail-closed)"
+            )
+        anchor = max(overlap_r)
+        pdf_value = pdf_revised_rows[anchor]
+        anchor_column = "revised (R) fallback"
+        logger.info(
+            "macro monthly append: imports splice check anchored on the "
+            "REVISED (R) column at %s -- the provisional (P) column had no "
+            "overlap with the DB (expected right after a BB fiscal-year roll)",
+            anchor,
+        )
+    db_value = db_rows[anchor]
+    if db_value == 0:
+        return f"splice check: db value for {anchor} is 0 -- cannot compute a ratio"
+    diff_pct = abs(pdf_value - db_value) / abs(db_value)
+    if diff_pct > _IMPORTS_SPLICE_TOLERANCE_PCT:
+        return (
+            f"splice check FAILED at anchor {anchor} (matched via the "
+            f"{anchor_column} column): PDF's c&f reading ({pdf_value}) differs "
+            f"from the DB's own value ({db_value}) by {diff_pct:.2%}, exceeding "
+            f"the {_IMPORTS_SPLICE_TOLERANCE_PCT:.0%} tolerance -- refusing to "
+            "write ANY new month this run"
+        )
+    return None
+
+
+def _select_new_imports_rows(
+    parsed: list[tuple[date, float]],
+    *,
+    existing_as_of: set[date],
+    today: date,
+    min_as_of: date = _IMPORTS_APPEND_FROM,
+) -> tuple[list[dict], list[str]]:
+    """Filter parsed (as_of, value) pairs to genuinely new rows to append.
+    Mirrors _select_new_remittance_rows: as_of >= min_as_of (the March-2026
+    freeze point this leg is allowed to grow past), not already in
+    metric_history_monthly (append-only), <= today's month-start (never a
+    future month), and within the sanity value range.
+    """
+    rows: list[dict] = []
+    reasons: list[str] = []
+    future_floor = today.replace(day=1)
+    for as_of, value in parsed:
+        if as_of < min_as_of or as_of in existing_as_of:
+            continue
+        if as_of > future_floor:
+            reasons.append(
+                f"{_IMPORTS_MONTHLY_ID}: {as_of} is in the future relative to "
+                f"today ({today}) -- skipping"
+            )
+            continue
+        if not (_IMPORTS_VALUE_MIN <= value <= _IMPORTS_VALUE_MAX):
+            reasons.append(
+                f"{_IMPORTS_MONTHLY_ID}: {as_of} value {value} outside "
+                f"[{_IMPORTS_VALUE_MIN}, {_IMPORTS_VALUE_MAX}]"
+            )
+            continue
+        as_of_iso = as_of.isoformat()
+        rows.append({
+            "metric_id": _IMPORTS_MONTHLY_ID, "as_of": as_of_iso, "value": value,
+            "source": _IMPORTS_SOURCE, "source_as_of": as_of_iso,
+        })
+    return rows, reasons
+
+
+# ============================================================================
+# M2 growth monthly LIVE APPENDER (PR-C, build-brief item 4) --
+# m2_growth_yoy_monthly froze at Feb 2026 (10.52) the same seed-without-
+# appender way the CPI trio did (landmine 50); a live daily source now
+# exists (m2_growth_yoy_pct, repointed BB econdata/moneysupply HTML table).
+# Structurally identical to the CPI trio's single-id derivation (one daily
+# id -> one monthly id, month-end vintage check, append-only) -- no
+# cross-column equality guard is needed here (unlike the CPI trio's
+# general/p2p confusion, landmine 49) since M2 has no sibling column to be
+# confused with.
+#
+# KNOWN GAP (Opus review round 2, MEDIUM-2, 2026-08-23): BB's econdata/
+# moneysupply page only ever carries the LATEST published month -- there is
+# no archive table to read back-months from, and this PR ships no separate
+# backfill source for the Feb-to-Jun 2026 stretch that piled up while this
+# id sat frozen. The live leg above will append forward from whatever month
+# the page reads as of first run onward, but the chart will show an HONEST
+# GAP across Feb-Jun 2026 rather than a silently-interpolated or
+# hand-guessed value. If an owner later finds a trustworthy point-in-time
+# source for those specific months, backfill it the same
+# hand-verified-official-values way scripts/backfill_imports_monthly.py
+# and scripts/backfill_cpi_july_2026.py did -- never derive it from a proxy.
+#
+# CADENCE (Opus review round 2, MEDIUM-2): m2_growth_yoy_monthly's
+# freshest-POSSIBLE as_of already lags ~83 days by the time this leg's
+# closed-month guard lets it write (BB's own multi-month publication lag on
+# top of the guard only accepting an already-closed month) -- the default
+# "monthly" cadence the `_monthly`-suffix prefix rule would otherwise assign
+# (45-day grace, sentinel/cadence.py) brands every fresh row stale on
+# arrival, before the leg has even had a chance to fail for real. Given a
+# `quarterly` override below (165-day grace, sentinel/cadence.py's
+# _SCRAPER_CADENCE), mirroring imports_usd_mn_monthly's identical rationale
+# (build-brief item 1) for the identical reason: a structural source lag,
+# not a staleness exemption -- a live leg that genuinely stops working can
+# still breach, just not on every healthy run.
+# ============================================================================
+
+_M2_DAILY_ID = "m2_growth_yoy_pct"
+_M2_MONTHLY_ID = "m2_growth_yoy_monthly"
+_M2_MONTHLY_SOURCE = "econdelta_daily_m2"
+_M2_VALUE_MIN = -10.0
+_M2_VALUE_MAX = 40.0
+
+
+def _m2_monthly_append_rows(
+    *, m2_row: tuple[float, date] | None, existing_pairs: set[tuple[str, date]], today: date,
+) -> tuple[list[dict], list[str]]:
+    """Pure transform: the latest daily m2_growth_yoy_pct row ->
+    metric_history_monthly append candidates. Mirrors
+    _cpi_monthly_append_rows' month-end vintage + closed-month + range +
+    append-only guards exactly (minus the CPI-specific equality guard,
+    which has no M2 analogue)."""
+    reasons: list[str] = []
+    if m2_row is None:
+        return [], [f"{_M2_MONTHLY_ID}: no daily {_M2_DAILY_ID} row available"]
+    value, as_of = m2_row
+    if as_of != _month_end(as_of):
+        return [], [
+            f"{_M2_MONTHLY_ID}: latest {_M2_DAILY_ID} as_of={as_of} is not a "
+            "month-end vintage -- skipping (not a true monthly reading)"
+        ]
+    if as_of.replace(day=1) >= today.replace(day=1):
+        return [], [
+            f"{_M2_MONTHLY_ID}: latest {_M2_DAILY_ID} as_of={as_of} describes the "
+            f"CURRENT (not-yet-closed) month relative to today={today} -- skipping "
+            "(closed-month guard, mirrors the CPI trio's H2 fix)"
+        ]
+    if not (_M2_VALUE_MIN <= value <= _M2_VALUE_MAX):
+        return [], [f"{_M2_MONTHLY_ID}: value {value} outside [{_M2_VALUE_MIN}, {_M2_VALUE_MAX}]"]
+    month_start = as_of.replace(day=1)
+    if (_M2_MONTHLY_ID, month_start) in existing_pairs:
+        return [], reasons  # append-only: already have this month
+    month_start_iso = month_start.isoformat()
+    return [{
+        "metric_id": _M2_MONTHLY_ID, "as_of": month_start_iso, "value": value,
+        "source": _M2_MONTHLY_SOURCE, "source_as_of": as_of.isoformat(),
+    }], reasons
+
+
 def _write_macro_monthly_append(today: date | None = None) -> int:
-    """Live appender for the CPI trio + remittance chart-feeding monthly
-    series (2026-08-08 incident, landmine 50). Returns the number of new
+    """Live appender for the CPI trio + remittance + imports + M2 growth
+    chart-feeding monthly series (2026-08-08 incident, landmine 50; imports
+    + M2 added PR-C, build-brief items 1 and 4). Returns the number of new
     metric_history_monthly rows written this run.
 
     0 is the NORMAL outcome on most days: these are monthly-cadence series,
-    so a daily run usually finds nothing new (the daily CPI ids haven't
+    so a daily run usually finds nothing new (the daily CPI/M2 ids haven't
     rolled to a new month-end vintage yet; BB hasn't published a new
-    remittance month yet). The two sub-paths (CPI trio, remittance) are
-    independent -- a failure in one degrades gracefully and does not block
-    the other; each notifies with its own message so a responder can tell
-    which one needs attention.
+    remittance/imports month yet). The four sub-paths (CPI trio, remittance,
+    imports, M2) are independent -- a failure in one degrades gracefully
+    and does not block the others; each notifies with its own message so a
+    responder can tell which one needs attention.
 
     ``today`` defaults to the current UTC date (matching this module's other
     "now" usage in main()); pass it explicitly for deterministic tests of
@@ -1635,6 +2189,108 @@ def _write_macro_monthly_append(today: date | None = None) -> int:
                         "table-structure change (review H3)",
                         len(parsed), prev_month_start,
                     )
+
+    # --- (c) Imports, from BB's own MEI PDF (build-brief item 1) -----------
+    # Own try/except around the existing-rows read (needed for BOTH the
+    # append-only check AND the mandatory splice check below) -- mirrors
+    # remittance's M4 pattern: a read failure here must not discard the
+    # CPI trio's already-computed rows_to_write, and gets its own distinct
+    # notify message so a responder can tell which sub-path needs attention.
+    try:
+        existing_import_rows = get_metric_history_monthly(_IMPORTS_MONTHLY_ID)
+    except Exception as e:  # noqa: BLE001 -- same R1/M1 reasoning as the CPI/remittance sub-paths above
+        logger.warning("macro monthly append: imports existing-rows read failed: %s", e)
+        skip_reasons.append(f"imports: existing-rows read failed ({type(e).__name__}: {e})")
+        notify(
+            "warning",
+            "aggregate — macro monthly append: imports read failed",
+            f"Could not read {_IMPORTS_MONTHLY_ID} from metric_history_monthly "
+            "(the append-only/splice-check read); imports skipped this run "
+            f"(PDF fetch never attempted). {type(e).__name__}: {e}",
+        )
+        existing_import_rows = None
+
+    if existing_import_rows is not None:
+        existing_imports: dict[date, float] = {}
+        for row in existing_import_rows:
+            as_of = _parse_monthly_row_date(row.get("as_of"))
+            if as_of is None:
+                continue
+            try:
+                existing_imports[as_of] = float(row["value"])
+            except (KeyError, TypeError, ValueError):
+                continue
+
+        # M5 (Opus review round 1): mirror the remittance leg's own M6 gate
+        # -- if the previous complete month is already recorded, there's
+        # nothing new to fetch, so skip the PDF download+parse entirely
+        # this run. Imports' real BB publication lag runs closer to 2
+        # months than remittance's ~1, so this gate fires less often here
+        # (the fetch is still attempted on more days than remittance's),
+        # but it's the same no-op-when-caught-up saving on the days it does.
+        prev_month_start = _previous_month_start(today)
+        if prev_month_start in existing_imports:
+            logger.info(
+                "macro monthly append: imports %s already present -- "
+                "skipping the PDF fetch this run (mirrors remittance's M6)",
+                prev_month_start,
+            )
+        else:
+            try:
+                pdf_path = _fetch_imports_mei_pdf()
+                parsed_imports, revised_imports = parse_imports_c_and_f_table(pdf_path)
+            except Exception as e:  # noqa: BLE001 -- fetch/parse must never crash the daily run
+                logger.warning("macro monthly append: imports fetch/parse failed: %s", e)
+                skip_reasons.append(f"imports: fetch/parse failed ({type(e).__name__}: {e})")
+                notify(
+                    "warning",
+                    "aggregate — macro monthly append: imports fetch/parse failed",
+                    f"Could not fetch or parse BB's MEI PDF ({_IMPORTS_MEI_INDEX_URL}); "
+                    f"imports chart-feeding series skipped this run. {type(e).__name__}: {e}",
+                )
+            else:
+                pdf_imports = dict(parsed_imports)
+                # HIGH-1 (Opus review round 2): pass the revised (R) column
+                # too, as the splice check's fallback anchor source for the
+                # BB fiscal-year-roll window (see _imports_splice_check).
+                splice_problem = _imports_splice_check(pdf_imports, existing_imports, revised_imports)
+                if splice_problem is not None:
+                    logger.warning("macro monthly append: %s", splice_problem)
+                    skip_reasons.append(splice_problem)
+                    notify(
+                        "error",
+                        "aggregate — macro monthly append: imports splice check failed",
+                        splice_problem,
+                    )
+                else:
+                    import_rows, import_reasons = _select_new_imports_rows(
+                        parsed_imports, existing_as_of=set(existing_imports), today=today,
+                    )
+                    rows_to_write.extend(import_rows)
+                    skip_reasons.extend(import_reasons)
+
+    # --- (d) M2 growth, derived from our own daily metric_history ----------
+    try:
+        m2 = _latest_value_as_of(get_metric_history(_M2_DAILY_ID, days=1))
+        existing_m2: set[tuple[str, date]] = set()
+        for row in get_metric_history_monthly(_M2_MONTHLY_ID):
+            as_of = _parse_monthly_row_date(row.get("as_of"))
+            if as_of is not None:
+                existing_m2.add((_M2_MONTHLY_ID, as_of))
+        m2_rows, m2_reasons = _m2_monthly_append_rows(
+            m2_row=m2, existing_pairs=existing_m2, today=today,
+        )
+        rows_to_write.extend(m2_rows)
+        skip_reasons.extend(m2_reasons)
+    except Exception as e:  # noqa: BLE001 -- same R1/M1 reasoning as the CPI trio sub-path above
+        logger.warning("macro monthly append: M2 read failed: %s", e)
+        skip_reasons.append(f"M2: read failed ({type(e).__name__}: {e})")
+        notify(
+            "warning",
+            "aggregate — macro monthly append: M2 read failed",
+            f"Could not read {_M2_DAILY_ID} from metric_history; M2 growth "
+            f"skipped this run. {type(e).__name__}: {e}",
+        )
 
     if skip_reasons:
         logger.info(
@@ -1961,6 +2617,124 @@ def _write_yield_ladder_monthly_append(today: date | None = None) -> int:
     return upsert_metric_history_monthly(rows)
 
 
+# ============================================================================
+# Daily yield-curve DERIVATION from auction_results (PR-C, build-brief item
+# 3 -- AGENTS.md landmine 49's two-yield-column trap). The BB treasury page
+# (monetaryactivity/treasury) prints bond rows with BOTH a "Cut off yield"
+# AND a "Standard/Devolvement Yield" column (bills have no Standard
+# column, and were never affected) -- html_table_row/the LLM fallback had
+# no deterministic way to choose between the two adjacent columns, so the
+# scrape flapped: tbond_5y_yield shipped 9.15 (=Standard; the real cut-off
+# was 9.3496), and tbond_10y_yield flapped 10.24 -> 10.25 -> 9.42
+# (=Standard) -> 9.234 across successive runs.
+#
+# Fix: derive all 5 ids from auction_results instead -- the SAME table
+# scrapers/bb_auction.py already writes daily, and the SAME derivation rule
+# _write_yield_ladder_monthly_append already uses for its monthly ladder
+# (latest cutoff per tenor at/before the target date). The 5 corresponding
+# sources-v3.json scrape entries are REMOVED in this same PR -- this
+# function is now the ONLY writer for these 5 ids. Unlike the monthly
+# ladder, this is NOT all-or-nothing: each of the 5 ids was already
+# independently scraped before (a term-structure "curve" built from 5
+# separately-latest treasury-page reads already had this property), so a
+# tenor with no auction_results row is simply left out of the write rather
+# than blocking the other 4. No unbounded-carry-forward risk either
+# (landmine 51's H1 lesson): as_of is set to the REAL auction date, never
+# advanced to "today" or "month start", so a dead auction_results table
+# would leave as_of frozen at the last real auction -- correctly caught by
+# the ordinary freshness sentinel rather than invisibly reading as fresh.
+# ============================================================================
+
+_DAILY_YIELD_TENOR_TO_ID: dict[str, str] = {
+    "91d": "bill_bond_rates",
+    "182d": "tbill_182d_yield",
+    "364d": "tbill_364d_yield",
+    "5y": "tbond_5y_yield",
+    "10y": "tbond_10y_yield",
+}
+# Same range as the yield ladder's own guard (landmine 51) -- yields and
+# CPI prints occupy different plausible ranges, but this ceiling is shared
+# with that sibling derivation on purpose (same underlying table, same
+# tenors, same sanity bound).
+_DAILY_YIELD_VALUE_MIN = 0.0
+_DAILY_YIELD_VALUE_MAX = 25.0
+
+
+def _daily_yields_from_auction_rows(
+    auction_rows: list[dict],
+) -> tuple[dict[str, float], dict[str, date]]:
+    """Pure transform: auction_results rows (newest-first, auction_date <=
+    today) -> ({metric_id: latest cutoff}, {metric_id: auction_date}) for
+    the 5 daily yield ids landmine 49 retired from HTML/LLM scraping.
+
+    Reuses the same derivation rule as _yield_ladder_rows_for_month (the
+    first row seen per tenor in a newest-first list IS the latest auction
+    on or before the cutoff date) but with none of that function's month-
+    window / all-or-nothing semantics -- see the module-level comment above
+    for why these 5 ids are independent rather than a bundle.
+    """
+    values: dict[str, float] = {}
+    source_as_of: dict[str, date] = {}
+    seen_tenors: set[str] = set()
+    for row in auction_rows:
+        tenor = row.get("tenor")
+        metric_id = _DAILY_YIELD_TENOR_TO_ID.get(tenor)
+        if metric_id is None or tenor in seen_tenors:
+            continue
+        seen_tenors.add(tenor)
+        auction_date = _parse_monthly_row_date(row.get("auction_date"))
+        if auction_date is None:
+            continue
+        try:
+            cutoff = float(row["cutoff"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if not (_DAILY_YIELD_VALUE_MIN < cutoff < _DAILY_YIELD_VALUE_MAX):
+            continue
+        values[metric_id] = cutoff
+        source_as_of[metric_id] = auction_date
+    return values, source_as_of
+
+
+def _derive_daily_yields_from_auctions(
+    today: date | None = None,
+) -> tuple[dict[str, float], dict[str, date]]:
+    """Read auction_results and return the (values, source_as_of overrides)
+    for the 5 daily yield ids -- the caller merges these into `data` /
+    `source_as_of_map` BEFORE the single metric_history upsert in main(),
+    so no separate Supabase write call is needed here (the existing
+    source_as_of_map mechanism, landmine 26/47, already handles per-metric
+    as_of overrides on that one write).
+
+    On a read failure, returns ({}, {}) and notifies -- never crashes the
+    daily run (same containment philosophy as every other appender in this
+    module).
+    """
+    if today is None:
+        today = datetime.now(timezone.utc).date()
+    from utils.supabase_reader import get_auction_results_through
+
+    try:
+        auction_rows = get_auction_results_through(today)
+    except Exception as e:  # noqa: BLE001 -- same containment philosophy as
+        # every other Supabase-read sub-path in this module (M1/R1 lesson).
+        logger.warning("daily yield derivation: auction_results read failed: %s", e)
+        notify(
+            "warning",
+            "aggregate — daily yield derivation: auction_results read failed",
+            "Could not read auction_results for the 5 daily yield ids "
+            "(bill_bond_rates/tbill_182d_yield/tbill_364d_yield/tbond_5y_yield/"
+            f"tbond_10y_yield); those ids get no value this run. {type(e).__name__}: {e}",
+        )
+        return {}, {}
+
+    values, source_as_of = _daily_yields_from_auction_rows(auction_rows)
+    missing = sorted(set(_DAILY_YIELD_TENOR_TO_ID.values()) - set(values))
+    if missing:
+        logger.warning("daily yield derivation: no auction_results row for %s", missing)
+    return values, source_as_of
+
+
 # EconDelta indicator-id ↔ brief metric_id alias map. The brief expects a
 # specific naming convention per section (`macro_*`, `remit_*`, `fiscal_*`,
 # `banking_*`, `food_*`); EconDelta keeps its own indicator IDs authoritative.
@@ -1970,9 +2744,23 @@ BRIEF_ALIASES: dict[str, str] = {
     "macro_cpi_food":      "food_inflation",
     "macro_cpi_headline":  "general_inflation",
     "macro_cpi_nonfood":   "non_food_inflation",
-    # YoY % credit growth — Phase 3.3: dedicated scrape from BB MEI bulletin
-    # (private_sector_credit_yoy_pct), not derived from the absolute
-    # private_sector_credit BDT-crore value.
+    # YoY % credit growth — repointed PR-C (build-brief item 4) to BB's live
+    # econdata/monetarysurvey HTML page ("Claims on Private Sector (DMBs)"),
+    # not derived from the absolute private_sector_credit BDT-crore value.
+    #
+    # OWNER DECISION FLAG (2026-08-22, PR-C): June 2026 has a genuine
+    # conflict between BB's own machine-readable table and unanimous press
+    # coverage of the same concept. BB's econdata/monetarysurvey table
+    # ("Claims on Private Sector (DMBs)" YoY column) reads 4.53%; every
+    # press outlet quoted BB's own ADJUSTED headline figure of 4.47% for
+    # the same month. This PR ships 4.53% (the BB table -- machine-
+    # readable, matches the series' own prior-month trajectory: Mar 4.72,
+    # Apr 4.75, May 4.98) as the live value, per the source scout's
+    # recommendation. Do NOT average the two, and do NOT silently swap to
+    # 4.47% without a fresh sign-off -- this is a data-source judgment
+    # call on a number The Brief publishes as "private credit growth", not
+    # an engineering decision. See AGENT_LEARNINGS.md/AGENTS.md landmine 52
+    # for the fuller writeup.
     "macro_credit_growth": "private_sector_credit_yoy_pct",
     # remittance — bn→mn unit conversion is in BRIEF_CONVERSIONS below.
     # fiscal — crore→trillion conversions are in BRIEF_CONVERSIONS below.
@@ -2315,7 +3103,40 @@ def main() -> int:
         if forex.reserves is not None:
             data["fx_reserve_gross_and_bpm6"] = forex.reserves.gross_reserves_usd_bn
 
+    # Daily yield-curve DERIVATION from auction_results (landmine 49's two-
+    # column trap, PR-C build-brief item 3) -- must run BEFORE
+    # _apply_brief_aliases (the brief-facing tbond_tbill_*/tbond_bond_* keys
+    # read straight off these 5 ids) and before write_latest below, so
+    # data/latest.json reflects the same value metric_history gets rather
+    # than a UI/DB split. Gated on ECONDELTA_SKIP_SUPABASE like every other
+    # Supabase-touching enrichment in this module (tests/conftest.py
+    # defaults that env var to "1", so the whole test suite never makes a
+    # real auction_results read unless a test explicitly opts in).
+    if os.environ.get("ECONDELTA_SKIP_SUPABASE") != "1":
+        yield_values, yield_source_as_of = _derive_daily_yields_from_auctions(today=now.date())
+        data.update(yield_values)
+    else:
+        yield_source_as_of = {}
+
     _apply_brief_aliases(data)
+
+    # H3 (Opus review round 1, 2026-08-23): propagate the derived yields'
+    # real auction dates to their brief-facing alias/conversion keys too
+    # (tbond_bond_10y, tbond_tbill_182d, tbill_91d_yield_pct, ...) -- values
+    # already flow to these keys via _apply_brief_aliases above, but their
+    # DATES did not: neither key is a v3-registry id or a Tier-1 flatten
+    # key, so _build_source_as_of_map/_build_tier1_source_as_of_map below
+    # never see them, and upsert_metric_history's as_of=today fallback would
+    # forge a run-date stamp on top of an honestly-dated base id -- one
+    # alias hop away from the exact unbounded-carry-forward risk landmine
+    # 51 exists to prevent (an alias's as_of silently advancing to "today"
+    # every run regardless of how stale the real auction actually is).
+    for brief_key, econ_key in BRIEF_ALIASES.items():
+        if econ_key in yield_source_as_of:
+            yield_source_as_of[brief_key] = yield_source_as_of[econ_key]
+    for brief_key, (src_key, _mult) in BRIEF_CONVERSIONS.items():
+        if src_key in yield_source_as_of:
+            yield_source_as_of[brief_key] = yield_source_as_of[src_key]
 
     # Cross-metric health check (E1.4): the BB policy corridor's three legs
     # (SDF floor / repo / SLF ceiling) are each parsed independently, so no
@@ -2334,6 +3155,7 @@ def main() -> int:
     source_as_of_map = {
         **_build_tier1_source_as_of_map(snapshots, bb_forex_ok=bb_forex_ok),
         **_build_source_as_of_map(domains),
+        **yield_source_as_of,
     }
 
     # Stillness alarm: the threshold checks above all ask "did this value move

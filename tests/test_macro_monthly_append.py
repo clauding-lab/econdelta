@@ -48,6 +48,28 @@ _REMIT_THEAD = (
 )
 
 
+@pytest.fixture(autouse=True)
+def _deny_real_imports_pdf_fetch_by_default(monkeypatch):
+    """PR-C: _write_macro_monthly_append grew an imports sub-path
+    (_fetch_imports_mei_pdf) that is NOT gated the way the remittance
+    sub-path is (M6's "skip the browser if the previous month already
+    exists" optimization doesn't apply the same way here, since imports has
+    a genuine ~2-month structural lag -- see AGENTS.md). Most tests in this
+    file mock get_metric_history_monthly to unconditionally return [],
+    which would otherwise make the imports sub-path proceed straight to a
+    REAL network fetch of BB's MEI PDF on every single test in this class --
+    exactly the "hermetic test suite" violation landmine 30 warns about
+    (confirmed live: this fired a real SSL handshake to bb.org.bd before
+    this fixture existed). Every test that DOES care about the imports
+    sub-path re-patches this locally, the same way individual tests already
+    re-patch _fetch_remittance_html to exercise the remittance sub-path.
+    """
+    monkeypatch.setattr(
+        agg, "_fetch_imports_mei_pdf",
+        lambda: (_ for _ in ()).throw(FetchError("autouse default -- not mocked in this test")),
+    )
+
+
 # ---------------------------------------------------------------------------
 # _latest_value_as_of
 # ---------------------------------------------------------------------------
@@ -182,7 +204,7 @@ class TestCpiMonthlyAppendRows:
         assert "cpi_12m_avg_monthly" not in by_id
         assert "cpi_p2p_food_monthly" in by_id
         assert "cpi_p2p_nonfood_monthly" in by_id
-        assert any("wrong CPI column" in r for r in reasons)
+        assert any("exactly equals" in r for r in reasons)
 
     def test_general_differing_from_p2p_is_not_guarded(self):
         """A genuine (non-equal) general_inflation reading must NOT be
@@ -195,7 +217,7 @@ class TestCpiMonthlyAppendRows:
             today=TODAY,
         )
         assert {r["metric_id"] for r in rows} == {"cpi_12m_avg_monthly"}
-        assert not any("wrong CPI column" in r for r in reasons)
+        assert not any("exactly equals" in r for r in reasons)
 
     def test_equality_guard_requires_matching_as_of(self):
         """Equal VALUES on DIFFERENT months is coincidence, not the wrong-
@@ -689,7 +711,16 @@ class TestWriteMacroMonthlyAppend:
         assert n == 0
         remit_read_calls = [c for c in notify_calls if "remittance read failed" in c[1]]
         assert remit_read_calls, notify_calls
-        assert not any("fetch/parse failed" in title for _level, title, _msg in notify_calls)
+        # Scoped to REMITTANCE specifically -- PR-C's independent imports
+        # sub-path (autouse-defaulted to fail in this file, see
+        # _deny_real_imports_pdf_fetch_by_default) also fires its own,
+        # unrelated "imports fetch/parse failed" notify in this scenario;
+        # a blanket "no title contains fetch/parse failed" check would be a
+        # false positive against that unrelated, correctly-independent leg.
+        assert not any(
+            "remittance" in title and "fetch/parse failed" in title
+            for _level, title, _msg in notify_calls
+        )
 
     def test_r1_non_supabase_read_error_on_existing_rows_check_does_not_discard_cpi_rows(
         self, monkeypatch,
