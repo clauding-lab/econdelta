@@ -39,6 +39,11 @@ data/watchlist_staleness_state.json
 # `data/*/` above only matches directories, so this file (a direct child of
 # data/) needs its own line, plus its atomic-write temp file.
 data/media_screen_zero_insert_streak.json
+# Same landmine-40 reasoning for the two alert-dedup state files
+# (utils/alert_dedup.should_alert_today, MEDIUM-5 2026-08-22 round-1
+# review) -- per-box "already alerted today" records, not data artifacts.
+data/parse_preflight_alert_state.json
+data/wrap_run_crash_alert_state.json
 *.json.tmp
 !data/.gitkeep
 !logs/.gitkeep

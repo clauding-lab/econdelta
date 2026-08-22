@@ -8,7 +8,7 @@ import logging
 import os
 import subprocess
 import time
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 import parsers.bb_bop_row  # noqa: F401
@@ -29,12 +29,17 @@ import parsers.pdf_table_row  # noqa: F401
 import parsers.pdf_table_total  # noqa: F401
 from fetchers.base import FetchResult, parse_period
 from parsers.hybrid import parse_one
+from utils.alert_dedup import should_alert_today
 from utils.floor import assess_parse_floor
 from utils.notifier import notify
 
 REPO_ROOT = Path(__file__).resolve().parent
 DEFAULT_CONFIG = REPO_ROOT / "config" / "sources-v3.json"
 DEFAULT_DATA_ROOT = REPO_ROOT / "data"
+# Cross-process dedup for the preflight-failure alert (MEDIUM-5, 2026-08-22
+# round-1 review) -- systemd's Restart=on-failure can retry this unit up to
+# 4 times inside its StartLimit window (landmine 48), each a fresh process.
+PREFLIGHT_ALERT_STATE_PATH = REPO_ROOT / "data" / "parse_preflight_alert_state.json"
 
 logger = logging.getLogger("parse_all")
 
@@ -327,9 +332,16 @@ def main() -> int:
             # notify() call at all -- a preflight failure was visible only to
             # someone who went looking in run_logs/journalctl, unlike
             # assess_parse_floor's breach below (which DOES notify). Same
-            # channel the aggregate hard-reject uses (utils.notifier.notify),
-            # one alert per failed run.
-            notify("error", "parse_all aborted — claude CLI unreachable", reason)
+            # channel the aggregate hard-reject uses (utils.notifier.notify).
+            # Deduped to one alert per day (MEDIUM-5, 2026-08-22 round-1
+            # review): systemd can retry this unit up to 4 times inside its
+            # StartLimit window (landmine 48), each a fresh process, and
+            # without cross-process dedup the SAME preflight failure would
+            # alert once per retry.
+            if should_alert_today(
+                "parse_all_preflight", PREFLIGHT_ALERT_STATE_PATH, today=date.today()
+            ):
+                notify("error", "parse_all aborted — claude CLI unreachable", reason)
             return 1
     snapshots = run(config_path=args.config, data_root=args.data_root, only=args.only)
     by_prov: dict[str, int] = {}

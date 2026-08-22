@@ -403,7 +403,7 @@ class TestWrapRunErrorCapture:
         assert "RuntimeError: kaboom" in captured["error"]
         assert "retrying after timeout" in captured["error"]
 
-    def test_uncaught_exception_notifies_once(self, monkeypatch):
+    def test_uncaught_exception_notifies_once(self, monkeypatch, tmp_path):
         """Confirmed gap (2026-08-22 date-integrity audit): a scraper crash
         OUTSIDE its own narrower try/except used to land here with a
         run_logs row and nothing else -- invisible unless someone went
@@ -413,6 +413,9 @@ class TestWrapRunErrorCapture:
         from utils import supabase_writer
 
         monkeypatch.setattr(supabase_writer, "log_run_end", lambda *a, **k: None)
+        monkeypatch.setattr(
+            supabase_writer, "_WRAP_RUN_CRASH_ALERT_STATE_PATH", tmp_path / "state.json"
+        )
 
         def boom():
             raise RuntimeError("kaboom")
@@ -427,7 +430,54 @@ class TestWrapRunErrorCapture:
         assert "bb_forex" in call_args[1]
         assert "kaboom" in call_args[2]
 
-    def test_notify_failure_never_masks_the_original_exception(self, monkeypatch):
+    def test_uncaught_exception_alert_is_deduped_within_the_same_day(self, monkeypatch, tmp_path):
+        """MEDIUM-5 (2026-08-22 round-1 review): Restart=on-failure can
+        retry a crashed unit up to 4 times inside its StartLimit window
+        (landmine 48), each a fresh process -- a second crash for the SAME
+        source the same day must not alert again."""
+        from unittest.mock import patch
+
+        from utils import supabase_writer
+
+        monkeypatch.setattr(supabase_writer, "log_run_end", lambda *a, **k: None)
+        monkeypatch.setattr(
+            supabase_writer, "_WRAP_RUN_CRASH_ALERT_STATE_PATH", tmp_path / "state.json"
+        )
+
+        def boom():
+            raise RuntimeError("kaboom")
+
+        with patch("utils.notifier.notify") as mock_notify:
+            for _ in range(4):  # simulates 4 systemd restarts, each a fresh call
+                with pytest.raises(RuntimeError, match="kaboom"):
+                    supabase_writer.wrap_run("bb_forex", "econdelta-forex.service", boom)
+
+        mock_notify.assert_called_once()
+
+    def test_uncaught_exception_alert_is_independent_per_source(self, monkeypatch, tmp_path):
+        """The dedup key is per-SOURCE -- a bb_forex crash must not suppress
+        a dse_market crash's alert the same day."""
+        from unittest.mock import patch
+
+        from utils import supabase_writer
+
+        monkeypatch.setattr(supabase_writer, "log_run_end", lambda *a, **k: None)
+        monkeypatch.setattr(
+            supabase_writer, "_WRAP_RUN_CRASH_ALERT_STATE_PATH", tmp_path / "state.json"
+        )
+
+        def boom():
+            raise RuntimeError("kaboom")
+
+        with patch("utils.notifier.notify") as mock_notify:
+            with pytest.raises(RuntimeError, match="kaboom"):
+                supabase_writer.wrap_run("bb_forex", "econdelta-forex.service", boom)
+            with pytest.raises(RuntimeError, match="kaboom"):
+                supabase_writer.wrap_run("dse_market", "econdelta-dse.service", boom)
+
+        assert mock_notify.call_count == 2
+
+    def test_notify_failure_never_masks_the_original_exception(self, monkeypatch, tmp_path):
         """A broken notifier (network down, bad webhook) must not swallow or
         replace the real crash -- the original exception still propagates."""
         from unittest.mock import patch
@@ -435,6 +485,9 @@ class TestWrapRunErrorCapture:
         from utils import supabase_writer
 
         monkeypatch.setattr(supabase_writer, "log_run_end", lambda *a, **k: None)
+        monkeypatch.setattr(
+            supabase_writer, "_WRAP_RUN_CRASH_ALERT_STATE_PATH", tmp_path / "state.json"
+        )
 
         def boom():
             raise RuntimeError("kaboom")
@@ -443,7 +496,7 @@ class TestWrapRunErrorCapture:
             with pytest.raises(RuntimeError, match="kaboom"):
                 supabase_writer.wrap_run("bb_forex", "econdelta-forex.service", boom)
 
-    def test_clean_exit_1_return_does_not_double_notify(self, monkeypatch):
+    def test_clean_exit_1_return_does_not_double_notify(self, monkeypatch, tmp_path):
         """A scraper that already notified at its own failure site and
         returns exit 1 cleanly (no exception) must NOT get a second, generic
         alert from wrap_run -- only an escaped exception reaches this path."""
@@ -452,6 +505,9 @@ class TestWrapRunErrorCapture:
         from utils import supabase_writer
 
         monkeypatch.setattr(supabase_writer, "log_run_end", lambda *a, **k: None)
+        monkeypatch.setattr(
+            supabase_writer, "_WRAP_RUN_CRASH_ALERT_STATE_PATH", tmp_path / "state.json"
+        )
 
         with patch("utils.notifier.notify") as mock_notify:
             rc = supabase_writer.wrap_run("dse_market", "econdelta-dse.service", lambda: 1)

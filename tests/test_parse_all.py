@@ -203,12 +203,13 @@ def test_preflight_logs_stdout_stderr_and_exit(caplog):
 
 # --- main(): preflight failure must notify, not just log (2026-08-22 fix) ---
 
-def test_main_notifies_and_exits_1_when_preflight_unreachable(monkeypatch):
+def test_main_notifies_and_exits_1_when_preflight_unreachable(monkeypatch, tmp_path):
     """Confirmed gap: this branch used to return exit 1 with ZERO notify()
     call -- run_logs recorded status='fail' but nobody was ever paged. It
     must never fall through to run() either (a preflight abort means every
     LLM-fallback extraction this run would also fail)."""
     monkeypatch.setattr("sys.argv", ["parse_all.py"])
+    monkeypatch.setattr(parse_all, "PREFLIGHT_ALERT_STATE_PATH", tmp_path / "state.json")
     with (
         patch("parse_all._claude_warmup"),
         patch("parse_all._claude_preflight", return_value=False),
@@ -223,6 +224,26 @@ def test_main_notifies_and_exits_1_when_preflight_unreachable(monkeypatch):
     call_args = mock_notify.call_args[0]
     assert call_args[0] == "error"
     assert "claude" in call_args[2].lower()
+
+
+def test_main_preflight_failure_alert_is_deduped_within_the_same_day(monkeypatch, tmp_path):
+    """MEDIUM-5 (2026-08-22 round-1 review): systemd can retry this unit up
+    to 4 times inside its StartLimit window (landmine 48) -- a second
+    preflight failure the SAME day must not alert again."""
+    monkeypatch.setattr("sys.argv", ["parse_all.py"])
+    monkeypatch.setattr(parse_all, "PREFLIGHT_ALERT_STATE_PATH", tmp_path / "state.json")
+    with (
+        patch("parse_all._claude_warmup"),
+        patch("parse_all._claude_preflight", return_value=False),
+        patch("parse_all.run"),
+        patch("parse_all.notify") as mock_notify,
+    ):
+        first = parse_all.main()
+        second = parse_all.main()
+
+    assert first == 1
+    assert second == 1
+    mock_notify.assert_called_once()
 
 
 def test_main_skips_notify_when_preflight_check_itself_is_skipped(monkeypatch):
