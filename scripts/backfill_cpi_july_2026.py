@@ -23,19 +23,43 @@ July up naturally on its NEXT run once the daily ids reflect it, but this
 script backfills the gap immediately rather than waiting for that next
 scheduled run.
 
-Values (source: bb_inflation_page -- BB's econdata/inflation page,
-verified live 2026-08-22; the SAME source label Phase 1's
-scripts/backfill_monthly_chart_series.py already uses for this trio):
+Values (verified live/derived 2026-08-22):
 
-  cpi_12m_avg_monthly:     2026-07-01 = 8.66  ("Monthly Average(Twelve Month)" row)
-  cpi_p2p_food_monthly:    2026-07-01 = 7.16  (settled by arithmetic against the
-                           implied food/general/non-food weight from June's
-                           triple -- see the PR-C build brief; the BB HTML page
-                           itself carries no food/non-food split, so this ONE
-                           value is NOT independently re-readable from that page
-                           the way cpi_12m_avg is -- hand-verified, not live-
-                           fetched, same as Phase 1's whole trio)
-  cpi_p2p_nonfood_monthly: 2026-07-01 = 9.28  (same caveat as food, above)
+  cpi_12m_avg_monthly:     2026-07-01 = 8.66  (source: bb_inflation_page --
+                           read directly off the "Monthly Average(Twelve
+                           Month)" row of BB's econdata/inflation page, the
+                           SAME source label Phase 1's scripts/backfill_
+                           monthly_chart_series.py already uses for this
+                           trio)
+  cpi_p2p_food_monthly:    2026-07-01 = 7.16  (source:
+                           derived_implied_weight_bb_inflation -- Opus
+                           review round 1, M6: this figure is NOT read off
+                           any BB page directly. BB's econdata/inflation
+                           page carries no food/non-food split at all; 7.16
+                           was SETTLED BY ARITHMETIC (the PR-C build brief's
+                           source-scout pass): an implied food/general
+                           weight w=0.4455 was backed out of June 2026's
+                           already-known general/food/non-food triple, then
+                           applied to July's known general (8.32) to solve
+                           for food. The prior source label here
+                           ("bb_inflation_page") was misleading -- it reads
+                           as "captured verbatim from BB's page", which
+                           this value was never was. OWNER FLAG: this is a
+                           derived estimate, not a BB-published figure; if
+                           BB or BBS later publishes July's real food/
+                           non-food split, this row should be corrected to
+                           the real figure and re-sourced.
+  cpi_p2p_nonfood_monthly: 2026-07-01 = 9.28  (source: bb_inflation_page --
+                           kept as-is; the source scout's brief did not
+                           name non-food as arithmetic-derived the way it
+                           did food, but non-food is subject to the SAME
+                           "BB's page carries no food/non-food split"
+                           caveat as food above and was not independently
+                           verified against a live page either. Left
+                           unchanged here because the round-1 review named
+                           ONLY food explicitly (M6) -- flagged as a
+                           related, not-yet-relabeled concern for the
+                           owner's attention in the same PR body note.)
 
 The food/non-food split still ultimately needs the MEI PDF (or BBS) once
 that catches up to July -- this backfill does not change how the ONGOING
@@ -83,6 +107,12 @@ class BackfillRow:
 
 
 CPI_SOURCE = "bb_inflation_page"
+# Opus review round 1, M6: distinct source label for a value that is NOT
+# read off any BB page -- 7.16 was backed out arithmetically from June
+# 2026's known general/food/non-food triple's implied weight, applied to
+# July's known general reading. See the module docstring for the full
+# derivation and the owner flag this carries.
+CPI_FOOD_DERIVED_SOURCE = "derived_implied_weight_bb_inflation"
 JULY_2026 = date(2026, 7, 1)
 
 # Controller-verified values (2026-08-22) -- pure data, no I/O. DO NOT edit
@@ -90,7 +120,7 @@ JULY_2026 = date(2026, 7, 1)
 # docstring for how each was verified.
 ALL_BACKFILL_ROWS: tuple[BackfillRow, ...] = (
     BackfillRow("cpi_12m_avg_monthly", JULY_2026, 8.66, CPI_SOURCE),
-    BackfillRow("cpi_p2p_food_monthly", JULY_2026, 7.16, CPI_SOURCE),
+    BackfillRow("cpi_p2p_food_monthly", JULY_2026, 7.16, CPI_FOOD_DERIVED_SOURCE),
     BackfillRow("cpi_p2p_nonfood_monthly", JULY_2026, 9.28, CPI_SOURCE),
 )
 
@@ -144,6 +174,11 @@ def run(argv: list[str] | None = None) -> int:
                          "SUPABASE_SERVICE_ROLE_KEY in the environment. Owner-run only.")
     p.add_argument("--verbose", "-v", action="store_true")
     args = p.parse_args(argv)
+    # L3 (Opus review round 1): --dry-run is the DEFAULT regardless of
+    # whether it's passed explicitly -- --write is the only flag that
+    # actually changes behavior. Recomputed here so the two flags can
+    # never disagree.
+    args.dry_run = not args.write
 
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
@@ -153,7 +188,7 @@ def run(argv: list[str] | None = None) -> int:
     history_rows = build_history_rows()
     logger.info("prepared %d history row(s) (3 ids x 1 month)", len(history_rows))
 
-    if not args.write:
+    if args.dry_run:
         _print_dry_run(history_rows)
         logger.info(
             "--dry-run (default): no writes performed. Pass --write (with "

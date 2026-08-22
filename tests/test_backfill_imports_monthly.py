@@ -28,15 +28,32 @@ MEI_FIXTURE = Path(__file__).parent / "_pdfs" / "bb_mei_2026_june.pdf"
 
 class TestCrossCheck:
     def test_passes_when_values_match(self):
-        _cross_check({date(2026, 4, 1): 7066.10, date(2026, 5, 1): 6108.22})  # must not raise
+        verified = _cross_check({date(2026, 4, 1): 7066.10, date(2026, 5, 1): 6108.22})
+        assert verified == {date(2026, 4, 1): 7066.10, date(2026, 5, 1): 6108.22}
 
-    def test_raises_when_april_missing(self):
-        with pytest.raises(AssertionError, match="no row"):
-            _cross_check({date(2026, 5, 1): 6108.22})
+    def test_missing_month_is_skipped_gracefully_not_raised(self, caplog):
+        """Opus review round 1, H1 (blocker): a missing month must NOT
+        brick the script -- it's the expected shape once BB's fiscal year
+        rolls and April/May move out of the PDF's provisional column
+        (aggregate_latest._imports_splice_check's docstring has the full
+        mechanism). Only a genuinely DRIFTED present value should raise."""
+        verified = _cross_check({date(2026, 5, 1): 6108.22})  # April missing
+        assert verified == {date(2026, 5, 1): 6108.22}
+        assert any("no longer in the PDF" in r.message for r in caplog.records)
+
+    def test_both_months_missing_returns_empty_not_raised(self):
+        assert _cross_check({}) == {}
 
     def test_raises_when_value_drifted(self):
         with pytest.raises(AssertionError, match="cross-check failed"):
             _cross_check({date(2026, 4, 1): 7500.0, date(2026, 5, 1): 6108.22})
+
+    def test_a_present_drifted_month_raises_even_if_the_other_is_missing(self):
+        """A month that's actually there but WRONG is still a real problem
+        worth failing loud on, independent of whichever other month has
+        simply rolled out of the provisional column."""
+        with pytest.raises(AssertionError, match="cross-check failed"):
+            _cross_check({date(2026, 4, 1): 7500.0})  # May missing, April drifted
 
 
 class TestBuildHistoryRows:
@@ -61,6 +78,16 @@ class TestBuildHistoryRows:
     def test_raises_on_cross_check_failure(self):
         with pytest.raises(AssertionError):
             build_history_rows({date(2026, 4, 1): 1.0, date(2026, 5, 1): 6108.22})
+
+    def test_one_month_rolled_off_returns_the_other_alone_not_bricked(self):
+        """The 'not brick' requirement, end-to-end: April has rolled out of
+        the PDF's provisional column, May is still there and verifies --
+        the script must still produce May's row, not crash."""
+        rows = build_history_rows({date(2026, 5, 1): 6108.22})
+        assert [r["as_of"] for r in rows] == ["2026-05-01"]
+
+    def test_both_months_rolled_off_returns_empty_list_not_bricked(self):
+        assert build_history_rows({date(2026, 7, 1): 6270.46}) == []
 
 
 class TestDefinitionUpdate:
@@ -99,7 +126,23 @@ class TestDryRunCliAgainstRealFixture:
         assert exit_code == 0
         assert "DRY RUN" in capsys.readouterr().out
 
-    def test_dry_run_fails_loud_if_the_pdf_no_longer_has_these_months(self, tmp_path, capsys):
+    def test_explicit_dry_run_flag_and_default_agree(self, capsys):
+        """L3: --dry-run is purely documentation -- passing it explicitly
+        or omitting it must behave identically (both are "not --write")."""
+        with patch(
+            "scripts.backfill_imports_monthly._fetch_imports_mei_pdf",
+            return_value=MEI_FIXTURE,
+        ):
+            explicit = run(["--dry-run"])
+            implicit = run([])
+        assert explicit == implicit == 0
+
+    def test_no_matching_table_raises_a_structural_error(self, tmp_path):
+        """Different failure class from a rolled-off target month: no
+        table on the page AT ALL matching the 'Custom based import (c&f)'
+        header means the source structure itself changed -- that's a real
+        problem worth surfacing loudly, unlike a month simply not being in
+        the provisional column anymore."""
         import pdfplumber  # noqa: F401 -- fail fast if the dep is missing
         from reportlab.lib.pagesizes import letter
         from reportlab.platypus import SimpleDocTemplate, Table
@@ -113,3 +156,27 @@ class TestDryRunCliAgainstRealFixture:
             return_value=pdf_path,
         ), pytest.raises(ValueError, match="no table"):
             run(["--dry-run"])
+
+    def test_post_roll_shape_does_not_brick_the_script(self, capsys):
+        """H1 end-to-end: a PDF whose table HAS the right header but no
+        longer carries April/May in its provisional column (both rolled to
+        'R', a real July-only reading in their place) must complete
+        successfully with 0 rows, not raise. parse_imports_c_and_f_table
+        is mocked directly (rather than built via a synthetic reportlab
+        PDF, which needs explicit grid lines for pdfplumber's line-based
+        table detection to find anything at all) -- the fetch is still
+        mocked to the real fixture path just so _fetch_imports_mei_pdf
+        itself is never exercised for real."""
+        with patch(
+            "scripts.backfill_imports_monthly._fetch_imports_mei_pdf",
+            return_value=MEI_FIXTURE,
+        ), patch(
+            "scripts.backfill_imports_monthly.parse_imports_c_and_f_table",
+            return_value=[(date(2026, 7, 1), 6270.46)],
+        ):
+            exit_code = run(["--dry-run"])
+        assert exit_code == 0
+        out = capsys.readouterr().out
+        assert "DRY RUN" in out
+        assert "0 total" in out
+        assert "0 total" in out

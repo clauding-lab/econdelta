@@ -78,11 +78,11 @@ from aggregate_latest import (  # noqa: E402
 
 # Controller cross-check values ONLY (verified 2026-08-22 against BB's real
 # "2026_june.pdf" MEI issue) -- NOT what gets written. See module docstring.
-_EXPECTED_APRIL_2026 = 7066.10
-_EXPECTED_MAY_2026 = 6108.22
+_EXPECTED_VALUES: dict[date, float] = {
+    date(2026, 4, 1): 7066.10,
+    date(2026, 5, 1): 6108.22,
+}
 _CROSS_CHECK_TOLERANCE_PCT = 0.001  # 0.1% -- these are meant to match exactly
-
-_BACKFILL_MONTHS = (date(2026, 4, 1), date(2026, 5, 1))
 
 _MEI_INDEX_URL = "https://www.bb.org.bd/en/index.php/publication/publictn/3/11"
 
@@ -98,19 +98,40 @@ DEFINITION_UPDATE: dict = {
 }
 
 
-def _cross_check(parsed: dict[date, float]) -> None:
-    """Raise AssertionError if the live PDF's own April/May 2026 readings
-    have drifted from the controller-verified values by more than the
-    tolerance -- fail LOUD rather than silently writing a revised or
-    unexpected figure an owner never reviewed."""
-    for as_of, expected in ((date(2026, 4, 1), _EXPECTED_APRIL_2026), (date(2026, 5, 1), _EXPECTED_MAY_2026)):
+def _cross_check(parsed: dict[date, float]) -> dict[date, float]:
+    """Validate whichever of the two target months (April/May 2026) the
+    live PDF's provisional column STILL carries against the controller-
+    verified reference values, within tolerance -- raising LOUD only when
+    a month IS present but has drifted (a real data problem an owner must
+    review), never when a month is simply no longer available.
+
+    Opus review round 1, H1 (blocker): the original version raised
+    AssertionError whenever EITHER month was entirely missing from the
+    PDF. That bricks this script the moment BB's fiscal year rolls (~Oct
+    2026, aggregate_latest._imports_splice_check's docstring has the full
+    mechanism): April/May 2026 move from the PDF's provisional ('P')
+    column to the revised ('R') comparator column that
+    parse_imports_c_and_f_table never reads, so both would be "missing"
+    forever afterward -- a one-time backfill script has no business
+    hard-failing on a month that has simply moved on. The orchestrator
+    runs this script TODAY, well before any such roll, so this almost
+    never actually triggers -- but the script must degrade gracefully
+    (warn, skip that month, keep going) rather than crash if run later.
+
+    Returns the subset of _EXPECTED_VALUES actually present AND verified
+    (an empty dict is a valid, safe outcome: "nothing left to backfill
+    from this source").
+    """
+    verified: dict[date, float] = {}
+    for as_of, expected in _EXPECTED_VALUES.items():
         actual = parsed.get(as_of)
         if actual is None:
-            raise AssertionError(
-                f"cross-check failed: the live MEI PDF has no row for {as_of} -- "
-                "expected one (controller-verified 2026-08-22); the document may "
-                "have moved on to a newer issue. Refusing to backfill blind."
+            logger.warning(
+                "%s is no longer in the PDF's provisional column (FY rolled, "
+                "or the document moved on to a newer issue?) -- skipping, not "
+                "backfilling this month", as_of,
             )
+            continue
         diff_pct = abs(actual - expected) / expected
         if diff_pct > _CROSS_CHECK_TOLERANCE_PCT:
             raise AssertionError(
@@ -119,21 +140,24 @@ def _cross_check(parsed: dict[date, float]) -> None:
                 "difference) -- BB may have revised this figure since "
                 "2026-08-22; re-verify before backfilling."
             )
+        verified[as_of] = actual
+    return verified
 
 
 def build_history_rows(parsed: dict[date, float]) -> list[dict]:
-    """Pure transform: the live-parsed {as_of: value} dict -> the 2
-    controller-approved backfill rows (April/May 2026 only -- see
-    _BACKFILL_MONTHS). Raises AssertionError via _cross_check if either
-    month is missing or has drifted from the verified value."""
-    _cross_check(parsed)
+    """Pure transform: the live-parsed {as_of: value} dict -> backfill rows
+    for whichever of April/May 2026 the PDF still verifies (see
+    _cross_check) -- 0, 1, or 2 rows are all valid outcomes. Raises
+    AssertionError only when a present month has genuinely drifted from
+    the controller-verified value."""
+    verified = _cross_check(parsed)
     rows = []
-    for as_of in _BACKFILL_MONTHS:
+    for as_of in sorted(verified):
         as_of_iso = as_of.isoformat()
         rows.append({
             "metric_id": _IMPORTS_MONTHLY_ID,
             "as_of": as_of_iso,
-            "value": parsed[as_of],
+            "value": verified[as_of],
             "source": _IMPORTS_SOURCE,
             "source_as_of": as_of_iso,
         })
@@ -157,6 +181,11 @@ def run(argv: list[str] | None = None) -> int:
                          "SUPABASE_SERVICE_ROLE_KEY in the environment. Owner-run only.")
     p.add_argument("--verbose", "-v", action="store_true")
     args = p.parse_args(argv)
+    # L3 (Opus review round 1): --dry-run is the DEFAULT regardless of
+    # whether it's passed explicitly -- --write is the only flag that
+    # actually changes behavior. Recomputed here (rather than trusting the
+    # parsed --dry-run value) so the two flags can never disagree.
+    args.dry_run = not args.write
 
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
@@ -169,9 +198,18 @@ def run(argv: list[str] | None = None) -> int:
     parsed = dict(parse_imports_c_and_f_table(pdf_path))
 
     history_rows = build_history_rows(parsed)
-    logger.info("prepared %d history row(s) (cross-check passed) + 1 definition update", len(history_rows))
+    if history_rows:
+        logger.info("prepared %d history row(s) (cross-check passed) + 1 definition update", len(history_rows))
+    else:
+        # Not an error (H1): every target month may simply already be past
+        # the PDF's provisional column (FY rolled, or already backfilled).
+        logger.warning(
+            "0 history rows to backfill -- every target month in %s was "
+            "either already appended elsewhere or is no longer in the PDF's "
+            "provisional column. Nothing to do.", sorted(_EXPECTED_VALUES),
+        )
 
-    if not args.write:
+    if args.dry_run:
         _print_dry_run(history_rows)
         logger.info(
             "--dry-run (default): no writes performed. Pass --write (with "

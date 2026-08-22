@@ -10,6 +10,8 @@ import pytest
 
 from scripts.backfill_cpi_july_2026 import (
     ALL_BACKFILL_ROWS,
+    CPI_FOOD_DERIVED_SOURCE,
+    CPI_SOURCE,
     EXPECTED_PAIRS,
     JULY_2026,
     BackfillRow,
@@ -29,8 +31,16 @@ class TestControllerVerifiedValues:
         assert by_id["cpi_p2p_food_monthly"] == pytest.approx(7.16)
         assert by_id["cpi_p2p_nonfood_monthly"] == pytest.approx(9.28)
 
-    def test_source_label(self):
-        assert all(r.source == "bb_inflation_page" for r in ALL_BACKFILL_ROWS)
+    def test_source_labels(self):
+        """Opus review round 1, M6: food's source label is DISTINCT from
+        the other two -- it's arithmetically derived, not read off any BB
+        page, and must never be confused with a genuine page-sourced
+        reading."""
+        by_id = {r.metric_id: r.source for r in ALL_BACKFILL_ROWS}
+        assert by_id["cpi_12m_avg_monthly"] == CPI_SOURCE
+        assert by_id["cpi_p2p_nonfood_monthly"] == CPI_SOURCE
+        assert by_id["cpi_p2p_food_monthly"] == CPI_FOOD_DERIVED_SOURCE
+        assert CPI_FOOD_DERIVED_SOURCE != CPI_SOURCE
 
 
 class TestBuildHistoryRows:
@@ -40,6 +50,11 @@ class TestBuildHistoryRows:
             "metric_id": "cpi_12m_avg_monthly", "as_of": "2026-07-01", "value": 8.66,
             "source": "bb_inflation_page", "source_as_of": "2026-07-01",
         }
+
+    def test_food_row_carries_the_derived_source_label(self):
+        rows = build_history_rows()
+        by_id = {r["metric_id"]: r for r in rows}
+        assert by_id["cpi_p2p_food_monthly"]["source"] == "derived_implied_weight_bb_inflation"
 
     def test_matches_expected_pairs_exactly(self):
         rows = build_history_rows()
