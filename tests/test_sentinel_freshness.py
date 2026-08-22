@@ -379,20 +379,42 @@ def test_cpi_12m_food_and_nonfood_route_to_accepted_stale():
     assert not (ids & {b.metric_id for b in report.breaches})
 
 
-def test_imports_usd_mn_monthly_routes_to_accepted_stale():
-    """BB publishes cif imports ~2 months late; no standalone monthly figure
-    exists beyond May 2026 — structural source lag, not a pipeline fault."""
+def test_imports_usd_mn_monthly_is_no_longer_accepted_stale():
+    """PR-C (build-brief item 1): imports_usd_mn_monthly got a live leg
+    (aggregate_latest._write_macro_monthly_append's imports sub-path) in
+    the same PR that removed this exemption -- a live leg that stops
+    working must be able to breach again, not stay silently exempted."""
     from sentinel.freshness import ACCEPTED_STALE_METRIC_IDS
 
-    assert "imports_usd_mn_monthly" in ACCEPTED_STALE_METRIC_IDS
+    assert "imports_usd_mn_monthly" not in ACCEPTED_STALE_METRIC_IDS
 
+
+def test_imports_usd_mn_monthly_uses_quarterly_cadence_for_its_real_lag():
+    """BB's MEI PDF genuinely publishes cif imports ~2 months late (verified
+    live 2026-08-22) -- a plain "monthly" 45-day grace would make every
+    fresh row this leg writes read as stale the moment it landed. sentinel/
+    cadence.py overrides it to "quarterly" (165-day grace) instead."""
     m = load_cadence_map()
+    assert m["imports_usd_mn_monthly"] == "quarterly"
+
+    # A row ~3 months old (matches the leg's genuine publication lag) is
+    # comfortably FRESH under the 165-day quarterly grace.
     report = assess(
         rows_daily=[], rows_monthly=[_row("imports_usd_mn_monthly", "2026-05-01")],
         cadence_map=m, today=date(2026, 8, 8),
     )
-    assert "imports_usd_mn_monthly" in {s.metric_id for s in report.accepted_stale}
+    assert "imports_usd_mn_monthly" in {s.metric_id for s in report.fresh}
     assert "imports_usd_mn_monthly" not in {b.metric_id for b in report.breaches}
+    assert "imports_usd_mn_monthly" not in {s.metric_id for s in report.accepted_stale}
+
+    # A row genuinely past the quarterly grace (the leg itself died) DOES
+    # breach -- proving removal from ACCEPTED_STALE_METRIC_IDS is not
+    # cosmetic.
+    stale_report = assess(
+        rows_daily=[], rows_monthly=[_row("imports_usd_mn_monthly", "2025-12-01")],
+        cadence_map=m, today=date(2026, 8, 8),
+    )
+    assert "imports_usd_mn_monthly" in {b.metric_id for b in stale_report.breaches}
 
 
 def test_exports_usd_mn_monthly_routes_to_accepted_stale():

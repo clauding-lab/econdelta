@@ -20,24 +20,58 @@ CORE_METRIC_IDS = frozenset({
     "point_to_point_inflation", "gross_npl_ratio",
 })
 
+# PR-C (build-brief item 3, AGENTS.md landmine 52): bill_bond_rates/
+# tbill_182d_yield/tbill_364d_yield/tbond_5y_yield/tbond_10y_yield left
+# config/sources-v3.json entirely (the BB treasury page's two-yield-column
+# trap shipped materially wrong bond yields for weeks -- see
+# AGENT_LEARNINGS.md's 2026-08-22 entry) and are now derived from
+# auction_results by aggregate_latest._derive_daily_yields_from_auctions.
+# They remain CORE_METRIC_IDS the briefing must track for freshness -- this
+# supplies their cadence/threshold/label directly since sources-v3.json can
+# no longer answer for them. Without this, tracked_metric_ids() would stop
+# including them entirely, _collect_history() would never even attempt to
+# read their metric_history rows, and assess_freshness's "core metric
+# entirely absent from history" branch (briefing/freshness.py) would mark
+# the briefing core_stale EVERY week, forever -- turning a source-quality
+# fix into a permanently-skipped weekly briefing. Cadence "weekly" matches
+# sentinel/cadence.py's own override for the same 5 ids (real auction
+# cutoffs, not a value that moves every calendar day).
+_RETIRED_YIELD_IDS_METADATA: dict[str, dict] = {
+    "bill_bond_rates": {"cadence": "weekly", "anomaly_threshold": 1.0, "name": "91-Day T-Bill Cut-Off Yield"},
+    "tbill_182d_yield": {"cadence": "weekly", "anomaly_threshold": 1.0, "name": "182-Day T-Bill Cut-Off Yield"},
+    "tbill_364d_yield": {"cadence": "weekly", "anomaly_threshold": 1.0, "name": "364-Day T-Bill Cut-Off Yield"},
+    "tbond_5y_yield": {"cadence": "weekly", "anomaly_threshold": 1.0, "name": "5-Year BGTB Cut-Off Yield"},
+    "tbond_10y_yield": {"cadence": "weekly", "anomaly_threshold": 1.0, "name": "10-Year BGTB Cut-Off Yield"},
+}
+
 
 def load_indicators() -> list[dict]:
     return json.loads(SOURCES_V3.read_text())["indicators"]
 
 
 def tracked_metric_ids(indicators: list[dict]) -> list[str]:
-    """Every daily-pipeline indicator id (the data YieldScope surfaces)."""
-    return [ind["id"] for ind in indicators]
+    """Every daily-pipeline indicator id (the data YieldScope surfaces),
+    plus the retired-from-config yield ids (see _RETIRED_YIELD_IDS_METADATA)."""
+    return [ind["id"] for ind in indicators] + list(_RETIRED_YIELD_IDS_METADATA)
 
 
 def thresholds_by_metric(indicators: list[dict]) -> dict[str, float | None]:
-    return {ind["id"]: ind.get("anomaly_threshold") for ind in indicators}
+    out = {ind["id"]: ind.get("anomaly_threshold") for ind in indicators}
+    for mid, meta in _RETIRED_YIELD_IDS_METADATA.items():
+        out.setdefault(mid, meta["anomaly_threshold"])
+    return out
 
 
 def cadence_by_metric(indicators: list[dict]) -> dict[str, str]:
-    return {ind["id"]: ind.get("cadence", "daily") for ind in indicators}
+    out = {ind["id"]: ind.get("cadence", "daily") for ind in indicators}
+    for mid, meta in _RETIRED_YIELD_IDS_METADATA.items():
+        out.setdefault(mid, meta["cadence"])
+    return out
 
 
 def label_by_metric(indicators: list[dict]) -> dict[str, str]:
     # sources-v3 uses `name` (not `label`) for the human-readable string.
-    return {ind["id"]: ind.get("name") or ind["id"] for ind in indicators}
+    out = {ind["id"]: ind.get("name") or ind["id"] for ind in indicators}
+    for mid, meta in _RETIRED_YIELD_IDS_METADATA.items():
+        out.setdefault(mid, meta["name"])
+    return out

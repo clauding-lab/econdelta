@@ -8,31 +8,20 @@
       "domain": "inflation",
       "cadence": "monthly",
       "fetch": {
-        "type": "pdf",
-        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
-        "task": "Headline point-to-point inflation",
-        "discover": "latest_pdf_link"
+        "type": "html",
+        "url": "https://www.bb.org.bd/en/index.php/econdata/inflation",
+        "task": "row=\"Point to point\" col=latest"
       },
       "parse": {
-        "deterministic": "pdf_component",
-        "llm_prompt": "pdf_component.txt",
+        "deterministic": "html_dated_table_row",
+        "llm_prompt": "html_table_row.txt",
         "value_type": "percent",
         "valid_range": [
           0.0,
           50.0
         ]
       },
-      "anomaly_threshold": 1.0,
-      "alternate": {
-        "url": "https://bbs.gov.bd/pages/static-pages/6922de7a933eb65569e1ae8f",
-        "type": "pdf",
-        "task": "Go to the latest available PDF,  Page 13 of the doc, table 1.1"
-      },
-      "fallback": {
-        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/5/27",
-        "type": "pdf",
-        "task": "Go to latest available PDF, Component 14"
-      }
+      "anomaly_threshold": 1.0
     },
     {
       "id": "general_inflation",
@@ -40,31 +29,20 @@
       "domain": "inflation",
       "cadence": "monthly",
       "fetch": {
-        "type": "pdf",
-        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
-        "task": "Go to page 15 of the doc, first table",
-        "discover": "latest_pdf_link"
+        "type": "html",
+        "url": "https://www.bb.org.bd/en/index.php/econdata/inflation",
+        "task": "row=\"Monthly Average(Twelve Month)\" col=latest"
       },
       "parse": {
-        "deterministic": "pdf_table_row",
-        "llm_prompt": "pdf_table_row.txt",
+        "deterministic": "html_dated_table_row",
+        "llm_prompt": "html_table_row.txt",
         "value_type": "percent",
         "valid_range": [
           0.0,
           50.0
         ]
       },
-      "anomaly_threshold": 1.0,
-      "alternate": {
-        "url": "https://bbs.gov.bd/pages/static-pages/6922de7a933eb65569e1ae8f",
-        "type": "pdf",
-        "task": "Go to the latest available PDF,  Page 13 of the doc, table 1.1"
-      },
-      "fallback": {
-        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/5/27",
-        "type": "pdf",
-        "task": "Go to latest available PDF, Component 14"
-      }
+      "anomaly_threshold": 1.0
     },
     {
       "id": "food_inflation",
@@ -354,136 +332,6 @@
         "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/58",
         "type": "pdf",
         "task": "Go to the latest available PDF, Annex 1, table component B2"
-      }
-    },
-    {
-      "id": "bill_bond_rates",
-      "name": "91-Day T-Bill Cut-Off Yield",
-      "domain": "money_market",
-      "cadence": "daily",
-      "fetch": {
-        "type": "html",
-        "url": "https://www.bb.org.bd/en/index.php/monetaryactivity/treasury",
-        "task": "Latest 91-Day Treasury Bill cut-off yield in percent (the most recent auction's weighted-average yield for 91-day tenor). Return only the numeric value."
-      },
-      "parse": {
-        "deterministic": "html_table_row",
-        "llm_prompt": "html_table_row.txt",
-        "value_type": "percent",
-        "valid_range": [
-          0.0,
-          25.0
-        ]
-      },
-      "anomaly_threshold": 1.0,
-      "alternate": {
-        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
-        "type": "pdf",
-        "task": "Go to page 7 of the doc, first table — extract the 91-Day T-Bill cut-off yield from the latest column"
-      }
-    },
-    {
-      "id": "tbill_182d_yield",
-      "name": "182-Day T-Bill Cut-Off Yield",
-      "domain": "money_market",
-      "cadence": "daily",
-      "fetch": {
-        "type": "html",
-        "url": "https://www.bb.org.bd/en/index.php/monetaryactivity/treasury",
-        "task": "Latest 182-Day Treasury Bill cut-off yield in percent (the most recent auction's weighted-average yield for 182-day tenor). Return only the numeric value."
-      },
-      "parse": {
-        "deterministic": "html_table_row",
-        "llm_prompt": "html_table_row.txt",
-        "value_type": "percent",
-        "valid_range": [
-          0.0,
-          25.0
-        ]
-      },
-      "anomaly_threshold": 1.0,
-      "alternate": {
-        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
-        "type": "pdf",
-        "task": "Go to page 7 of the doc, first table — extract the 182-Day T-Bill cut-off yield from the latest column"
-      }
-    },
-    {
-      "id": "tbill_364d_yield",
-      "name": "364-Day T-Bill Cut-Off Yield",
-      "domain": "money_market",
-      "cadence": "daily",
-      "fetch": {
-        "type": "html",
-        "url": "https://www.bb.org.bd/en/index.php/monetaryactivity/treasury",
-        "task": "Latest 364-Day Treasury Bill cut-off yield in percent (the most recent auction's weighted-average yield for 364-day tenor). Return only the numeric value."
-      },
-      "parse": {
-        "deterministic": "html_table_row",
-        "llm_prompt": "html_table_row.txt",
-        "value_type": "percent",
-        "valid_range": [
-          0.0,
-          25.0
-        ]
-      },
-      "anomaly_threshold": 1.0,
-      "alternate": {
-        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
-        "type": "pdf",
-        "task": "Go to page 7 of the doc, first table — extract the 364-Day T-Bill cut-off yield from the latest column"
-      }
-    },
-    {
-      "id": "tbond_5y_yield",
-      "name": "5-Year BGTB Cut-Off Yield",
-      "domain": "money_market",
-      "cadence": "weekly",
-      "fetch": {
-        "type": "html",
-        "url": "https://www.bb.org.bd/en/index.php/monetaryactivity/treasury",
-        "task": "Latest 5-Year Bangladesh Government Treasury Bond (BGTB) cut-off yield in percent (the most recent auction's weighted-average yield for 5-year tenor). Return only the numeric value."
-      },
-      "parse": {
-        "deterministic": "html_table_row",
-        "llm_prompt": "html_table_row.txt",
-        "value_type": "percent",
-        "valid_range": [
-          0.0,
-          25.0
-        ]
-      },
-      "anomaly_threshold": 1.0,
-      "alternate": {
-        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
-        "type": "pdf",
-        "task": "Go to page 7 of the doc, first table — extract the 5-Year BGTB cut-off yield from the latest column"
-      }
-    },
-    {
-      "id": "tbond_10y_yield",
-      "name": "10-Year BGTB Cut-Off Yield",
-      "domain": "money_market",
-      "cadence": "weekly",
-      "fetch": {
-        "type": "html",
-        "url": "https://www.bb.org.bd/en/index.php/monetaryactivity/treasury",
-        "task": "Latest 10-Year Bangladesh Government Treasury Bond (BGTB) cut-off yield in percent (the most recent auction's weighted-average yield for 10-year tenor). Return only the numeric value."
-      },
-      "parse": {
-        "deterministic": "html_table_row",
-        "llm_prompt": "html_table_row.txt",
-        "value_type": "percent",
-        "valid_range": [
-          0.0,
-          25.0
-        ]
-      },
-      "anomaly_threshold": 1.0,
-      "alternate": {
-        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
-        "type": "pdf",
-        "task": "Go to page 7 of the doc, first table — extract the 10-Year BGTB cut-off yield from the latest column"
       }
     },
     {
@@ -1002,26 +850,41 @@
       "domain": "monetary_aggregates",
       "cadence": "monthly",
       "fetch": {
-        "type": "pdf",
-        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
-        "task": "Locate the Major Economic Indicators (MEI) summary table — extract the most recent month's Private Sector Credit growth percentage on a year-on-year basis. Often labelled 'Private sector credit, % YoY', 'Domestic credit (private sector) growth %', or appearing in the 'Monetary Sector — Annual growth rates' block. Return only the numeric percentage value.",
-        "discover": "latest_pdf_link"
+        "type": "html",
+        "url": "https://www.bb.org.bd/en/index.php/econdata/monetarysurvey",
+        "task": "row=\"Claims on Private Sector\" section=\"deposit money banks\" col=yoy_pct"
       },
       "parse": {
-        "deterministic": "pdf_component",
-        "llm_prompt": "pdf_component.txt",
+        "deterministic": "html_dated_table_row",
+        "llm_prompt": "html_table_row.txt",
         "value_type": "percent",
         "valid_range": [
           -30.0,
           50.0
         ]
       },
-      "anomaly_threshold": 1.0,
-      "alternate": {
-        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/5/27",
-        "type": "pdf",
-        "task": "Selected Economic Indicators — find the Private Sector Credit % YoY growth column for the latest month."
-      }
+      "anomaly_threshold": 1.0
+    },
+    {
+      "id": "m2_growth_yoy_pct",
+      "name": "M2 (Broad Money) Growth YoY",
+      "domain": "monetary_aggregates",
+      "cadence": "monthly",
+      "fetch": {
+        "type": "html",
+        "url": "https://www.bb.org.bd/en/index.php/econdata/moneysupply",
+        "task": "row=\"6. Money Supply(M2) (4+5)\" col=yoy_pct"
+      },
+      "parse": {
+        "deterministic": "html_dated_table_row",
+        "llm_prompt": "html_table_row.txt",
+        "value_type": "percent",
+        "valid_range": [
+          -10.0,
+          40.0
+        ]
+      },
+      "anomaly_threshold": 1.0
     },
     {
       "id": "deposits_of_the_system",

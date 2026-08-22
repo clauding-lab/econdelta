@@ -6,7 +6,7 @@
 python3 scripts/build_catalog.py > docs/indicator-catalog.md
 ```
 
-**67** scraped indicators × **36** brief aliases × **12** unit conversions × **45** derived = **160** total entries.
+**63** scraped indicators × **36** brief aliases × **12** unit conversions × **45** derived = **150** total entries.
 
 Read the data contract for column semantics and query examples: [`data-contract.md`](data-contract.md).
 
@@ -135,6 +135,7 @@ Read the data contract for column semantics and query examples: [`data-contract.
 | monetary_aggregates | `deposits_held_with_bb_crr` | `amount_bdt_crore` | monthly | BB | [0.0, 5000000.0] | Deposits held with BB (CRR) |
 | monetary_aggregates | `deposits_of_the_system` | `amount_bdt_crore` | monthly | BB | [0.0, 30000000.0] | Deposits of the system |
 | monetary_aggregates | `excess_liquid_asset_total_minimum` | `amount_bdt_crore` | monthly | BB | [0.0, 5000000.0] | Excess Liquid Asset (Total-Minimum) |
+| monetary_aggregates | `m2_growth_yoy_pct` | `percent` | monthly | BB | [-10.0, 40.0] | M2 (Broad Money) Growth YoY |
 | monetary_aggregates | `money_multiplier` | `ratio` | monthly | BB | [1.0, 20.0] | Money Multiplier |
 | monetary_aggregates | `nsc_outstanding` | `amount_bdt_crore` | monthly | BB | [0.0, 5000000.0] | NSC outstanding |
 | monetary_aggregates | `private_sector_credit` | `amount_bdt_crore` | monthly | BB | [0.0, 100000000.0] | Private Sector Credit |
@@ -148,7 +149,6 @@ Read the data contract for column semantics and query examples: [`data-contract.
 | monetary_aggregates (brief alias) | `macro_credit_growth` | `percent` | monthly | BB | [-30.0, 50.0] | Alias of `private_sector_credit_yoy_pct` — Private Sector Credit Growth YoY |
 | monetary_aggregates (brief conversion) | `fiscal_nsc_outstanding` | `amount_bdt_crore` | monthly | BB | — | Conversion of `nsc_outstanding` × 1e-05 — NSC outstanding |
 | money_market | `banking_sector_crar` | `percent` | quarterly | BB | [-50.0, 30.0] | Banking Sector CAR (Capital Adequacy Ratio) |
-| money_market | `bill_bond_rates` | `percent` | daily | BB | [0.0, 25.0] | 91-Day T-Bill Cut-Off Yield |
 | money_market | `call_money_rate` | `percent` | daily | BB | [0.0, 25.0] | Call money rate |
 | money_market | `gross_npl_ratio` | `percent` | quarterly | BB | [0.0, 50.0] | Gross NPL Ratio (Banking Sector) |
 | money_market | `gsec_auction` | `amount_bdt_crore` | daily | BB | [0.0, 50000.0] | Next GSEC Auction Notional |
@@ -156,22 +156,12 @@ Read the data contract for column semantics and query examples: [`data-contract.
 | money_market | `policy_rate_repo` | `percent` | monthly | BB | [3.0, 15.0] | Policy Rate (Repo) |
 | money_market | `policy_rate_sdf` | `percent` | monthly | BB | [3.0, 12.0] | Policy Rate Corridor — SDF (floor) |
 | money_market | `policy_rate_slf` | `percent` | monthly | BB | [4.0, 16.0] | Policy Rate Corridor — SLF (ceiling) |
-| money_market | `tbill_182d_yield` | `percent` | daily | BB | [0.0, 25.0] | 182-Day T-Bill Cut-Off Yield |
-| money_market | `tbill_364d_yield` | `percent` | daily | BB | [0.0, 25.0] | 364-Day T-Bill Cut-Off Yield |
-| money_market | `tbond_10y_yield` | `percent` | weekly | BB | [0.0, 25.0] | 10-Year BGTB Cut-Off Yield |
-| money_market | `tbond_5y_yield` | `percent` | weekly | BB | [0.0, 25.0] | 5-Year BGTB Cut-Off Yield |
 | money_market | `treasury_bill_outstanding` | `amount_bdt_mn` | monthly | BB | [0.0, 10000000.0] | Treasury Bill Outstanding |
 | money_market | `treasury_bond_outstanding` | `amount_bdt_mn` | monthly | BB | [0.0, 50000000.0] | Treasury Bond Outstanding |
 | money_market (brief alias) | `banking_call_money_rate` | `percent` | daily | BB | [0.0, 25.0] | Alias of `call_money_rate` — Call money rate |
 | money_market (brief alias) | `banking_car_pct` | `percent` | quarterly | BB | [-50.0, 30.0] | Alias of `banking_sector_crar` — Banking Sector CAR (Capital Adequacy Ratio) |
 | money_market (brief alias) | `banking_npl_pct` | `percent` | quarterly | BB | [0.0, 50.0] | Alias of `gross_npl_ratio` — Gross NPL Ratio (Banking Sector) |
 | money_market (brief alias) | `gsec_next_auction_cr` | `amount_bdt_crore` | daily | BB | [0.0, 50000.0] | Alias of `gsec_auction` — Next GSEC Auction Notional |
-| money_market (brief alias) | `tbill_91d_yield_pct` | `percent` | daily | BB | [0.0, 25.0] | Alias of `bill_bond_rates` — 91-Day T-Bill Cut-Off Yield |
-| money_market (brief alias) | `tbond_bond_10y` | `percent` | weekly | BB | [0.0, 25.0] | Alias of `tbond_10y_yield` — 10-Year BGTB Cut-Off Yield |
-| money_market (brief alias) | `tbond_bond_5y` | `percent` | weekly | BB | [0.0, 25.0] | Alias of `tbond_5y_yield` — 5-Year BGTB Cut-Off Yield |
-| money_market (brief alias) | `tbond_tbill_182d` | `percent` | daily | BB | [0.0, 25.0] | Alias of `tbill_182d_yield` — 182-Day T-Bill Cut-Off Yield |
-| money_market (brief alias) | `tbond_tbill_364d` | `percent` | daily | BB | [0.0, 25.0] | Alias of `tbill_364d_yield` — 364-Day T-Bill Cut-Off Yield |
-| money_market (brief alias) | `tbond_tbill_91d` | `percent` | daily | BB | [0.0, 25.0] | Alias of `bill_bond_rates` — 91-Day T-Bill Cut-Off Yield |
 | money_market (brief conversion) | `tbill_outstanding_cr` | `amount_bdt_crore` | monthly | BB | — | Conversion of `treasury_bill_outstanding` × 0.1 — Treasury Bill Outstanding |
 | money_market (brief conversion) | `tbond_outstanding_cr` | `amount_bdt_crore` | monthly | BB | — | Conversion of `treasury_bond_outstanding` × 0.1 — Treasury Bond Outstanding |
 

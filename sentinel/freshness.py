@@ -111,7 +111,7 @@ RETIRED_METRIC_IDS: frozenset[str] = frozenset(
     {"dse_close_KOHINOOR", "dse_close_LINDEBD", "dse_close_UNIQUEHRL"}
 )
 
-# 2026-08-08 frozen-charts incident triage (AGENTS.md landmine 50): 4 of the
+# 2026-08-08 frozen-charts incident triage (AGENTS.md landmine 50): 3 of the
 # metric_history_monthly chart-feeding ids that froze alongside the CPI-trio/
 # remittance series (which DID get a live appender, see
 # aggregate_latest._write_macro_monthly_append) have no live source to
@@ -125,20 +125,27 @@ RETIRED_METRIC_IDS: frozenset[str] = frozenset(
 #     has no equivalent food/non-food 12-month-average extraction to derive
 #     from -- only the point-to-point food/non-food ids are safe daily
 #     sources, see cpi_p2p_food_monthly/cpi_p2p_nonfood_monthly).
-#   - imports_usd_mn_monthly: BB publishes cif imports on a ~2-month lag and
-#     no standalone monthly import figure exists beyond May 2026 -- a
-#     structural source lag, not a scraper regression.
 #   - exports_usd_mn_monthly: backfilled to Jun 2026 from EPB press figures
 #     (scripts/backfill_monthly_chart_series.py); the EPB portal itself is
 #     JS-rendered/unscrapeable, so there is no live writer yet. Ongoing
 #     source research is PARKED, not abandoned -- revisit note: check whether
 #     EPB or BSS ever exposes a scrapeable monthly export table before
 #     assuming this stays accepted-stale forever.
+#
+# imports_usd_mn_monthly was REMOVED from this set in the same PR that added
+# its live leg (PR-C, build-brief item 1) -- BB's MEI PDF DOES carry a
+# "Custom based import (c&f)" monthly series (aggregate_latest's imports
+# sub-path in _write_macro_monthly_append), so the earlier "no standalone
+# monthly import figure exists" note above was wrong at the time and is
+# corrected here. Its genuine ~2-month publication lag is now handled as a
+# CADENCE choice instead (sentinel/cadence.py maps it to "quarterly", a
+# 165-day grace -- comfortably covers the real lag while still catching a
+# genuinely dead PDF leg within two fiscal quarters), not a staleness
+# exemption: a live leg that stops working should still be able to breach.
 ACCEPTED_STALE_METRIC_IDS = ACCEPTED_STALE_METRIC_IDS | frozenset(
     {
         "cpi_12m_food_monthly",
         "cpi_12m_nonfood_monthly",
-        "imports_usd_mn_monthly",
         "exports_usd_mn_monthly",
     }
 )
