@@ -8,8 +8,6 @@ Two shapes:
 """
 from __future__ import annotations
 
-from collections import Counter
-
 from .freshness import (
     BRIEF_SURFACED_METRIC_IDS,
     CHART_FEEDING_METRIC_IDS,
@@ -20,64 +18,22 @@ from .freshness import (
 # BD week starts Sunday. Python date.weekday(): Mon=0 … Sun=6.
 HEARTBEAT_WEEKDAY = 6
 
-# Keep the digest under Discord's 2000-char embed-description ceiling.
-# CHART-FEEDING and BRIEF-SURFACED breaches are shown in full, in COUNT --
-# never truncated by a line cap, because being buried past one is exactly the
-# failure this exists to prevent (real CPI breaches were once buried at
-# digest rank 28-54 inside an undifferentiated "…and 37 more" line). But
-# "never capped by count" cannot mean "never capped at all": their combined
-# id universe (16 + ~50) could in a worst-case pathological run alone
-# approach the character ceiling. The actual enforcement is CHARACTER-
-# BUDGET-aware (_fit_other_lines below) applied to the LOWER-PRIORITY "Other"
-# tier only -- it shrinks to fit whatever room chart-feeding/brief-surfaced
-# left, rather than the old scheme where all three tiers competed for one
-# shared LINE-COUNT budget (which is what let "Other" push real breaches
-# past line 25 in the first place).
-_DISCORD_MESSAGE_CHAR_CAP = 2000
-# Headroom reserved for the overflow-summary line itself, future-dated block,
-# and parked-line suffix that get appended after the character-budgeted
-# "Other" section is built.
-_OTHER_SECTION_SAFETY_MARGIN = 250
+# Discord's embed-description ceiling is 2000 chars; a HARD budget of 1900
+# leaves headroom for the title/fields (a separate field on the notify()
+# call, but Discord's embed as a WHOLE has its own overall size ceiling too)
+# and for the tail line this module always appends when anything was
+# trimmed. This is enforced over the FULL assembled message (breach section
+# + parked line + future-dated block), not just the breach lines in
+# isolation -- 2026-08-22 round-1 review HIGH-3: a prior version budgeted
+# only the "Other" tier and could still overflow once a parked line or a
+# large future-dated block was appended on top, which is exactly the broad-
+# outage case (many chart-feeding/brief-surfaced breaches AND several
+# future-dated rows at once) where notifier.py has no truncation of its own
+# and Discord's webhook API 400s a too-long embed -- silently dropping the
+# ENTIRE digest, not just the tail of it.
+_HARD_MESSAGE_CHAR_BUDGET = 1900
 _MAX_UNMAPPED_IN_HEARTBEAT = 15
 _MAX_FUTURE_DATED_LINES = 10
-
-# Coarse prefix -> category label for grouping the "Other" tier's overflow.
-# Checked in order; the FIRST match wins, so a more specific prefix must sit
-# before a shorter one it would otherwise shadow (none currently overlap,
-# but keep future additions ordered narrowest-first).
-_CATEGORY_PREFIXES: tuple[tuple[str, str], ...] = (
-    ("dse_close_", "DSE per-ticker closes"),
-    ("dse_sector_heat_", "DSE sector heat"),
-    ("npl_rate_sub_", "NPL structure (sub-sector)"),
-    ("npl_rate_band_", "NPL structure (loan bands)"),
-    ("npl_rate_sector_", "NPL structure (sector)"),
-    ("npl_rate_cmsme_", "NPL structure (CMSME)"),
-    ("npl_", "NPL structure"),
-    ("loans_outstanding_band_", "Loan bands"),
-    ("lending_share_sector_", "Lending shares"),
-    ("deposits_", "Deposit ownership"),
-    ("call_money_rate", "Call money tenors"),
-    ("crr_utilisation", "Reserve utilisation"),
-    ("slr_utilisation", "Reserve utilisation"),
-    ("tbill_", "T-bill/T-bond yields"),
-    ("tbond_", "T-bill/T-bond yields"),
-    ("yield_", "T-bill/T-bond yields"),
-)
-
-
-def _category(metric_id: str) -> str:
-    """Coarse grouping label for an "Other"-tier metric id, for the overflow
-    summary — never guaranteed exhaustive, only good enough to turn a flat
-    "…and 37 more" into something a reader can triage without opening a
-    dashboard."""
-    for prefix, label in _CATEGORY_PREFIXES:
-        if metric_id.startswith(prefix):
-            return label
-    # Deliberately NOT "Other" -- that word is already the tier heading
-    # ("Other (internal/parity, not reader-visible):"), and a naive fallback
-    # label would make this overflow line collide with it under substring
-    # matching (e.g. a test or reader searching for "Other:").
-    return "Uncategorized"
 
 
 def should_send(report: FreshnessReport, *, is_heartbeat_day: bool) -> bool:
@@ -85,7 +41,11 @@ def should_send(report: FreshnessReport, *, is_heartbeat_day: bool) -> bool:
     weekly heartbeat day.
 
     Silent non-heartbeat days are fine — the run_logs dead-man's-switch proves
-    the sentinel ran even when it says nothing.
+    the sentinel ran even when it says nothing. ``report.future_dated`` has
+    already had ``ACCEPTED_FUTURE_DATED_METRIC_IDS`` filtered out by
+    ``freshness.assess`` before this ever runs, so a known, already-diagnosed
+    future-dated mis-parse (debt_gdp_ratio) can never by itself flip this to
+    True on a quiet day.
     """
     return bool(report.breaches) or bool(report.future_dated) or is_heartbeat_day
 
@@ -100,41 +60,78 @@ def _future_dated_line(m: MetricFreshness) -> str:
     return f"`{m.metric_id}` · as_of={m.latest_as_of} is {-m.age_days}d in the future"
 
 
-def _overflow_summary(dropped: list[MetricFreshness]) -> str:
-    """"…and N more" grouped by category instead of a flat count."""
-    counts = Counter(_category(m.metric_id) for m in dropped)
-    by_category = ", ".join(f"{label}: {n}" for label, n in sorted(counts.items()))
-    return f"…and {len(dropped)} more ({by_category})"
+def _render_breach_section(
+    chart_lines: list[str], brief_lines: list[str], other_lines: list[str]
+) -> str:
+    lines: list[str] = []
+    if chart_lines:
+        lines.append("CHART-FEEDING — visible to readers:")
+        lines.extend(chart_lines)
+    if brief_lines:
+        lines.append("BRIEF-SURFACED — visible to readers:")
+        lines.extend(brief_lines)
+    if other_lines:
+        lines.append("Other (internal/parity, not reader-visible):")
+        lines.extend(other_lines)
+    return "\n".join(lines)
 
 
-def _fit_other_lines(
-    other_breaches: list[MetricFreshness], *, chars_already_used: int
-) -> tuple[list[str], list[MetricFreshness]]:
-    """Fit as many "Other"-tier lines as the remaining character budget
-    allows, given how much of ``_DISCORD_MESSAGE_CHAR_CAP`` the higher-
-    priority sections (chart-feeding, brief-surfaced) already consumed.
+def _fit_breach_section(
+    chart_breaches: list[MetricFreshness],
+    brief_breaches: list[MetricFreshness],
+    other_breaches: list[MetricFreshness],
+    *,
+    budget: int,
+) -> str:
+    """Render the three-tier breach section, trimming lines one at a time
+    from the LOWEST-priority non-empty tier (Other, then brief-surfaced,
+    then chart-feeding as an absolute last resort) until it fits ``budget``
+    characters, and always appending a hidden-count tail line when anything
+    was cut.
 
-    Returns (shown_lines, dropped_metrics). Character-budget-aware rather
-    than a fixed line count: a fixed count either wastes budget on a quiet
-    day (few chart/brief breaches) or -- the bug this whole restructure
-    exists to fix -- lets a fixed shared count push reader-visible metrics
-    out of the message entirely on a busy one.
+    Chart-feeding and brief-surfaced are never trimmed FIRST -- they are the
+    whole point of this restructure (2026-08-08 landmine 50: a chart-feeding
+    freeze once hid inside an undifferentiated overflow line). But "trimmed
+    last" is not "never trimmed": in a genuinely pathological run (dozens of
+    reader-visible breaches at once, real production ceiling ~66 possible
+    ids), even the reader-visible tiers alone could exceed Discord's cap, and
+    silently exceeding it means the notifier 400s and the ENTIRE digest is
+    dropped -- worse than a partial one. Worst-first ordering is preserved
+    throughout (report.breaches already sorted worst-first; trimming drops
+    from the END of each list, so the WORST breaches in every tier are the
+    ones kept the longest).
     """
-    budget = _DISCORD_MESSAGE_CHAR_CAP - _OTHER_SECTION_SAFETY_MARGIN - chars_already_used
-    if budget <= 0:
-        return [], list(other_breaches)
+    shown_chart = [_breach_line(m) for m in chart_breaches]
+    shown_brief = [_breach_line(m) for m in brief_breaches]
+    shown_other = [_breach_line(m) for m in other_breaches]
+    hidden = {"chart-feeding": 0, "brief-surfaced": 0, "other": 0}
 
-    header_cost = len("Other (internal/parity, not reader-visible):\n")
-    remaining = budget - header_cost
-    shown: list[str] = []
-    for i, m in enumerate(other_breaches):
-        line = _breach_line(m)
-        cost = len(line) + 1  # +1 for the joining newline
-        if cost > remaining:
-            return shown, other_breaches[i:]
-        shown.append(line)
-        remaining -= cost
-    return shown, []
+    def render() -> str:
+        section = _render_breach_section(shown_chart, shown_brief, shown_other)
+        total_hidden = sum(hidden.values())
+        if total_hidden:
+            parts = [f"{n} {label}" for label, n in hidden.items() if n]
+            section += f"\n+{total_hidden} more ({', '.join(parts)}) hidden"
+        return section
+
+    # Trim ONE line at a time from the lowest-priority non-empty tier,
+    # re-checking the FULLY rendered output (tail line included, since it
+    # grows as more gets hidden) against budget every iteration -- this is
+    # what guarantees the hard cap holds even accounting for the tail line's
+    # own length, rather than reserving a fixed, possibly-wrong-sized margin
+    # for it up front.
+    while len(render()) > budget and (shown_other or shown_brief or shown_chart):
+        if shown_other:
+            shown_other.pop()
+            hidden["other"] += 1
+        elif shown_brief:
+            shown_brief.pop()
+            hidden["brief-surfaced"] += 1
+        else:
+            shown_chart.pop()
+            hidden["chart-feeding"] += 1
+
+    return render()
 
 
 def format_digest(
@@ -162,8 +159,8 @@ def format_digest(
     # Built once, appended to whichever branch below actually returns --
     # empty string (a no-op append) on any non-heartbeat day or when there's
     # nothing parked to report. Kept to ONE compact line (no "frozen at" /
-    # "see ACCEPTED_STALE comments" verbosity) to protect Discord's 2000-char
-    # embed-description ceiling.
+    # "see ACCEPTED_STALE comments" verbosity) to protect the hard message
+    # character budget below.
     parked_chart_feeding = (
         [s for s in report.accepted_stale if s.metric_id in CHART_FEEDING_METRIC_IDS]
         if is_heartbeat_day
@@ -177,9 +174,11 @@ def format_digest(
         )
         parked_line = f"\nChart-feeding, parked: {parked_desc}"
 
-    # Future-dated as_of (freshness.py no longer silently discards these) —
-    # its own line, prepended to whichever digest shape below actually fires,
-    # so a mis-parsed future vintage is never quietly absorbed into "fresh".
+    # Future-dated as_of (freshness.py no longer silently discards these,
+    # minus ACCEPTED_FUTURE_DATED_METRIC_IDS which assess() already
+    # excluded) — its own line, prepended to whichever digest shape below
+    # actually fires, so a mis-parsed future vintage is never quietly
+    # absorbed into "fresh".
     future_dated_block = ""
     if report.future_dated:
         shown_future = report.future_dated[:_MAX_FUTURE_DATED_LINES]
@@ -190,6 +189,8 @@ def format_digest(
             f"\n\nFUTURE-DATED as_of ({n_future}) — likely a mis-parse, never "
             "read as this week's vintage:\n" + "\n".join(future_lines)
         )
+
+    suffix = parked_line + future_dated_block
 
     if n_breach:
         title = f"Freshness sentinel — {n_breach} stale metric(s)"
@@ -202,10 +203,9 @@ def format_digest(
         # their own headings, worst-first within each group (all three lists
         # are filtered from report.breaches, which freshness.assess already
         # sorted worst-first -- filtering preserves that relative order), and
-        # are NEVER truncated: being buried past a line cap is the exact
-        # failure this restructure exists to prevent. Only the "Other"
-        # (internal/parity-only) tier is capped, and its overflow is grouped
-        # by category instead of a flat count.
+        # are trimmed LAST, not never: see _fit_breach_section's docstring
+        # for why "never truncated by a line cap" still needs a hard
+        # character-budget backstop (HIGH-3, 2026-08-22 round-1 review).
         chart_breaches = [m for m in report.breaches if m.metric_id in CHART_FEEDING_METRIC_IDS]
         brief_breaches = [
             m for m in report.breaches
@@ -218,25 +218,10 @@ def format_digest(
             and m.metric_id not in BRIEF_SURFACED_METRIC_IDS
         ]
 
-        lines: list[str] = ["Metrics past their cadence grace window:"]
-        if chart_breaches:
-            lines.append("CHART-FEEDING — visible to readers:")
-            lines.extend(_breach_line(m) for m in chart_breaches)
-        if brief_breaches:
-            lines.append("BRIEF-SURFACED — visible to readers:")
-            lines.extend(_breach_line(m) for m in brief_breaches)
-        if other_breaches:
-            chars_used = len("\n".join(lines)) + 1
-            shown_other, dropped = _fit_other_lines(
-                other_breaches, chars_already_used=chars_used
-            )
-            if shown_other or dropped:
-                lines.append("Other (internal/parity, not reader-visible):")
-                lines.extend(shown_other)
-            if dropped:
-                lines.append(_overflow_summary(dropped))
-
-        message = "\n".join(lines) + parked_line + future_dated_block
+        header = "Metrics past their cadence grace window:"
+        budget = _HARD_MESSAGE_CHAR_BUDGET - len(header) - 1 - len(suffix)
+        section = _fit_breach_section(chart_breaches, brief_breaches, other_breaches, budget=budget)
+        message = header + "\n" + section + suffix
         fields = {
             "Breached": str(n_breach),
             "Fresh": str(n_fresh),
@@ -258,7 +243,7 @@ def format_digest(
             f"\n{n_unmapped} metric(s) have no resolvable cadence / no current "
             f"vintage — dedupe/retire candidates: {preview}{more}"
         )
-    message += parked_line + future_dated_block
+    message += suffix
     fields = {"Fresh": str(n_fresh), "Unmapped": str(n_unmapped)}
     if n_future:
         fields["Future-dated"] = str(n_future)
