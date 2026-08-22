@@ -816,6 +816,27 @@ def wrap_run(source: str, unit: str, main_func: _Callable[[], int]) -> int:
         tail = handler.tail()
         error = _finalize_run_error(tail, head=head)
         log_run_end(run_id, started_at, status="fail", exit_code=1, error=error)
+        # Confirmed gap (2026-08-22 date-integrity audit): a scraper crashing
+        # OUTSIDE its own narrower try/except (e.g. bb_forex.py's guarded
+        # fetch+parse block catches everything there, but the anomaly-check
+        # code that runs AFTER it is unguarded) landed here with a run_logs
+        # row and nothing else -- no Discord alert, invisible unless someone
+        # went looking. Every scraper's OWN try/except already notifies at
+        # its own failure sites (see e.g. scrapers/dse_market.py,
+        # scrapers/bb_forex.py) and never reaches this branch, so this can
+        # never double-notify for those -- it only fires for the failure
+        # class those sites structurally cannot see: an exception that
+        # escaped them entirely. Same channel the aggregate hard-reject uses.
+        try:
+            _lazy_notify()(
+                "error",
+                f"{source} crashed — run_logs status=fail",
+                f"Uncaught exception in {source} (unit: {unit}): {error}",
+            )
+        except Exception as notify_exc:  # noqa: BLE001 — never mask the real exception
+            logger.warning(
+                "wrap_run: failed to notify about %s crash: %s", source, notify_exc
+            )
         raise
     finally:
         root_logger.removeHandler(handler)

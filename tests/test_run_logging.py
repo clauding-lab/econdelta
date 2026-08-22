@@ -403,6 +403,62 @@ class TestWrapRunErrorCapture:
         assert "RuntimeError: kaboom" in captured["error"]
         assert "retrying after timeout" in captured["error"]
 
+    def test_uncaught_exception_notifies_once(self, monkeypatch):
+        """Confirmed gap (2026-08-22 date-integrity audit): a scraper crash
+        OUTSIDE its own narrower try/except used to land here with a
+        run_logs row and nothing else -- invisible unless someone went
+        looking. Every crash that reaches this branch must now notify."""
+        from unittest.mock import patch
+
+        from utils import supabase_writer
+
+        monkeypatch.setattr(supabase_writer, "log_run_end", lambda *a, **k: None)
+
+        def boom():
+            raise RuntimeError("kaboom")
+
+        with patch("utils.notifier.notify") as mock_notify:
+            with pytest.raises(RuntimeError, match="kaboom"):
+                supabase_writer.wrap_run("bb_forex", "econdelta-forex.service", boom)
+
+        mock_notify.assert_called_once()
+        call_args = mock_notify.call_args[0]
+        assert call_args[0] == "error"
+        assert "bb_forex" in call_args[1]
+        assert "kaboom" in call_args[2]
+
+    def test_notify_failure_never_masks_the_original_exception(self, monkeypatch):
+        """A broken notifier (network down, bad webhook) must not swallow or
+        replace the real crash -- the original exception still propagates."""
+        from unittest.mock import patch
+
+        from utils import supabase_writer
+
+        monkeypatch.setattr(supabase_writer, "log_run_end", lambda *a, **k: None)
+
+        def boom():
+            raise RuntimeError("kaboom")
+
+        with patch("utils.notifier.notify", side_effect=Exception("webhook down")):
+            with pytest.raises(RuntimeError, match="kaboom"):
+                supabase_writer.wrap_run("bb_forex", "econdelta-forex.service", boom)
+
+    def test_clean_exit_1_return_does_not_double_notify(self, monkeypatch):
+        """A scraper that already notified at its own failure site and
+        returns exit 1 cleanly (no exception) must NOT get a second, generic
+        alert from wrap_run -- only an escaped exception reaches this path."""
+        from unittest.mock import patch
+
+        from utils import supabase_writer
+
+        monkeypatch.setattr(supabase_writer, "log_run_end", lambda *a, **k: None)
+
+        with patch("utils.notifier.notify") as mock_notify:
+            rc = supabase_writer.wrap_run("dse_market", "econdelta-dse.service", lambda: 1)
+
+        assert rc == 1
+        mock_notify.assert_not_called()
+
     def test_error_is_truncated_and_scrubbed(self, monkeypatch):
         from utils import supabase_writer
         captured = {}

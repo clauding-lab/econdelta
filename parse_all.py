@@ -316,7 +316,20 @@ def main() -> int:
     if not args.skip_claude_preflight:
         _claude_warmup()
         if not _claude_preflight():
-            logger.error("aborting parse run — claude CLI not reachable; aggregate will keep last good latest.json")
+            reason = (
+                "claude CLI not reachable after retries — aborting the whole "
+                "parse run before any indicator was attempted; aggregate will "
+                "keep last good latest.json this cycle."
+            )
+            logger.error(reason)
+            # Confirmed gap (2026-08-22 date-integrity audit): this branch
+            # returned exit 1 (run_logs status='fail' via wrap_run) with NO
+            # notify() call at all -- a preflight failure was visible only to
+            # someone who went looking in run_logs/journalctl, unlike
+            # assess_parse_floor's breach below (which DOES notify). Same
+            # channel the aggregate hard-reject uses (utils.notifier.notify),
+            # one alert per failed run.
+            notify("error", "parse_all aborted — claude CLI unreachable", reason)
             return 1
     snapshots = run(config_path=args.config, data_root=args.data_root, only=args.only)
     by_prov: dict[str, int] = {}
