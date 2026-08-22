@@ -204,7 +204,7 @@ class TestCpiMonthlyAppendRows:
         assert "cpi_12m_avg_monthly" not in by_id
         assert "cpi_p2p_food_monthly" in by_id
         assert "cpi_p2p_nonfood_monthly" in by_id
-        assert any("wrong CPI column" in r for r in reasons)
+        assert any("exactly equals" in r for r in reasons)
 
     def test_general_differing_from_p2p_is_not_guarded(self):
         """A genuine (non-equal) general_inflation reading must NOT be
@@ -217,7 +217,7 @@ class TestCpiMonthlyAppendRows:
             today=TODAY,
         )
         assert {r["metric_id"] for r in rows} == {"cpi_12m_avg_monthly"}
-        assert not any("wrong CPI column" in r for r in reasons)
+        assert not any("exactly equals" in r for r in reasons)
 
     def test_equality_guard_requires_matching_as_of(self):
         """Equal VALUES on DIFFERENT months is coincidence, not the wrong-

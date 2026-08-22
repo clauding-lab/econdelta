@@ -134,6 +134,34 @@ class TestParseImportsRows:
         with pytest.raises(ValueError, match="ZERO"):
             agg._parse_imports_rows(table)
 
+    def test_l2_footnote_digit_after_p_is_tolerated(self):
+        """A 'FY26P2' header (a footnote-marked P column, confirmed live on
+        this same MEI PDF's Import LCs columns, though never observed yet
+        on 'Custom based import (c&f)' itself) must still resolve as a P
+        column for FY26, not silently fail to match at all."""
+        table = [
+            ["", "Custom based import (c&f)", None],
+            ["Month", "FY26P2", "FY25R"],
+            ["July", "100.0", "90.0"],
+        ]
+        rows = agg._parse_imports_rows(table)
+        assert rows == [(date(2025, 7, 1), 100.0)]
+
+    def test_l1_prefers_the_max_fy_end_year_when_both_columns_are_p(self):
+        """An unusual transition-edition shape: BOTH of the group's two
+        columns read 'P' (different FY years) instead of the normal P-vs-R
+        pairing. The max FY-end-year must win, regardless of which column
+        comes first in iteration order."""
+        table = [
+            ["", "Custom based import (c&f)", None],
+            ["Month", "FY26P", "FY27P"],  # older P listed FIRST -- must not win
+            ["July", "100.0", "999.0"],
+        ]
+        rows = agg._parse_imports_rows(table)
+        # FY27P wins (max), so "July" resolves under FY27 (July 2026), using
+        # the FY27P column's OWN value (999.0), not FY26P's (100.0).
+        assert rows == [(date(2026, 7, 1), 999.0)]
+
 
 # ---------------------------------------------------------------------------
 # _imports_splice_check -- the MANDATORY pre-write guard
@@ -175,6 +203,94 @@ class TestImportsSpliceCheck:
         pdf = db * 1.021
         problem = agg._imports_splice_check({date(2026, 3, 1): pdf}, {date(2026, 3, 1): db})
         assert problem is not None
+
+    # --- Opus review round 1, H1: dynamic anchor (max of the intersection) --
+
+    def test_anchor_is_the_max_of_the_overlap_not_the_first_key(self):
+        """Multiple months overlap -- the anchor must be the LATEST shared
+        month, not an arbitrary/first one. Deliberately makes the older
+        shared month fail tolerance so a wrong (non-max) anchor choice
+        would be caught by this test."""
+        pdf_rows = {
+            date(2026, 3, 1): 9999.0,  # would FAIL tolerance if wrongly chosen
+            date(2026, 4, 1): 7066.10,
+            date(2026, 5, 1): 6108.22,
+        }
+        db_rows = {
+            date(2026, 3, 1): 5826.2,
+            date(2026, 4, 1): 7066.10,
+            date(2026, 5, 1): 6108.22,
+        }
+        problem = agg._imports_splice_check(pdf_rows, db_rows)
+        assert problem is None  # anchored on May (the max), which matches exactly
+
+    def test_no_overlap_at_all_fails_closed(self):
+        """The narrow post-FY-roll window this fix cannot fully eliminate:
+        if the PDF's provisional column and the DB share literally no
+        month, there is nothing to verify continuity against."""
+        problem = agg._imports_splice_check(
+            {date(2026, 7, 1): 6270.46}, {date(2026, 5, 1): 6108.22},
+        )
+        assert problem is not None
+        assert "unavailable" in problem
+
+    def test_survives_a_hardcoded_march_anchor_that_no_longer_exists(self):
+        """The exact regression this fix prevents: March 2026 is no longer
+        in the PDF's provisional column (it rolled to 'R'), but a LATER
+        month the DB already has (June) still is -- the old hardcoded-
+        March-anchor design would have failed closed here forever; the
+        dynamic anchor must still succeed."""
+        pdf_rows = {
+            date(2026, 6, 1): 9440.0,  # still in 'P' post-roll (last FY26 month)
+            date(2026, 7, 1): 6270.46,  # first FY27 month, not yet in DB
+        }
+        db_rows = {
+            date(2026, 5, 1): 6108.22,
+            date(2026, 6, 1): 9440.0,
+        }
+        problem = agg._imports_splice_check(pdf_rows, db_rows)
+        assert problem is None  # anchored on June -- March is irrelevant now
+
+
+class TestImportsSpliceCheckAcrossFYRoll:
+    """End-to-end: _parse_imports_rows already handles a table with an OLD
+    'Month FY26P FY25R' block's tail followed by a NEW 'Month FY27P FY26R'
+    block (it re-resolves the active P/R column at every 'Month' header it
+    encounters, so this needs no parser change) -- this proves the dynamic
+    splice anchor correctly finds the shared month across that boundary."""
+
+    def test_rolled_fy27p_header_still_finds_a_valid_anchor(self):
+        table = [
+            ["(USD in million)"],
+            ["", "Custom based import (c&f)", None],
+            # Tail of the OLD FY26 monthly block (still 'P' at this point).
+            ["Month", "FY26P", "FY25R"],
+            ["May", "6108.22", "5787.32"],
+            ["June", "9440.00", "6453.82"],
+            # The FY rolls: a NEW block opens, June/May now excluded (they
+            # would show up under FY26R here in the real document -- this
+            # synthetic table omits that column since _parse_imports_rows
+            # never reads 'R').
+            ["Month", "FY27P", "FY26R"],
+            ["July", "6270.46", "6270.46"],
+        ]
+        parsed = dict(agg._parse_imports_rows(table))
+        assert parsed[date(2026, 6, 1)] == pytest.approx(9440.0)
+        assert parsed[date(2026, 7, 1)] == pytest.approx(6270.46)
+        assert date(2026, 3, 1) not in parsed  # March is long gone from 'P'
+
+        # The DB already has everything through June (appended before the
+        # roll) -- the dynamic anchor must land on June, not March.
+        db_rows = {date(2026, 5, 1): 6108.22, date(2026, 6, 1): 9440.0}
+        problem = agg._imports_splice_check(parsed, db_rows)
+        assert problem is None
+
+        # And July becomes the one genuinely new row to append.
+        rows, reasons = agg._select_new_imports_rows(
+            list(parsed.items()), existing_as_of=set(db_rows), today=date(2026, 9, 15),
+        )
+        assert [r["as_of"] for r in rows] == ["2026-07-01"]
+        assert reasons == []
 
 
 # ---------------------------------------------------------------------------
@@ -337,6 +453,51 @@ class TestImportsSubPath:
         n = agg._write_macro_monthly_append(today=TODAY)
         assert n == 0
         assert any("imports read failed" in title for _level, title in notify_calls)
+
+    # --- M5 (Opus review round 1): mirror remittance's M6 skip-fetch gate --
+
+    def test_m5_fetch_skipped_when_previous_month_already_present(self, monkeypatch):
+        import utils.supabase_reader as reader
+        import utils.supabase_writer as writer
+
+        self._silence_cpi_and_remittance(monkeypatch)
+        prev_month = agg._previous_month_start(TODAY)  # 2026-07-01
+
+        def get_metric_history_monthly_dispatch(metric_id, **kwargs):
+            if metric_id == agg._IMPORTS_MONTHLY_ID:
+                return [{"metric_id": metric_id, "as_of": prev_month.isoformat(), "value": 6270.46}]
+            return []
+
+        monkeypatch.setattr(reader, "get_metric_history_monthly", get_metric_history_monthly_dispatch)
+        monkeypatch.setattr(
+            agg, "_fetch_imports_mei_pdf",
+            lambda: pytest.fail("M5: fetch must be skipped when the previous month already exists"),
+        )
+        monkeypatch.setattr(writer, "upsert_metric_history_monthly", lambda *a, **k: 0)
+        monkeypatch.setattr(agg, "notify", lambda *a, **k: True)
+
+        n = agg._write_macro_monthly_append(today=TODAY)
+        assert n == 0
+
+    def test_m5_fetch_attempted_when_previous_month_missing(self, monkeypatch):
+        import utils.supabase_reader as reader
+        import utils.supabase_writer as writer
+
+        self._silence_cpi_and_remittance(monkeypatch)
+        monkeypatch.setattr(reader, "get_metric_history_monthly", lambda *a, **k: [])
+
+        fetch_calls = {"n": 0}
+
+        def counted_fetch():
+            fetch_calls["n"] += 1
+            raise FetchError("unreachable")
+
+        monkeypatch.setattr(agg, "_fetch_imports_mei_pdf", counted_fetch)
+        monkeypatch.setattr(writer, "upsert_metric_history_monthly", lambda *a, **k: 0)
+        monkeypatch.setattr(agg, "notify", lambda *a, **k: True)
+
+        agg._write_macro_monthly_append(today=TODAY)
+        assert fetch_calls["n"] == 1
 
 
 # ---------------------------------------------------------------------------
@@ -565,6 +726,11 @@ def test_main_merges_derived_yields_into_data_and_source_as_of_map(tmp_path, mon
     assert exit_code == 0
     assert captured_data.get("tbond_5y_yield") == pytest.approx(9.3496)
     assert captured_data["__source_as_of_map__"].get("tbond_5y_yield") == date(2026, 8, 12)
+    # H3 (Opus review round 1): the brief-facing alias (tbond_bond_5y ->
+    # tbond_5y_yield) must carry the SAME real auction date, not fall
+    # through to upsert_metric_history's as_of=today forgery fallback.
+    assert captured_data.get("tbond_bond_5y") == pytest.approx(9.3496)
+    assert captured_data["__source_as_of_map__"].get("tbond_bond_5y") == date(2026, 8, 12)
 
 
 # ---------------------------------------------------------------------------
