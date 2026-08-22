@@ -53,17 +53,21 @@ _SCRAPER_CADENCE: dict[str, str] = {
     # REMOVED from config/sources-v3.json (the BB treasury page's two-
     # yield-column trap shipped wrong bond yields for weeks) and are now
     # derived from auction_results by
-    # aggregate_latest._derive_daily_yields_from_auctions instead. "weekly"
-    # (not "daily") matches landmine 40's own characterization -- these are
-    # real auction cutoffs, not a value that moves every calendar day
-    # (91d/182d/364d bills auction roughly weekly; 5y/10y bonds far less
-    # often), so a "daily" 2-trading-day grace would nag on every healthy
-    # gap between auctions.
+    # aggregate_latest._derive_daily_yields_from_auctions instead. "daily"
+    # would nag on every healthy gap between auctions, since these are real
+    # auction cutoffs, not a value that moves every calendar day -- but the
+    # two tenor families genuinely auction at different cadences (Opus
+    # review round 1, H2 -- 2026-08-23 fix of a self-contradicting comment
+    # that assigned BOTH "weekly" while describing bonds as "far less
+    # often"): 91d/182d/364d T-bills auction roughly weekly, so "weekly"
+    # (10-day grace) fits; 5y/10y BGTB bonds auction roughly monthly-to-
+    # quarterly, so they get "monthly" (45-day grace) instead -- the SAME
+    # split briefing/config.py's own C1 fix uses for the same reason.
     "bill_bond_rates": "weekly",
     "tbill_182d_yield": "weekly",
     "tbill_364d_yield": "weekly",
-    "tbond_5y_yield": "weekly",
-    "tbond_10y_yield": "weekly",
+    "tbond_5y_yield": "monthly",
+    "tbond_10y_yield": "monthly",
     # import_cover_months is deliberately NOT mapped: BB's reserves page has
     # never published it (scrapers/bb_forex.py hardcodes it to None) -- zero
     # rows in metric_history, ever. The id stays in the schema/flatten harmlessly;

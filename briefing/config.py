@@ -33,15 +33,29 @@ CORE_METRIC_IDS = frozenset({
 # read their metric_history rows, and assess_freshness's "core metric
 # entirely absent from history" branch (briefing/freshness.py) would mark
 # the briefing core_stale EVERY week, forever -- turning a source-quality
-# fix into a permanently-skipped weekly briefing. Cadence "weekly" matches
-# sentinel/cadence.py's own override for the same 5 ids (real auction
-# cutoffs, not a value that moves every calendar day).
+# fix into a permanently-skipped weekly briefing.
+#
+# CADENCE (Opus review round 1, C1 -- 2026-08-23): bills stay "weekly"
+# (91d/182d/364d T-bills genuinely auction roughly weekly, so their real
+# auction_results dates comfortably clear briefing/freshness.py's 8-day
+# "weekly" window, _STALE_DAYS_BY_CADENCE). tbond_5y_yield/tbond_10y_yield
+# are "monthly" (60-day window) instead -- BGTB 5y/10y auctions land
+# roughly monthly-to-quarterly, so under honest auction-date `as_of` (this
+# PR's whole point) an 8-day window would read core_stale on almost every
+# week's briefing (measured: a bond auctioning ~monthly leaves as_of
+# 20-30+ days old on a typical Monday, comfortably past 8 days but well
+# inside 60). This INTENTIONALLY DIVERGES from sentinel/cadence.py, which
+# keeps all 5 ids at "weekly" -- the sentinel pages on a tighter, more
+# suspicious freeze window; the briefing's own publish gate needs the
+# same monthly/weekly split its other cadences already use (see
+# briefing/freshness.py's own monthly=60/quarterly=165 divergence notes)
+# so a genuinely-scheduled auction gap doesn't self-inflict a false skip.
 _RETIRED_YIELD_IDS_METADATA: dict[str, dict] = {
     "bill_bond_rates": {"cadence": "weekly", "anomaly_threshold": 1.0, "name": "91-Day T-Bill Cut-Off Yield"},
     "tbill_182d_yield": {"cadence": "weekly", "anomaly_threshold": 1.0, "name": "182-Day T-Bill Cut-Off Yield"},
     "tbill_364d_yield": {"cadence": "weekly", "anomaly_threshold": 1.0, "name": "364-Day T-Bill Cut-Off Yield"},
-    "tbond_5y_yield": {"cadence": "weekly", "anomaly_threshold": 1.0, "name": "5-Year BGTB Cut-Off Yield"},
-    "tbond_10y_yield": {"cadence": "weekly", "anomaly_threshold": 1.0, "name": "10-Year BGTB Cut-Off Yield"},
+    "tbond_5y_yield": {"cadence": "monthly", "anomaly_threshold": 1.0, "name": "5-Year BGTB Cut-Off Yield"},
+    "tbond_10y_yield": {"cadence": "monthly", "anomaly_threshold": 1.0, "name": "10-Year BGTB Cut-Off Yield"},
 }
 
 
