@@ -141,6 +141,52 @@ def test_future_as_of_is_excluded_from_latest():
     assert fresh["debt_gdp_ratio"].latest_as_of == date(2025, 12, 31)
 
 
+def test_future_as_of_is_flagged_not_silently_discarded():
+    """The exact same debt_gdp_ratio case above must ALSO surface the future
+    row as its own breach type -- excluding it from `latest_as_of` is still
+    correct, but it must leave a record instead of vanishing entirely."""
+    m = load_cadence_map()
+    report = assess(
+        rows_daily=[_row("debt_gdp_ratio", "2031-12-31"),
+                    _row("debt_gdp_ratio", "2025-12-31")],
+        rows_monthly=[],
+        cadence_map=m,
+        today=date(2026, 2, 1),
+    )
+    future = {f.metric_id: f for f in report.future_dated}
+    assert "debt_gdp_ratio" in future
+    assert future["debt_gdp_ratio"].latest_as_of == date(2031, 12, 31)
+    assert future["debt_gdp_ratio"].age_days < 0  # negative age = in the future
+    # Still correctly fresh on its REAL (non-future) vintage too -- this is a
+    # cross-cutting flag, not a replacement classification.
+    assert "debt_gdp_ratio" in {f.metric_id for f in report.fresh}
+
+
+def test_metric_with_only_future_rows_is_both_unmapped_and_future_dated():
+    """gdp has no non-future vintage at all -- unmapped for scoring purposes,
+    but the future row itself must still be visible."""
+    m = load_cadence_map()
+    report = assess(
+        rows_daily=[_row("gdp", "2099-12-31")],
+        rows_monthly=[],
+        cadence_map=m,
+        today=date(2026, 7, 4),
+    )
+    assert {u.metric_id for u in report.unmapped} == {"gdp"}
+    assert {f.metric_id for f in report.future_dated} == {"gdp"}
+
+
+def test_no_future_rows_leaves_future_dated_empty():
+    m = load_cadence_map()
+    report = assess(
+        rows_daily=[_row("dsex", "2026-07-01")],
+        rows_monthly=[],
+        cadence_map=m,
+        today=date(2026, 7, 4),
+    )
+    assert report.future_dated == []
+
+
 def test_metric_only_in_monthly_table_resolves_monthly():
     m = load_cadence_map()
     report = assess(
