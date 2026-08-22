@@ -434,10 +434,12 @@ def test_exports_usd_mn_monthly_routes_to_accepted_stale():
     assert "exports_usd_mn_monthly" not in {b.metric_id for b in report.breaches}
 
 
-def test_chart_feeding_metric_ids_has_exactly_16_ids():
+def test_chart_feeding_metric_ids_has_exactly_17_ids():
+    """PR-C (Opus review round 1, M8): m2_growth_yoy_monthly joined this
+    tier after gaining a live appender in this PR."""
     from sentinel.freshness import CHART_FEEDING_METRIC_IDS
 
-    assert len(CHART_FEEDING_METRIC_IDS) == 16
+    assert len(CHART_FEEDING_METRIC_IDS) == 17
     assert CHART_FEEDING_METRIC_IDS == {
         "remittance_usd_mn_monthly", "exports_usd_mn_monthly", "imports_usd_mn_monthly",
         "cpi_12m_avg_monthly", "cpi_p2p_food_monthly", "cpi_p2p_nonfood_monthly",
@@ -445,4 +447,5 @@ def test_chart_feeding_metric_ids_has_exactly_16_ids():
         "yield_2y_monthly", "yield_5y_monthly", "yield_10y_monthly",
         "yield_15y_monthly", "yield_20y_monthly",
         "gross_reserves_usd_bn_monthly", "net_reserves_bpm6_usd_bn_monthly",
+        "m2_growth_yoy_monthly",
     }

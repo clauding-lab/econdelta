@@ -52,11 +52,15 @@ def _run(data, source_as_of, *, day, path, notifier, watchlist=None):
 # ── real coverage gap this watchlist closes ──────────────────────────────────
 
 def test_watchlist_ids_match_the_task_spec():
-    """The nine explicit ids this PR was asked to add -- a regression guard
-    against silently dropping one during a future refactor."""
+    """The nine explicit ids the original PR was asked to add, plus
+    m2_growth_yoy_pct (PR-C, Opus review round 1, M8: private_sector_
+    credit_yoy_pct's new sibling on the same monthly HTML-page source
+    family) -- a regression guard against silently dropping one during a
+    future refactor."""
     assert set(WATCHLIST_IDS) == {
         "gross_reserves_usd_bn",
         "private_sector_credit_yoy_pct",
+        "m2_growth_yoy_pct",
         "monthly_export",
         "monthly_import",
         "monthly_remittance",

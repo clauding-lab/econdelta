@@ -327,12 +327,13 @@ def test_r3_full_breach_digest_with_parked_line_stays_under_discord_2000_char_ca
     """2026-08-08 review R3 budget note: the reviewer measured a full
     25-line breach digest close to Discord's 2000-char embed-description
     ceiling BEFORE the parked line existed. Pin the worst realistic case --
-    all 16 real chart-feeding ids breaching (the longest real metric_ids)
-    plus enough other breaches to fill the 25-line cap, plus both known
-    chart-feeding/accepted-stale ids parked -- comfortably under budget."""
+    every real chart-feeding id breaching (the longest real metric_ids,
+    now 17 since PR-C added m2_growth_yoy_monthly) plus enough other
+    breaches to fill the 25-line cap, plus both known chart-feeding/
+    accepted-stale ids parked -- comfortably under budget."""
     import sentinel.report as report_mod
 
-    chart_ids = sorted(report_mod.CHART_FEEDING_METRIC_IDS)  # 16 ids
+    chart_ids = sorted(report_mod.CHART_FEEDING_METRIC_IDS)  # len computed, not hardcoded
     chart = [_breach(mid, "monthly", 300 - i) for i, mid in enumerate(chart_ids)]
     other = [_breach(f"some_other_internal_metric_id_{i}", "daily", 50 - i) for i in range(20)]
     report = FreshnessReport(

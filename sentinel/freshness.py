@@ -176,6 +176,12 @@ CHART_FEEDING_METRIC_IDS: frozenset[str] = frozenset(
         "yield_20y_monthly",
         "gross_reserves_usd_bn_monthly",
         "net_reserves_bpm6_usd_bn_monthly",
+        # PR-C (Opus review round 1, M8, 2026-08-23): m2_growth_yoy_monthly
+        # gained a live appender in this PR (aggregate_latest.
+        # _m2_monthly_append_rows) -- The Brief's /macro tab renders it
+        # alongside the CPI trio, so a freeze here deserves the same
+        # above-the-fold visibility this tier exists to guarantee.
+        "m2_growth_yoy_monthly",
     }
 )
 

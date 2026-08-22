@@ -21,7 +21,14 @@
           50.0
         ]
       },
-      "anomaly_threshold": 1.0
+      "anomaly_threshold": 1.0,
+      "alternate": {
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
+        "type": "pdf",
+        "task": "Headline point-to-point inflation",
+        "discover": "latest_pdf_link",
+        "_note": "PR-C (2026-08-22, Opus review round 1, M7): the ORIGINAL primary source before this id was repointed to BB's live econdata/inflation HTML page -- restored here as inert documentation only (this key is never read by fetch_all.py/parse_all.py) in case the HTML page ever breaks and a maintainer wants to see what the prior fallback looked like."
+      }
     },
     {
       "id": "general_inflation",
@@ -42,7 +49,14 @@
           50.0
         ]
       },
-      "anomaly_threshold": 1.0
+      "anomaly_threshold": 1.0,
+      "alternate": {
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
+        "type": "pdf",
+        "task": "Go to page 15 of the doc, first table",
+        "discover": "latest_pdf_link",
+        "_note": "PR-C (2026-08-22, Opus review round 1, M7): the ORIGINAL primary source before this id was repointed to BB's live econdata/inflation HTML page -- restored here as inert documentation only (this key is never read by fetch_all.py/parse_all.py). This was the MEI PDF's dynamic-row-blocked pdf_table_row task, never actually reliable (landmine 49) -- kept for historical reference, not as a real fallback candidate."
+      }
     },
     {
       "id": "food_inflation",
@@ -863,7 +877,14 @@
           50.0
         ]
       },
-      "anomaly_threshold": 1.0
+      "anomaly_threshold": 1.0,
+      "alternate": {
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
+        "type": "pdf",
+        "task": "Locate the Major Economic Indicators (MEI) summary table — extract the most recent month's Private Sector Credit growth percentage on a year-on-year basis. Often labelled 'Private sector credit, % YoY', 'Domestic credit (private sector) growth %', or appearing in the 'Monetary Sector — Annual growth rates' block. Return only the numeric percentage value.",
+        "discover": "latest_pdf_link",
+        "_note": "PR-C (2026-08-22, Opus review round 1, M7): the ORIGINAL primary source before this id was repointed to BB's live econdata/monetarysurvey HTML page -- restored here as inert documentation only (this key is never read by fetch_all.py/parse_all.py). This PDF path was LLM-only (no reliable row=/col= grammar) and the June 2026 conflict it produced (4.47% press vs 4.53% BB table, see the owner decision flag in aggregate_latest.BRIEF_ALIASES) is exactly the kind of ambiguity the HTML repoint resolves."
+      }
     },
     {
       "id": "m2_growth_yoy_pct",
