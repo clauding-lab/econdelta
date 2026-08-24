@@ -296,6 +296,40 @@ class TestComputePlanAborts:
             compute_plan([occupant, mover], official)
 
 
+class TestComputePlanSameAsOfCollision:
+    """A resumed run after a mid-sequence crash can legitimately fetch TWO
+    cohorts sharing the exact same as_of at once: an unexecuted duplicate
+    still sitting at its stored (wrong) as_of, plus an already-restamped
+    mover that landed on that SAME date via an earlier action in the SAME
+    crashed run. compute_plan() must resolve each cohort against its OWN
+    match, not whichever same-as_of cohort happened to be matched last --
+    a per-as_of (rather than per-cohort-identity) lookup table silently
+    corrupts this by letting the second cohort's match overwrite the
+    first's before the first is ever read back."""
+
+    def test_duplicate_and_already_correct_cohort_sharing_as_of_both_resolve_correctly(self):
+        official = parse_official_sessions()
+        d1, d2 = date(2026, 7, 2), date(2026, 7, 5)  # adjacent real sessions
+        no_op_at_d1 = _cohort(d1.isoformat(), f"{d1.isoformat()}T08:01:00Z", dsex=official[d1].dsex)
+        # A duplicate of d1's data, mislabeled at d2 -- sorts FIRST at as_of=d2
+        # by ingested_at.
+        duplicate_at_d2 = _cohort(d2.isoformat(), "2026-07-05T01:00:00Z", dsex=official[d1].dsex)
+        # The genuinely correct d2 cohort, ALSO at as_of=d2 -- sorts SECOND.
+        correct_at_d2 = _cohort(d2.isoformat(), "2026-07-05T09:00:00Z", dsex=official[d2].dsex)
+
+        plan = compute_plan([no_op_at_d1, duplicate_at_d2, correct_at_d2], official)
+
+        assert plan.restamps == ()
+        assert len(plan.deletes) == 1
+        [delete] = plan.deletes
+        assert delete.as_of == d2
+        assert delete.ingested_at == "2026-07-05T01:00:00Z"
+        assert delete.duplicate_of == d1
+        assert {c.ingested_at for c in plan.no_actions} == {
+            no_op_at_d1.ingested_at, correct_at_d2.ingested_at,
+        }
+
+
 class TestComputePlanIdempotency:
     def test_already_healed_table_yields_zero_actions(self):
         """Every official session has exactly one correctly-dated cohort —
@@ -312,31 +346,159 @@ class TestComputePlanIdempotency:
         assert plan.insert_dates == ()
         assert len(plan.no_actions) == len(official)
 
-    def test_cross_check_raises_on_the_healed_table_against_the_incident_tripwire(self):
-        """The incident-specific EXPECTED_* tripwire is for the FIRST run
-        only -- cross-checking a healed plan against it must fail loudly
-        (proves cross_check_plan doesn't silently accept 'fewer actions than
-        expected' as fine)."""
+    def test_cross_check_passes_on_the_healed_table_zero_actions_exit_0(self):
+        """Spec requirement: 'idempotent (re-run after success = zero
+        actions, exit 0)'. The incident-specific EXPECTED_* tripwire checks
+        that every COMPUTED action is a member of the hand-verified
+        superset -- an EMPTY computed plan is trivially a subset of
+        anything, so cross_check_plan must NOT raise here. (Earlier draft
+        of this test asserted the opposite -- that was itself the bug: it
+        locked in an abort on the healed table, which made run()'s own
+        'No actions needed — DB already matches...' success message
+        unreachable dead code, since cross_check_plan() was called BEFORE
+        that print and always raised first on a fully healed table.)"""
         official = parse_official_sessions()
         cohorts = [
             _cohort(d.isoformat(), f"{d.isoformat()}T08:01:00Z", dsex=s.dsex)
             for d, s in official.items()
         ]
         plan = compute_plan(cohorts, official)
-        with pytest.raises(PlanError, match="mismatch"):
-            cross_check_plan(plan)
+        cross_check_plan(plan)  # must not raise
+
+
+class TestPartialFailureReRunConvergence:
+    """Spec requirement: 'mid-sequence-crash convergent on re-run'. Simulate
+    a --write run that crashed after committing only a PREFIX of the full
+    incident plan's actions (some deletes done, some restamps done, no
+    inserts yet), then prove a fresh compute_plan() on the resulting
+    (partially-healed) cohort set: (a) still passes cross_check_plan without
+    a human touching EXPECTED_*, (b) computes exactly the REMAINING actions
+    (not a re-do of what's already done, not a mis-derived plan), and (c)
+    that remaining plan, once conceptually applied on top of what the
+    crashed run already committed, reconstructs the exact same total set of
+    actions the untouched incident table's full first-run plan produced --
+    i.e. the two-stage (crash + resume) execution is equivalent to one
+    clean run, never double-applies, and never leaves a gap.
+    """
+
+    def _apply_ordered_prefix(self, cohorts, ordered_actions_prefix):
+        """Mutate a cohort list the way a real partial --write would leave
+        the DB after committing exactly this PREFIX of ``plan.ordered_actions``,
+        IN ORDER -- mirrors what execute_delete/execute_restamp actually do
+        to the underlying rows, at the pure-data level this test operates at
+        (no network).
+
+        Deliberately walks a genuine prefix of the SAME ``ordered_actions``
+        sequence ``run()`` executes (rather than independently slicing
+        ``.deletes`` and ``.restamps``): ``run()``'s real execution loop
+        processes actions strictly in that interleaved order, so a restamp
+        that lands INTO a slot is only ever reached after whatever action
+        vacates that slot has already run. An independently-sliced "N
+        restamps but fewer deletes" prefix does not correspond to any
+        reachable crash point of the real loop, and can construct a same-
+        as_of collision (an un-executed duplicate still sitting at its
+        stored as_of, plus an already-restamped mover landing on that same
+        date) that a real sequential crash can never produce -- ascending
+        stored-as_of order guarantees whatever vacates a target slot is
+        always ordered, and therefore executed, before the restamp that
+        moves into it."""
+        by_key = {(c.as_of, c.ingested_at): c for c in cohorts}
+        for action in ordered_actions_prefix:
+            if isinstance(action, DeleteAction):
+                del by_key[(action.as_of, action.ingested_at)]
+            else:
+                c = by_key.pop((action.old_as_of, action.ingested_at))
+                moved_rows = tuple(
+                    HistoryRow(metric_id=row.metric_id, as_of=action.new_as_of, value=row.value, ingested_at=row.ingested_at, source=row.source)
+                    for row in c.rows
+                )
+                moved = Cohort(as_of=action.new_as_of, ingested_at=action.ingested_at, rows=moved_rows)
+                by_key[(moved.as_of, moved.ingested_at)] = moved
+        return list(by_key.values())
+
+    def test_resumed_plan_is_exactly_the_remainder_and_cross_checks_clean(self):
+        official = parse_official_sessions()
+        cohorts = _build_real_cohorts()
+        full_plan = compute_plan(cohorts, official)
+        cross_check_plan(full_plan)  # sanity: the untouched first-run plan is still clean
+        assert len(full_plan.ordered_actions) == 4 + 23  # sanity on the fixture itself
+
+        # "Crash" partway through the interleaved delete/restamp sequence.
+        prefix = full_plan.ordered_actions[:6]
+        partial_cohorts = self._apply_ordered_prefix(cohorts, prefix)
+
+        resumed_plan = compute_plan(partial_cohorts, official)
+        cross_check_plan(resumed_plan)  # must NOT raise -- no human edits EXPECTED_* mid-incident
+
+        # Exactly the remainder: nothing re-done, nothing skipped, same order.
+        assert resumed_plan.ordered_actions == full_plan.ordered_actions[6:]
+        assert set(resumed_plan.insert_dates) == set(full_plan.insert_dates)
+
+    def test_two_stage_execution_reconstructs_the_full_plan(self):
+        """(what the crashed run committed) followed by (what the resumed
+        run computes) == the original untouched-table full plan, action for
+        action, in order -- proves the crash/resume split is equivalent to
+        one clean run, not a lossy or duplicating one."""
+        official = parse_official_sessions()
+        cohorts = _build_real_cohorts()
+        full_plan = compute_plan(cohorts, official)
+
+        prefix = full_plan.ordered_actions[:15]
+        partial_cohorts = self._apply_ordered_prefix(cohorts, prefix)
+        resumed_plan = compute_plan(partial_cohorts, official)
+        cross_check_plan(resumed_plan)
+
+        assert prefix + resumed_plan.ordered_actions == full_plan.ordered_actions
+        assert set(resumed_plan.insert_dates) == set(full_plan.insert_dates)
+
+    def test_crash_after_everything_but_inserts_leaves_only_inserts(self):
+        official = parse_official_sessions()
+        cohorts = _build_real_cohorts()
+        full_plan = compute_plan(cohorts, official)
+        partial_cohorts = self._apply_ordered_prefix(cohorts, full_plan.ordered_actions)
+
+        resumed_plan = compute_plan(partial_cohorts, official)
+        cross_check_plan(resumed_plan)
+        assert resumed_plan.deletes == ()
+        assert resumed_plan.restamps == ()
+        assert set(resumed_plan.insert_dates) == set(full_plan.insert_dates)
 
 
 class TestCrossCheckPlanMismatches:
-    def test_missing_restamp_aborts(self):
+    def test_missing_restamp_does_not_abort(self):
+        """A restamp present in EXPECTED_RESTAMPS but absent from the
+        computed plan is the NORMAL shape of a partially-resumed run (that
+        cohort's correction already landed in an earlier partial --write) --
+        cross_check_plan must not treat 'fewer than the full expected set'
+        as an error. (Superseded the old 'missing restamp aborts'
+        expectation -- that behavior was the confirmed bug: it made a
+        legitimate crash/resume cycle unrecoverable without a human hand-
+        editing EXPECTED_RESTAMPS.)"""
         real_plan = compute_plan(_build_real_cohorts(), parse_official_sessions())
         truncated = Plan(
             ordered_actions=tuple(a for a in real_plan.ordered_actions if not (isinstance(a, RestampAction) and a.old_as_of == date(2026, 7, 16))),
             insert_dates=real_plan.insert_dates,
             no_actions=real_plan.no_actions,
         )
-        with pytest.raises(PlanError, match="RESTAMP plan mismatch"):
-            cross_check_plan(truncated)
+        cross_check_plan(truncated)  # must not raise
+
+    def test_missing_insert_does_not_abort(self):
+        real_plan = compute_plan(_build_real_cohorts(), parse_official_sessions())
+        truncated = Plan(
+            ordered_actions=real_plan.ordered_actions,
+            insert_dates=tuple(d for d in real_plan.insert_dates if d != date(2026, 8, 20)),
+            no_actions=real_plan.no_actions,
+        )
+        cross_check_plan(truncated)  # must not raise
+
+    def test_missing_delete_does_not_abort(self):
+        real_plan = compute_plan(_build_real_cohorts(), parse_official_sessions())
+        truncated = Plan(
+            ordered_actions=tuple(a for a in real_plan.ordered_actions if not (isinstance(a, DeleteAction) and a.as_of == date(2026, 7, 13))),
+            insert_dates=real_plan.insert_dates,
+            no_actions=real_plan.no_actions,
+        )
+        cross_check_plan(truncated)  # must not raise
 
     def test_extra_delete_aborts(self):
         real_plan = compute_plan(_build_real_cohorts(), parse_official_sessions())
@@ -351,15 +513,45 @@ class TestCrossCheckPlanMismatches:
         with pytest.raises(PlanError, match="DELETE plan mismatch"):
             cross_check_plan(extra)
 
-    def test_missing_insert_aborts(self):
+    def test_extra_restamp_aborts(self):
         real_plan = compute_plan(_build_real_cohorts(), parse_official_sessions())
-        truncated = Plan(
+        extra = Plan(
+            ordered_actions=real_plan.ordered_actions + (
+                RestampAction(old_as_of=date(2026, 7, 2), new_as_of=date(2026, 7, 3),
+                               ingested_at="2026-07-02T08:01:00Z", metric_ids=("dsex",)),
+            ),
+            insert_dates=real_plan.insert_dates,
+            no_actions=real_plan.no_actions,
+        )
+        with pytest.raises(PlanError, match="RESTAMP plan mismatch"):
+            cross_check_plan(extra)
+
+    def test_extra_insert_aborts(self):
+        real_plan = compute_plan(_build_real_cohorts(), parse_official_sessions())
+        extra = Plan(
             ordered_actions=real_plan.ordered_actions,
-            insert_dates=tuple(d for d in real_plan.insert_dates if d != date(2026, 8, 20)),
+            insert_dates=real_plan.insert_dates + (date(2026, 7, 3),),
             no_actions=real_plan.no_actions,
         )
         with pytest.raises(PlanError, match="INSERT plan mismatch"):
-            cross_check_plan(truncated)
+            cross_check_plan(extra)
+
+    def test_out_of_order_restamps_abort(self):
+        """Two genuine EXPECTED_RESTAMPS entries reordered relative to the
+        hand-verified backward-shift chain -- must abort even though both
+        are individually members of the expected set."""
+        real_plan = compute_plan(_build_real_cohorts(), parse_official_sessions())
+        restamps = list(real_plan.restamps)
+        # Swap two adjacent restamps to violate the expected ascending order.
+        restamps[0], restamps[1] = restamps[1], restamps[0]
+        non_restamp_actions = tuple(a for a in real_plan.ordered_actions if isinstance(a, DeleteAction))
+        reordered = Plan(
+            ordered_actions=non_restamp_actions + tuple(restamps),
+            insert_dates=real_plan.insert_dates,
+            no_actions=real_plan.no_actions,
+        )
+        with pytest.raises(PlanError, match="out of the .* order"):
+            cross_check_plan(reordered)
 
 
 # ---------------------------------------------------------------------------

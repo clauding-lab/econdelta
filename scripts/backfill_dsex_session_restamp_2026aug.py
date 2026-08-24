@@ -52,8 +52,15 @@ derives it from scratch, at runtime, from whatever cohorts are actually in
 the database plus the embedded official table (see "Plan algorithm" below).
 ``EXPECTED_DELETES`` / ``EXPECTED_RESTAMPS`` / ``EXPECTED_INSERT_DATES``
 below are a HARD TRIPWIRE the computed plan is cross-checked against before
-any write — a mismatch aborts the run rather than silently doing something
-the controller didn't verify by hand.
+any write — any action NOT a member of that hand-verified superset aborts
+the run rather than silently doing something the controller didn't verify.
+A computed plan with FEWER actions than the full superset is not an error:
+that's the expected shape of an idempotent re-run on an already-healed
+table (zero actions, exit 0) or a resumed run after a mid-sequence crash
+(whatever an earlier partial ``--write`` already committed is simply no
+longer in the DB to act on). ``cross_check_plan()`` accordingly checks
+"every computed action is expected" (a subset check, plus order for
+restamps), not "every expected action was computed."
 
 Plan algorithm (``compute_plan``)
 ----------------------------------
@@ -418,9 +425,18 @@ def compute_plan(
     cohort.
     """
     cohorts_sorted = sorted(cohorts, key=lambda c: (c.as_of, c.ingested_at))
-    true_session: dict[date, date] = {}
+    # Keyed by the COHORT's own identity (as_of, ingested_at), never by
+    # as_of alone: a resumed run after a mid-sequence crash can legitimately
+    # have two cohorts sharing the same as_of at once (an unexecuted
+    # duplicate still sitting at its stored as_of, plus an already-restamped
+    # mover that landed on that same date because the crash happened between
+    # the two related actions in a DIFFERENT prefix than ordered_actions'
+    # own interleaved order would produce). Keying by as_of alone would let
+    # the second cohort's match silently overwrite the first's in this dict,
+    # corrupting which target the FIRST cohort resolves against.
+    true_session: dict[tuple[date, str], date] = {}
     for c in cohorts_sorted:
-        true_session[c.as_of] = match_true_session(c, official, tolerance)
+        true_session[(c.as_of, c.ingested_at)] = match_true_session(c, official, tolerance)
 
     # occupied_unresolved -> occupied_permanent | vacated, as each cohort's
     # OWN stored as_of is reached in ascending order.
@@ -440,7 +456,7 @@ def compute_plan(
     no_actions: list[Cohort] = []
 
     for c in cohorts_sorted:
-        true = true_session[c.as_of]
+        true = true_session[(c.as_of, c.ingested_at)]
         if true == c.as_of:
             slot_state[c.as_of] = "occupied_permanent"
             slot_occupant[c.as_of] = c
@@ -505,39 +521,67 @@ def compute_plan(
 
 
 def cross_check_plan(plan: Plan) -> None:
-    """Hard tripwire: computed plan vs EXPECTED_DELETES/RESTAMPS/INSERT_DATES.
-    Raises PlanError on ANY mismatch — extra action, missing action, or a
-    changed pair. Never auto-corrects; a mismatch means the live DB no
-    longer matches what was hand-verified, and a human needs to look.
+    """Hard tripwire: every action the computed plan wants to perform must
+    be a MEMBER of the controller-verified EXPECTED_DELETES/RESTAMPS/
+    INSERT_DATES superset. An action NOT in that superset (an "extra") means
+    the live DB holds something the hand-verification never saw — abort,
+    a human needs to look, never auto-correct.
+
+    Fewer actions than the FULL expected set is deliberately NOT an error.
+    That is the normal shape of two legitimate scenarios this script must
+    support (see the module's "Usage" + idempotency notes):
+      * an idempotent re-run after a fully successful --write — the
+        healed table needs ZERO actions, and this must return success
+        (exit 0), not abort;
+      * a re-run after a mid-sequence crash — whatever an earlier partial
+        --write already committed no longer needs an action here, so the
+        computed plan is a genuine SUBSET of the full incident plan.
+    A compute_plan() regression that silently DROPS a legitimate action
+    (rather than the DB genuinely no longer needing it) is not this
+    function's job to catch — that is what TestComputePlanReproducesRealIncident
+    asserts by comparing compute_plan()'s direct output to EXPECTED_* on the
+    real incident fixture, and what verify_post_write catches at runtime (a
+    skipped session's dsex simply won't match after the write).
+
+    Restamps additionally must preserve EXPECTED_RESTAMPS's own relative
+    (ascending stored-as_of / backward-shift) order — a computed restamp
+    sequence that's out of that order relative to the expected chain is the
+    same ordering anomaly compute_plan's own docstring says the real
+    (backward-only) data never produces, so it still aborts.
     """
-    computed_deletes = {(a.as_of.isoformat(), a.ingested_at) for a in plan.deletes}
     expected_deletes_norm = {(d, _normalize_iso(ia)) for d, ia in EXPECTED_DELETES}
-    computed_deletes_norm = {(d, _normalize_iso(ia)) for d, ia in computed_deletes}
-    if computed_deletes_norm != expected_deletes_norm:
-        extra = computed_deletes_norm - expected_deletes_norm
-        missing = expected_deletes_norm - computed_deletes_norm
+    computed_deletes_norm = {(a.as_of.isoformat(), _normalize_iso(a.ingested_at)) for a in plan.deletes}
+    extra_deletes = computed_deletes_norm - expected_deletes_norm
+    if extra_deletes:
         raise PlanError(
-            f"DELETE plan mismatch — extra={sorted(extra)} missing={sorted(missing)}"
+            f"DELETE plan mismatch — unexpected extra delete(s) not in the "
+            f"verified plan: {sorted(extra_deletes)}"
         )
 
     computed_restamps = tuple(
         (a.old_as_of.isoformat(), a.new_as_of.isoformat()) for a in plan.restamps
     )
-    if computed_restamps != EXPECTED_RESTAMPS:
-        computed_set = set(computed_restamps)
-        expected_set = set(EXPECTED_RESTAMPS)
+    expected_restamp_set = set(EXPECTED_RESTAMPS)
+    extra_restamps = [r for r in computed_restamps if r not in expected_restamp_set]
+    if extra_restamps:
         raise PlanError(
-            "RESTAMP plan mismatch — extra="
-            f"{sorted(computed_set - expected_set)} missing="
-            f"{sorted(expected_set - computed_set)} "
-            f"(order matched: {computed_restamps == EXPECTED_RESTAMPS})"
+            f"RESTAMP plan mismatch — unexpected extra restamp(s) not in the "
+            f"verified plan: {sorted(extra_restamps)}"
+        )
+    expected_order_filtered = tuple(r for r in EXPECTED_RESTAMPS if r in set(computed_restamps))
+    if computed_restamps != expected_order_filtered:
+        raise PlanError(
+            "RESTAMP plan mismatch — computed restamps are out of the "
+            f"verified backward-shift order: computed={computed_restamps} "
+            f"expected_subsequence={expected_order_filtered}"
         )
 
     computed_inserts = {d.isoformat() for d in plan.insert_dates}
-    if computed_inserts != EXPECTED_INSERT_DATES:
+    extra_inserts = computed_inserts - EXPECTED_INSERT_DATES
+    if extra_inserts:
         raise PlanError(
-            f"INSERT plan mismatch — extra={sorted(computed_inserts - EXPECTED_INSERT_DATES)} "
-            f"missing={sorted(EXPECTED_INSERT_DATES - computed_inserts)}"
+            f"INSERT plan mismatch — unexpected extra insert(s) not in the "
+            f"verified plan: {sorted(extra_inserts)}"
         )
 
 
