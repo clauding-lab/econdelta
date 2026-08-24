@@ -233,10 +233,13 @@ DSEX_MATCH_TOLERANCE = 0.01
 # write — a mismatch aborts, full stop. Do not hand-edit these without a
 # fresh controller/owner sign-off.
 EXPECTED_DELETES: frozenset[tuple[str, str]] = frozenset({
-    ("2026-07-13", "2026-07-13T08:01:17Z"),
-    ("2026-07-15", "2026-07-15T08:01:06Z"),
-    ("2026-08-06", "2026-08-05T21:15:47Z"),
-    ("2026-08-13", "2026-08-12T20:56:36Z"),
+    # Full microsecond precision, read back from production PostgREST on
+    # 2026-08-25 (~01:45 BDT) — a truncated-to-seconds stamp does NOT equal
+    # the row's real ingested_at and makes cross_check_plan abort every run.
+    ("2026-07-13", "2026-07-13T08:01:17.781718Z"),
+    ("2026-07-15", "2026-07-15T08:01:06.812201Z"),
+    ("2026-08-06", "2026-08-05T21:15:47.018227Z"),
+    ("2026-08-13", "2026-08-12T20:56:36.717668Z"),
 })
 assert len(EXPECTED_DELETES) == 4, f"expected exactly 4 deletes, got {len(EXPECTED_DELETES)}"
 

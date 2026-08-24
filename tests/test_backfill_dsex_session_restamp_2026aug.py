@@ -757,3 +757,24 @@ class TestVerifyPostWrite:
         result = verify_post_write(official, frozenset(), url="https://example.supabase.co", key="sk_test", session=sess)
         assert not result.ok
         assert any("no dsex row found" in p for p in result.problems)
+
+
+class TestExpectedDeletesCarryFullPrecision:
+    """Regression: the 2026-08-25 dry-run aborted because EXPECTED_DELETES
+    held second-precision stamps while production PostgREST returns
+    microseconds — the four CORRECT deletes looked 'unexpected' and the
+    tripwire refused the whole (correct) plan. The constants must carry the
+    rows' exact microsecond ingested_at, not a human-truncated rendering."""
+
+    def test_every_expected_delete_stamp_has_sub_second_precision(self):
+        from scripts.backfill_dsex_session_restamp_2026aug import (
+            EXPECTED_DELETES,
+            _normalize_iso,
+        )
+        for as_of, ingested_at in sorted(EXPECTED_DELETES):
+            parsed = _normalize_iso(ingested_at)
+            assert parsed.microsecond != 0, (
+                f"EXPECTED_DELETES stamp for {as_of} ({ingested_at}) has no "
+                "sub-second precision — production ingested_at values carry "
+                "microseconds, and a truncated stamp can never match one"
+            )
