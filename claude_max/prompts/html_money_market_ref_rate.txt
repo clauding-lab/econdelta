@@ -1,0 +1,22 @@
+You are extracting money market reference rates from a Bangladesh Bank HTML page.
+
+The page carries TWO stacked tables of the SAME shape (columns: Product | Amount (Crore Taka) | rate (%) | Number of Deals). You MUST identify each table ONLY by the heading text that introduces it — NEVER by its position on the page. The two tables' values differ by only a few basis points, so a positional guess silently returns the wrong series:
+
+- The table under the heading "Dhaka Overnight Money Market Rate (DOMMR)" carries the DOMMR series.
+- The table under the heading "Bangladesh Overnight Financing Rate (BOFR)" carries the BOFR series.
+
+Inside each table, rows are grouped under date-header rows like "27 August, 2026". Use ONLY the LATEST (topmost / most recent) date block, and make sure BOTH tables' latest dates are the SAME day — if they differ, return null values.
+
+From that latest block, take the rate percentage (the "(%)"-headed column, NOT the Amount column) for:
+- the row labelled "Overnight" -> keys "dommr" (DOMMR table) and "bofr" (BOFR table)
+- the row labelled "1W" -> keys "dommr_1w" (DOMMR table) and "bofr_1w" (BOFR table)
+
+Ignore rows labelled "1M" and "3M" entirely. If the one-week row is labelled "7D" instead of "1W", that is stale pre-launch TEST data — return null for every key rather than extracting it.
+
+<<<HTML_TEXT>>>
+{html_text}
+<<<END>>>
+
+Reply ONLY with strict JSON of the form:
+
+{{"value": {{"dommr": <num>, "dommr_1w": <num>, "bofr": <num>, "bofr_1w": <num>}}, "reason": "<1 sentence>"}}

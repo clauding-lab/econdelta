@@ -163,9 +163,24 @@ def test_definition_seeds_include_both_derived_ratios():
 
 
 def test_derived_definition_seed_ids_match_computation_ids():
-    """Guard: the definition-seed ids must exactly match the ids minted by the
-    computation — a typo would seed a definition no value ever populates."""
-    from aggregate_latest import RESERVE_UTIL_DERIVED
+    """Guard: every definition-seed id must be minted by a KNOWN runtime
+    writer — a typo would seed a definition no value ever populates.
+
+    DERIVED_DEFINITION_SEEDS now holds two derived families (originally only
+    the reserve-utilisation pair, hence this test's old strict equality
+    against RESERVE_UTIL_DERIVED alone):
+      - the reserve-utilisation ratios, minted by
+        _compute_reserve_utilisation (RESERVE_UTIL_DERIVED keys);
+      - the DOMMR/BOFR per-series ids, minted by _flatten_dict_indicators'
+        money_market_ref_rate fan-out (MONEY_MARKET_REF_RATE_FANOUT_IDS).
+    Both families must be FULLY seeded, and no seed may exist outside a
+    known family — the exact-equality check preserves the original intent.
+    """
+    from aggregate_latest import (
+        MONEY_MARKET_REF_RATE_FANOUT_IDS,
+        RESERVE_UTIL_DERIVED,
+    )
 
     seed_ids = {d["metric_id"] for d in DERIVED_DEFINITION_SEEDS}
-    assert seed_ids == set(RESERVE_UTIL_DERIVED.keys())
+    writer_ids = set(RESERVE_UTIL_DERIVED.keys()) | set(MONEY_MARKET_REF_RATE_FANOUT_IDS)
+    assert seed_ids == writer_ids

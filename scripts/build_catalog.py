@@ -80,6 +80,43 @@ DERIVED_KEYS: list[tuple[str, str, str, str]] = [
         "total system deposits (NOT the regulated maintenance ratio). Computed in "
         "aggregate_latest._compute_reserve_utilisation, null/zero-denominator safe.",
     ),
+    # DOMMR/BOFR per-series ids — fanned out from the money_market_ref_rate
+    # indicator's dict value by aggregate_latest._flatten_dict_indicators
+    # (the parent id itself is a normal sources-v3.json indicator, listed in
+    # section 1 above; its scalar headline IS the dommr overnight value).
+    (
+        "dommr",
+        "percent",
+        "daily",
+        "Dhaka Overnight Money Market Rate — Overnight tenor, from BB's Money "
+        "Market Reference Rate page. Fanned out from `money_market_ref_rate` "
+        "(whose scalar headline carries the same value); as_of = the page's "
+        "own business-day date header, never the run date. Series starts "
+        "2026-04-15 (launch).",
+    ),
+    (
+        "dommr_1w",
+        "percent",
+        "daily",
+        "Dhaka Overnight Money Market Rate — 1W tenor, from BB's Money Market "
+        "Reference Rate page. Fanned out from `money_market_ref_rate`. 1M/3M "
+        "tenors deliberately not captured (accumulation freezes them for days).",
+    ),
+    (
+        "bofr",
+        "percent",
+        "daily",
+        "Bangladesh Overnight Financing Rate — Overnight tenor, from BB's "
+        "Money Market Reference Rate page. Fanned out from "
+        "`money_market_ref_rate`; as_of = the page's own date header.",
+    ),
+    (
+        "bofr_1w",
+        "percent",
+        "daily",
+        "Bangladesh Overnight Financing Rate — 1W tenor, from BB's Money "
+        "Market Reference Rate page. Fanned out from `money_market_ref_rate`.",
+    ),
     (
         "imf_eff_outstanding_sdr_mn",
         "amount_sdr_mn",

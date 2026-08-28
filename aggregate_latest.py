@@ -680,6 +680,22 @@ def _build_source_as_of_map(domains: dict[str, dict[str, Any]]) -> dict[str, dat
             "date recovery:\n" + "\n".join(ids),
         )
 
+    # DOMMR/BOFR fan-out dates: ``_flatten_dict_indicators`` mints the four
+    # per-series ids (dommr/dommr_1w/bofr/bofr_1w) from the
+    # ``money_market_ref_rate`` dict, but those minted keys are NOT v3
+    # registry ids — the loop above only ever dates INDICATOR ids, so without
+    # this propagation the writer's ``as_of=today`` fallback would silently
+    # re-forge run-date stamps on all four fanned rows while the parent
+    # carried the page's real date (the exact alias-layer forgery the
+    # 2026-08-23 H3 yield-alias fix closed — landmine 52 corrections — and
+    # the landmine 26 alias-date precedent before it). Same date for all
+    # four: the parser guarantees both tables' newest blocks share one
+    # value date (it refuses the parse otherwise).
+    mmrr_date = result.get("money_market_ref_rate")
+    if mmrr_date is not None:
+        for fanned_id in MONEY_MARKET_REF_RATE_FANOUT_IDS:
+            result.setdefault(fanned_id, mmrr_date)
+
     # The brief reads brief-side keys (e.g. banking_npl_pct), not the EconDelta
     # indicator ids — _apply_brief_aliases copies the VALUE to those keys but not
     # the date. Propagate each override to its alias / conversion target so the
@@ -2836,6 +2852,22 @@ BRIEF_CONVERSIONS: dict[str, tuple[str, float]] = {
     "nbr_customs_bn":   ("nbr_customs_collected_cr", 0.01),
 }
 
+# The four metric_history ids minted from the ``money_market_ref_rate``
+# indicator's dict value (DOMMR/BOFR Overnight + 1W). Must stay identical to
+# parsers/html_money_market_ref_rate._SERIES_KEYS — a drift-guard test
+# (tests/test_dommr_bofr_fanout.py) enforces the equality, because these keys
+# are BOTH the fan-out mint allow-list in ``_flatten_dict_indicators`` AND
+# the date-propagation target list in ``_build_source_as_of_map``. Missing a
+# key in the latter silently re-forges that fanned row's ``as_of`` to the run
+# date (the landmine 26/47 class this source's real value-dating exists to
+# prevent).
+MONEY_MARKET_REF_RATE_FANOUT_IDS: tuple[str, ...] = (
+    "dommr",
+    "dommr_1w",
+    "bofr",
+    "bofr_1w",
+)
+
 
 def _flatten_dict_indicators(data: dict) -> None:
     """Explode dict-shaped indicator values into per-key numeric entries.
@@ -2879,6 +2911,32 @@ def _flatten_dict_indicators(data: dict) -> None:
             # Mutate dict → scalar so the Supabase writer (scalars only)
             # persists the headline overnight rate as ``call_money_rate``.
             data["call_money_rate"] = float(overnight)
+
+    # Same treatment for ``money_market_ref_rate`` (DOMMR/BOFR): the parser
+    # returns {"dommr", "dommr_1w", "bofr", "bofr_1w"} → mint each as its own
+    # top-level metric_history id, then promote the DOMMR Overnight rate as
+    # the parent indicator's scalar headline (call_money precedent: "the"
+    # money-market reference rate without modifier means DOMMR overnight).
+    # UNLIKE the call_money fan-out (which prefixes every dict key), these
+    # keys land as top-level ids verbatim — so minting is restricted to the
+    # canonical allow-list; an unexpected key (LLM-path drift, structure
+    # change) is never published under a made-up id. Their as_of dates are
+    # propagated separately in ``_build_source_as_of_map`` — fanned keys are
+    # NOT v3-registry ids, so without that propagation the writer would forge
+    # run-date stamps on all four (landmine 26/47 class).
+    mmrr = data.get("money_market_ref_rate")
+    if isinstance(mmrr, dict):
+        for series_id in MONEY_MARKET_REF_RATE_FANOUT_IDS:
+            rate = mmrr.get(series_id)
+            if isinstance(rate, bool) or not isinstance(rate, (int, float)):
+                continue
+            if series_id not in data:
+                data[series_id] = float(rate)
+        headline = mmrr.get("dommr")
+        if isinstance(headline, (int, float)) and not isinstance(headline, bool):
+            # Mutate dict → scalar so the Supabase writer (scalars only)
+            # persists the DOMMR overnight rate as ``money_market_ref_rate``.
+            data["money_market_ref_rate"] = float(headline)
 
     _flatten_ownership_cluster(
         data,
@@ -2992,6 +3050,76 @@ DERIVED_DEFINITION_SEEDS: list[dict] = [
         ),
         "source": "BB MEI (derived)",
         "source_url": None,
+    },
+    # DOMMR/BOFR per-series ids — fanned out from the money_market_ref_rate
+    # indicator's dict value in _flatten_dict_indicators (no config entry of
+    # their own). Listing them here also gives sentinel/cadence.py's
+    # DERIVED_DEFINITION_SEEDS pass their "daily" cadence, so the freshness
+    # sentinel can judge them instead of reporting them unmapped.
+    {
+        "metric_id": "dommr",
+        "label": "Dhaka Overnight Money Market Rate (Overnight)",
+        "short_label": "DOMMR",
+        "unit": "%",
+        "domain": "money_market",
+        "cadence": "daily",
+        "description": (
+            "DOMMR Overnight tenor — volume-weighted overnight money market "
+            "reference rate for Dhaka, from BB's Money Market Reference Rate "
+            "page. Fanned out from money_market_ref_rate (which also carries "
+            "this value as its scalar headline); as_of is the page's own "
+            "business-day date header, never the run date."
+        ),
+        "source": "Bangladesh Bank",
+        "source_url": "https://www.bb.org.bd/en/index.php/monetaryactivity/money_market_ref_rate",
+    },
+    {
+        "metric_id": "dommr_1w",
+        "label": "Dhaka Overnight Money Market Rate (1W)",
+        "short_label": "DOMMR 1W",
+        "unit": "%",
+        "domain": "money_market",
+        "cadence": "daily",
+        "description": (
+            "DOMMR 1-week tenor from BB's Money Market Reference Rate page. "
+            "Fanned out from money_market_ref_rate; as_of is the page's own "
+            "business-day date header. 1M/3M tenors are deliberately NOT "
+            "captured (BB's minimum-transaction accumulation freezes them for "
+            "days, which would false-alarm the stillness sentinel)."
+        ),
+        "source": "Bangladesh Bank",
+        "source_url": "https://www.bb.org.bd/en/index.php/monetaryactivity/money_market_ref_rate",
+    },
+    {
+        "metric_id": "bofr",
+        "label": "Bangladesh Overnight Financing Rate (Overnight)",
+        "short_label": "BOFR",
+        "unit": "%",
+        "domain": "money_market",
+        "cadence": "daily",
+        "description": (
+            "BOFR Overnight tenor — overnight financing reference rate from "
+            "BB's Money Market Reference Rate page (the collateralised "
+            "companion to DOMMR). Fanned out from money_market_ref_rate; "
+            "as_of is the page's own business-day date header."
+        ),
+        "source": "Bangladesh Bank",
+        "source_url": "https://www.bb.org.bd/en/index.php/monetaryactivity/money_market_ref_rate",
+    },
+    {
+        "metric_id": "bofr_1w",
+        "label": "Bangladesh Overnight Financing Rate (1W)",
+        "short_label": "BOFR 1W",
+        "unit": "%",
+        "domain": "money_market",
+        "cadence": "daily",
+        "description": (
+            "BOFR 1-week tenor from BB's Money Market Reference Rate page. "
+            "Fanned out from money_market_ref_rate; as_of is the page's own "
+            "business-day date header."
+        ),
+        "source": "Bangladesh Bank",
+        "source_url": "https://www.bb.org.bd/en/index.php/monetaryactivity/money_market_ref_rate",
     },
 ]
 
