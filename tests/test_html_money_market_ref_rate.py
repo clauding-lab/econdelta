@@ -14,6 +14,7 @@ surrounding structure stays production-true.
 """
 from __future__ import annotations
 
+import json
 from datetime import date, datetime, timezone
 from pathlib import Path
 
@@ -151,6 +152,38 @@ class TestFailClosed:
         with pytest.raises(ParseError, match="DOMMR"):
             _parse(artifact)
 
+    def test_deleted_dommr_table_raises_not_bleeds(self, tmp_path):
+        """2026-08-28 review finding 1 (CONFIRMED pre-fix): with only the
+        DOMMR <table> deleted (heading LEFT IN PLACE), the old unbounded
+        ``find_next("table")`` walk resolved BOTH anchors to the BOFR table
+        and parsed {'dommr': 9.23, 'dommr_1w': 9.28, ...} — BOFR published
+        as DOMMR with no error, and same table meant same date, so the
+        date-disagreement guard could never fire. The bounded walk must
+        refuse instead. (test_missing_dommr_table_raises above renames the
+        HEADER; this one deletes the TABLE — different failure mode.)"""
+
+        def delete_dommr_table(h: str) -> str:
+            i_head = h.index("Dhaka Overnight Money Market Rate (DOMMR)")
+            i_tab = h.index("<table>", i_head)
+            j = h.index("</table>", i_tab) + len("</table>")
+            return h[:i_tab] + h[j:]
+
+        with pytest.raises(ParseError, match="DOMMR"):
+            _parse(_mutated(tmp_path, delete_dommr_table))
+
+    def test_same_table_resolution_refused_even_past_the_bounded_walk(
+        self, tmp_path, monkeypatch
+    ):
+        """Belt-and-braces layer of finding 1: even if the bounded walk were
+        somehow defeated, parse() must refuse two anchors resolving to the
+        SAME <table> object."""
+        real_find = m.find_rate_table
+        monkeypatch.setattr(
+            m, "find_rate_table", lambda soup, header: real_find(soup, m.BOFR_HEADER)
+        )
+        with pytest.raises(ParseError, match="SAME"):
+            _parse(_artifact(FIXTURE))
+
     def test_missing_overnight_tenor_raises(self, tmp_path):
         artifact = _mutated(
             tmp_path,
@@ -198,6 +231,114 @@ class TestFailClosed:
 
         with pytest.raises(ParseError, match="half-updated"):
             _parse(_mutated(tmp_path, retard_bofr_date))
+
+
+class TestRateColumnResolution:
+    """2026-08-28 review finding 2 (CONFIRMED pre-fix): the rate column was a
+    hardcoded ``texts[2]`` — the thead was never read — so one inserted
+    column published 4025.0 (the Amount in crore Taka) as the DOMMR
+    percentage, provenance "deterministic", no exception. AND hybrid's dict
+    branch skips validate_value, so config valid_range never caught it. The
+    column is now resolved per table from its own '(%)' header cell, and
+    parse() range-checks all four floats itself."""
+
+    def test_inserted_data_column_raises_not_publishes_amount(self, tmp_path):
+        """Data rows shifted against an unchanged header (the reviewer's
+        4025.0 scenario): the resolved '(%)' column now lands on the Amount
+        cell and the in-parser range check refuses it."""
+
+        def insert_data_column(h: str) -> str:
+            h = h.replace(
+                "<tr><td>Overnight</td><td>4025.00</td>",
+                "<tr><td>Overnight</td><td>-</td><td>4025.00</td>", 1,
+            )
+            return h.replace(
+                "<tr><td>1W</td><td>6052.37</td>",
+                "<tr><td>1W</td><td>-</td><td>6052.37</td>", 1,
+            )
+
+        with pytest.raises(ParseError, match="outside the sanity envelope"):
+            _parse(_mutated(tmp_path, insert_data_column))
+
+    def test_genuine_new_column_header_and_data_reads_true_rate(self, tmp_path):
+        """When BB genuinely inserts a column (header AND data rows), the
+        header-resolved column keeps reading the TRUE '(%)' cell — the old
+        positional index read the shifted neighbour (4025.0)."""
+
+        def insert_full_column(h: str) -> str:
+            h = h.replace("<th>Product</th>", "<th>Product</th><th>Extra</th>", 1)
+            for row_start in (
+                "<tr><td>Overnight</td><td>4025.00</td>",
+                "<tr><td>1W</td><td>6052.37</td>",
+                "<tr><td>1M</td><td>330.00</td>",
+                "<tr><td>3M</td><td>230.20</td>",
+            ):
+                first_cell, rest = row_start.split("</td>", 1)
+                h = h.replace(row_start, first_cell + "</td><td>-</td>" + rest, 1)
+            return h
+
+        result = _parse(_mutated(tmp_path, insert_full_column))
+        assert result.value == EXPECTED_VALUE
+        assert result.source_as_of == EXPECTED_DATE
+
+    def test_no_percent_header_cell_raises(self, tmp_path):
+        """Zero '(%)' candidates (landmine-44 ambiguity discipline)."""
+        artifact = _mutated(tmp_path, lambda h: h.replace("DOMMR (%)", "DOMMR", 1))
+        with pytest.raises(ParseError, match="exactly ONE"):
+            _parse(artifact)
+
+    def test_multiple_percent_header_cells_raise(self, tmp_path):
+        """Two '(%)' candidates must refuse, never silently pick one."""
+        artifact = _mutated(
+            tmp_path,
+            lambda h: h.replace("<th>Amount<br>(Crore Taka)</th>",
+                                "<th>Amount (%)</th>", 1),
+        )
+        with pytest.raises(ParseError, match="exactly ONE"):
+            _parse(artifact)
+
+    def test_parser_envelope_matches_config_valid_range(self):
+        """Drift guard: the in-parser envelope (also imported by the backfill
+        script) must stay equal to the config entry's valid_range."""
+        cfg = json.loads(
+            (Path(__file__).resolve().parent.parent / "config" / "sources-v3.json")
+            .read_text()
+        )
+        ind = [i for i in cfg["indicators"] if i["id"] == "money_market_ref_rate"]
+        assert len(ind) == 1
+        assert ind[0]["parse"]["valid_range"] == [m._MIN_RATE, m._MAX_RATE]
+
+
+class TestNewestBlockByDate:
+    def test_ordering_flip_still_returns_newest_date(self, tmp_path):
+        """Finding 3: _newest_block used blocks[0] (document order). Prepend
+        an OLDER 25 Aug block inside BOTH tbodys — both tables then AGREE on
+        the wrong day, so the date-disagreement guard can't help. Picking
+        max() by date must still return the 27 Aug values."""
+        older_dommr = (
+            '<tr><td colspan="5" class="page_header" style="font-weight: '
+            '400!important">25 August, 2026</td></tr>'
+            "<tr><td>Overnight</td><td>4000.00</td><td>9.15</td><td>50</td></tr>"
+            "<tr><td>1W</td><td>6000.00</td><td>9.30</td><td>60</td></tr>"
+        )
+        older_bofr = (
+            '<tr><td colspan="5" class="page_header" style="font-weight: '
+            '400!important">25 August, 2026</td></tr>'
+            "<tr><td>Overnight</td><td>3300.00</td><td>9.20</td><td>40</td></tr>"
+            "<tr><td>1W</td><td>14000.00</td><td>9.25</td><td>110</td></tr>"
+        )
+
+        def flip_order(h: str) -> str:
+            # First tbody is DOMMR's, second is BOFR's (real capture layout).
+            h = h.replace("</thead><tbody>", "</thead><tbody>" + older_dommr, 1)
+            i_bofr = h.index("Bangladesh Overnight Financing Rate (BOFR)")
+            return h[:i_bofr] + h[i_bofr:].replace(
+                "</thead><tbody>", "</thead><tbody>" + older_bofr, 1
+            )
+
+        result = _parse(_mutated(tmp_path, flip_order))
+        assert result.value == EXPECTED_VALUE
+        assert result.source_as_of == EXPECTED_DATE
 
 
 class TestRecoverSourceAsOfBestEffort:

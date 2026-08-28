@@ -2937,6 +2937,30 @@ def _flatten_dict_indicators(data: dict) -> None:
             # Mutate dict → scalar so the Supabase writer (scalars only)
             # persists the DOMMR overnight rate as ``money_market_ref_rate``.
             data["money_market_ref_rate"] = float(headline)
+        else:
+            # Partial-null day (2026-08-28 review finding 4): the LLM-extract
+            # fallback legitimately preserves null tenors, so a dict with
+            # dommr null but healthy siblings reaches here. Leaving the
+            # parent AS A DICT would have the writer's scalar-only filter
+            # silently drop it — a zero-row day on the headline series buried
+            # in a writer debug line while the siblings look healthy (the
+            # PR-#31 failure class). Remove the parent key and ANNOUNCE the
+            # hole instead.
+            logger.warning(
+                "money_market_ref_rate: DOMMR overnight missing/null in "
+                "today's dict (%s run) — parent headline NOT published; "
+                "non-null fanned series still mint", date.today().isoformat(),
+            )
+            notify(
+                "warning",
+                "money_market_ref_rate — headline hole today",
+                "The DOMMR overnight value was null/missing in the "
+                f"{date.today().isoformat()} run's dict, so the parent "
+                "headline row is deliberately NOT written (an announced "
+                "hole, not a silent writer drop). Any non-null fanned "
+                "series (dommr_1w/bofr/bofr_1w) were still minted.",
+            )
+            data.pop("money_market_ref_rate", None)
 
     _flatten_ownership_cluster(
         data,
@@ -3055,7 +3079,12 @@ DERIVED_DEFINITION_SEEDS: list[dict] = [
     # indicator's dict value in _flatten_dict_indicators (no config entry of
     # their own). Listing them here also gives sentinel/cadence.py's
     # DERIVED_DEFINITION_SEEDS pass their "daily" cadence, so the freshness
-    # sentinel can judge them instead of reporting them unmapped.
+    # sentinel can judge them instead of reporting them unmapped. Accepted,
+    # recorded gap (2026-08-28 review 6a): freshness is ALL the sentinel
+    # coverage the fanned ids get — utils/staleness.py's value-stillness
+    # alarm iterates v3 REGISTRY indicators only, so dommr_1w/bofr/bofr_1w
+    # have no stillness coverage; the parent headline (= dommr) is the one
+    # series it watches, via the registry id money_market_ref_rate.
     {
         "metric_id": "dommr",
         "label": "Dhaka Overnight Money Market Rate (Overnight)",
@@ -3084,8 +3113,9 @@ DERIVED_DEFINITION_SEEDS: list[dict] = [
             "DOMMR 1-week tenor from BB's Money Market Reference Rate page. "
             "Fanned out from money_market_ref_rate; as_of is the page's own "
             "business-day date header. 1M/3M tenors are deliberately NOT "
-            "captured (BB's minimum-transaction accumulation freezes them for "
-            "days, which would false-alarm the stillness sentinel)."
+            "captured: BB accumulates them toward a minimum transaction "
+            "volume across multiple days, so their prints are multi-day "
+            "accumulations, not daily observations."
         ),
         "source": "Bangladesh Bank",
         "source_url": "https://www.bb.org.bd/en/index.php/monetaryactivity/money_market_ref_rate",

@@ -14,6 +14,7 @@ metric_history rows carry the fixture's own date-header date, not today.
 from __future__ import annotations
 
 import json
+import logging
 from datetime import date, datetime, timezone
 from pathlib import Path
 
@@ -93,6 +94,55 @@ class TestFanout:
         only would silently either not mint or not date."""
         assert set(agg.MONEY_MARKET_REF_RATE_FANOUT_IDS) == set(_SERIES_KEYS)
         assert set(FANOUT_IDS) == set(_SERIES_KEYS)
+
+    def test_partial_null_headline_is_announced_hole_not_buried_dict(
+        self, caplog, monkeypatch
+    ):
+        """2026-08-28 review finding 4 (CONFIRMED pre-fix): the LLM-extract
+        fallback preserves null tenors, so a dict with dommr null but
+        healthy siblings reaches the fan-out. The parent then STAYED a dict
+        and the Supabase writer's scalar-only filter silently dropped it — a
+        zero-row day on the headline series while the siblings look healthy
+        (the PR-#31 failure class). Now: warning + notify fire, the parent
+        key is REMOVED (announced hole), the non-null siblings still mint,
+        and the fanned rows still carry the page's real as_of."""
+        notifications: list[tuple] = []
+        monkeypatch.setattr(agg, "notify", lambda *a, **k: notifications.append(a))
+
+        value = {"dommr": None, "dommr_1w": 9.33, "bofr": 9.23, "bofr_1w": 9.28}
+        data = {"money_market_ref_rate": dict(value)}
+        with caplog.at_level(logging.WARNING):
+            agg._flatten_dict_indicators(data)
+
+        assert "money_market_ref_rate" not in data  # removed, not a buried dict
+        assert "dommr" not in data                  # a null is never minted
+        assert data["dommr_1w"] == 9.33
+        assert data["bofr"] == 9.23
+        assert data["bofr_1w"] == 9.28
+        assert any(
+            "money_market_ref_rate" in rec.message for rec in caplog.records
+        ), "the headline hole must be logged, not silent"
+        assert notifications and notifications[0][0] == "warning"
+        assert "money_market_ref_rate" in notifications[0][1]
+
+        # The three fanned rows still land at the page's real date.
+        domains = {
+            "money_market": {
+                "money_market_ref_rate": {
+                    "value": value,
+                    "cadence": "daily",
+                    "source_as_of": FIXTURE_DATE.isoformat(),
+                    "_parse_strategy": "html_money_market_ref_rate",
+                    "scraped_at": datetime.now(timezone.utc).isoformat(),
+                },
+            },
+        }
+        source_as_of_map = agg._build_source_as_of_map(domains)
+        rows = _rows_from_data(data, date.today(), "EconDelta", source_as_of_map)
+        by_id = {r["metric_id"]: r for r in rows}
+        assert "money_market_ref_rate" not in by_id  # the hole is real
+        for metric_id in ("dommr_1w", "bofr", "bofr_1w"):
+            assert by_id[metric_id]["as_of"] == FIXTURE_DATE.isoformat()
 
 
 class TestSourceAsOfPropagation:
@@ -197,6 +247,15 @@ class TestConfigEntry:
         assert ind["parse"]["llm_prompt"] == "html_money_market_ref_rate.txt"
         assert ind["parse"]["value_type"] == "percent"
         assert ind["parse"]["valid_range"] == [0.0, 25.0]
+        # anomaly_threshold note (2026-08-28 review 6b): in the DAILY
+        # aggregate this field is inert for every v3 indicator — the
+        # aggregate's anomaly alert keys on snapshot["change_pct"], which
+        # parsers/hybrid._build_snapshot never populates. Its one live
+        # consumer is the WEEKLY briefing's candidate scan
+        # (briefing/anomalies.compute_candidates, change-vs-prior against
+        # metric_history), and only for the parent headline id — never the
+        # fanned ids. Kept at 2.0 for config-shape consistency and for that
+        # weekly path.
         assert ind["anomaly_threshold"] == 2.0
 
     def test_llm_prompt_file_exists(self):

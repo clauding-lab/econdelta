@@ -73,6 +73,8 @@ from datetime import date, datetime, timedelta, timezone
 from bs4 import BeautifulSoup
 
 from parsers.html_money_market_ref_rate import (
+    _MAX_RATE,
+    _MIN_RATE,
     BOFR_HEADER,
     DOMMR_HEADER,
     extract_date_blocks,
@@ -86,7 +88,6 @@ logger = logging.getLogger("backfill_dommr_bofr")
 # --------------------------------------------------------------------------- #
 
 PAGE_URL = "https://www.bb.org.bd/en/index.php/monetaryactivity/money_market_ref_rate"
-SOURCE_LABEL = "BB Money Market Reference Rate"
 
 # Genuine series launch. Anything earlier in a range response is staging
 # test data and is hard-filtered.
@@ -112,6 +113,10 @@ PARENT_METRIC_ID = "money_market_ref_rate"
 _CHUNK_DAYS_DEFAULT = 50
 _CHUNK_DELAY_S = 5.0
 
+# Rate sanity envelope: _MIN_RATE/_MAX_RATE are imported from the parser
+# module (which mirrors the config valid_range [0, 25]) so backfill and the
+# daily parse share ONE envelope — a drift-guard test pins the equality.
+
 # Same stealth surface fetchers/html_fetcher.py uses.
 _BROWSER_ARGS = [
     "--disable-blink-features=AutomationControlled",
@@ -125,10 +130,6 @@ _GOTO_TIMEOUT_MS = 90_000
 _CHALLENGE_SETTLE_MS = 10_000
 _RESULT_SETTLE_MS = 8_000
 _CHALLENGE_MARKERS: tuple[str, ...] = ("Pardon Our Interruption", "support ID is:")
-
-# Sanity envelope for a parsed rate (%) — mirrors the config valid_range.
-_MIN_RATE = 0.0
-_MAX_RATE = 25.0
 
 
 class BackfillError(Exception):
@@ -271,6 +272,13 @@ def fetch_range_chunks(chunks: list[tuple[date, date]]) -> list[str]:
     Reuses fetchers/html_fetcher.py's stealth surface (launch args, UA,
     viewport, locale/timezone, playwright-stealth, F5/TSPD challenge
     detect-and-reload) — the proven recipe for bb.org.bd.
+
+    Per-chunk resilience (2026-08-28 review 5a): a mid-range timeout or
+    challenge SKIPS that chunk (logged loudly) instead of killing the whole
+    run — ``run_backfill`` already tolerates partial ranges and the upsert
+    is idempotent, so a skipped window is simply re-run later with the same
+    command. Only the INITIAL page load stays fatal (nothing can proceed
+    without the form page).
     """
     from playwright.sync_api import sync_playwright
     from playwright_stealth import Stealth
@@ -301,21 +309,45 @@ def fetch_range_chunks(chunks: list[tuple[date, date]]) -> list[str]:
                 time.sleep(_CHUNK_DELAY_S)  # be gentle to a rate-limited host
             picker_value = format_date_picker_range(chunk_start, chunk_end)
             logger.info("chunk %d/%d: %s", i + 1, len(chunks), picker_value)
-            # Ensure we're on the form page (after a submit we already are —
-            # the POST re-renders the same page with the extra blocks).
-            page.fill("#date_picker", picker_value)
-            with page.expect_navigation(
-                wait_until="domcontentloaded", timeout=_GOTO_TIMEOUT_MS
-            ):
-                # Submit the form directly — the datepicker widget's own JS
-                # is irrelevant once the input holds the final value.
-                page.eval_on_selector("#search-form", "form => form.submit()")
-            page.wait_for_timeout(_RESULT_SETTLE_MS)
-            html = page.content()
-            if any(m in html for m in _CHALLENGE_MARKERS):
-                raise BackfillError(
-                    f"challenge page returned for chunk {picker_value!r} — aborting"
+            try:
+                # Ensure we're on the form page (after a submit we already are —
+                # the POST re-renders the same page with the extra blocks).
+                page.fill("#date_picker", picker_value)
+                with page.expect_navigation(
+                    wait_until="domcontentloaded", timeout=_GOTO_TIMEOUT_MS
+                ):
+                    # Submit the form directly — the datepicker widget's own JS
+                    # is irrelevant once the input holds the final value.
+                    page.eval_on_selector("#search-form", "form => form.submit()")
+                page.wait_for_timeout(_RESULT_SETTLE_MS)
+                html = page.content()
+                if any(m in html for m in _CHALLENGE_MARKERS):
+                    raise BackfillError(
+                        f"challenge page returned for chunk {picker_value!r}"
+                    )
+            except Exception as e:  # noqa: BLE001 — one bad chunk must not kill the rest
+                logger.error(
+                    "chunk %d/%d (%s) failed: %s: %s — skipping this window, "
+                    "continuing (re-run the same command for the gap later; "
+                    "the upsert is idempotent)",
+                    i + 1, len(chunks), picker_value, type(e).__name__, e,
                 )
+                print(f"  chunk {i + 1} ({picker_value}) FAILED: {type(e).__name__}: {e}")
+                try:
+                    # Get back to a clean form page for the next chunk; if
+                    # even this fails, the next iteration's fill() fails and
+                    # that chunk is skipped the same way.
+                    page.goto(
+                        PAGE_URL, wait_until="domcontentloaded",
+                        timeout=_GOTO_TIMEOUT_MS,
+                    )
+                    page.wait_for_timeout(_RESULT_SETTLE_MS)
+                except Exception as reload_err:  # noqa: BLE001
+                    logger.error(
+                        "recovery reload after chunk %s also failed: %s",
+                        picker_value, reload_err,
+                    )
+                continue
             htmls.append(html)
 
         browser.close()
@@ -343,6 +375,15 @@ def _print_summary(rows: list[RateRow], *, sample: int = 6) -> None:
 
 
 def run_backfill(*, start: date, end: date, dry_run: bool, chunk_days: int) -> int:
+    """Fetch, parse, and (unless ``dry_run``) upsert the [start, end] window.
+
+    TIMING NOTE (2026-08-28 review 5b): ``verify_landed_count`` counts rows
+    with ``ingested_at >= write_ts`` scoped to OUR metric ids — but the
+    nightly aggregate (02:55 BDT) writes these SAME ids. Run inside the
+    02:40–03:10 BDT aggregate window and the aggregate's rows can land after
+    our ``write_ts`` and inflate the count (an over-count that can mask a
+    genuine shortfall). Run this backfill OUTSIDE that window.
+    """
     chunks = chunk_ranges(start, end, chunk_days)
     print(
         f"Fetching {PAGE_URL}\n  window {start.isoformat()} .. {end.isoformat()} "
@@ -388,10 +429,15 @@ def run_backfill(*, start: date, end: date, dry_run: bool, chunk_days: int) -> i
             data, as_of_map = rows_to_supabase_payload(day_rows)
             # Landmine 22: NEVER pass url= here — that is the Supabase
             # base-URL override, not a provenance field.
+            # No source= override (2026-08-28 review 5c): the daily writer
+            # for these same ids (aggregate_latest's upsert) passes no source
+            # either, so both stamp utils/supabase_writer._DEFAULT_SOURCE
+            # ("EconDelta") — one series, ONE source string. A per-writer
+            # label here would split the series' provenance on a column
+            # consumers filter by.
             n = upsert_metric_history(
                 data=data,
                 as_of=business_day,
-                source=SOURCE_LABEL,
                 source_as_of_map=as_of_map,
                 ingested_at=write_ts,
                 # Header-anchored BeautifulSoup table parse — no LLM call.
