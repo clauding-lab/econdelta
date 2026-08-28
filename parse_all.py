@@ -20,6 +20,7 @@ import parsers.html_dated_table_row  # noqa: F401
 # Auto-import all parser modules so they register
 import parsers.html_footer_ticker  # noqa: F401
 import parsers.html_labeled_value  # noqa: F401
+import parsers.html_money_market_ref_rate  # noqa: F401
 import parsers.html_table_row  # noqa: F401
 import parsers.pdf_component  # noqa: F401
 import parsers.pdf_fsr_ownership_cluster  # noqa: F401

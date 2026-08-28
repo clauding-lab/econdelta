@@ -6,7 +6,7 @@
 python3 scripts/build_catalog.py > docs/indicator-catalog.md
 ```
 
-**63** scraped indicators × **36** brief aliases × **12** unit conversions × **45** derived = **150** total entries.
+**64** scraped indicators × **36** brief aliases × **12** unit conversions × **49** derived = **155** total entries.
 
 Read the data contract for column semantics and query examples: [`data-contract.md`](data-contract.md).
 
@@ -40,7 +40,11 @@ Read the data contract for column semantics and query examples: [`data-contract.
 | commodities (brief alias) | `food_onion_local_bdt` | `rate` | daily | DAM | [20.0, 400.0] | Alias of `food_onion_local` — Retail price — Local onion (BDT/kg) |
 | commodities (brief alias) | `food_rice_coarse_bdt` | `rate` | daily | DAM | [20.0, 200.0] | Alias of `food_rice_coarse` — Retail price — Aman coarse rice (BDT/kg) |
 | commodities (brief alias) | `food_sugar_local_bdt` | `rate` | daily | DAM | [50.0, 250.0] | Alias of `food_sugar_local` — Retail price — Sugar local (BDT/kg) |
+| derived (cross-source) | `bofr` | `percent` | daily | — | — | Bangladesh Overnight Financing Rate — Overnight tenor, from BB's Money Market Reference Rate page. Fanned out from `money_market_ref_rate`; as_of = the page's own date header. |
+| derived (cross-source) | `bofr_1w` | `percent` | daily | — | — | Bangladesh Overnight Financing Rate — 1W tenor, from BB's Money Market Reference Rate page. Fanned out from `money_market_ref_rate`. |
 | derived (cross-source) | `crr_utilisation_pct` | `percent` | monthly | — | — | Derived (S2): deposits_held_with_bb_crr / deposits_of_the_system × 100 — CRR balance held with BB as a % of total system deposits (NOT the regulated statutory maintenance ratio; no hardcoded policy rate). Computed in aggregate_latest._compute_reserve_utilisation, null/zero-denominator safe. Lands in metric_history under its own id. |
+| derived (cross-source) | `dommr` | `percent` | daily | — | — | Dhaka Overnight Money Market Rate — Overnight tenor, from BB's Money Market Reference Rate page. Fanned out from `money_market_ref_rate` (whose scalar headline carries the same value); as_of = the page's own business-day date header, never the run date. Series starts 2026-04-15 (launch). |
+| derived (cross-source) | `dommr_1w` | `percent` | daily | — | — | Dhaka Overnight Money Market Rate — 1W tenor, from BB's Money Market Reference Rate page. Fanned out from `money_market_ref_rate`. 1M/3M tenors deliberately not captured (accumulation freezes them for days). |
 | derived (cross-source) | `gross_npl_stock` | `amount_bdt_crore` | fiscal_year | — | — | Gross non-performing loans of the banking sector — from BB FSR Table 2.3 via scrapers/bb_npl_structure.py (annual). |
 | derived (cross-source) | `imf_eff_outstanding_sdr_mn` | `amount_sdr_mn` | monthly | — | — | Scraper-only (S5): Bangladesh's Extended Arrangements (EFF) outstanding under the combined ECF/EFF/RSF programme, in SDR Million, pulled directly from the IMF 'Financial Position in the Fund' page by scrapers/imf_eff.py (NO BD egress; no config indicator). Reported natively in SDR — NOT converted to USD (SDR/USD drifts). Lands in metric_history under its own id; as_of = the IMF month-end position date. |
 | derived (cross-source) | `lending_share_sector_agriculture` | `percent` | fiscal_year | — | — | Share of lending — Agriculture — from BB FSR Table 2.3 via scrapers/bb_npl_structure.py (annual). |
@@ -155,6 +159,7 @@ Read the data contract for column semantics and query examples: [`data-contract.
 | money_market | `gross_npl_ratio` | `percent` | quarterly | BB | [0.0, 50.0] | Gross NPL Ratio (Banking Sector) |
 | money_market | `gsec_auction` | `amount_bdt_crore` | daily | BB | [0.0, 50000.0] | Next GSEC Auction Notional |
 | money_market | `interbank_repo_data` | `amount_bdt_crore` | daily | BB | [0.0, 100000.0] | Interbank Repo Data |
+| money_market | `money_market_ref_rate` | `percent` | daily | BB | [0.0, 25.0] | Money Market Reference Rate (DOMMR/BOFR) |
 | money_market | `policy_rate_repo` | `percent` | monthly | BB | [3.0, 15.0] | Policy Rate (Repo) |
 | money_market | `policy_rate_sdf` | `percent` | monthly | BB | [3.0, 12.0] | Policy Rate Corridor — SDF (floor) |
 | money_market | `policy_rate_slf` | `percent` | monthly | BB | [4.0, 16.0] | Policy Rate Corridor — SLF (ceiling) |

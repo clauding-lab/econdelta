@@ -438,6 +438,32 @@
       }
     },
     {
+      "id": "money_market_ref_rate",
+      "name": "Money Market Reference Rate (DOMMR/BOFR)",
+      "label": "Dhaka Overnight Money Market Rate (DOMMR)",
+      "short_label": "DOMMR",
+      "unit": "%",
+      "description": "BB's Money Market Reference Rate page: Dhaka Overnight Money Market Rate (DOMMR) and Bangladesh Overnight Financing Rate (BOFR), published per business day since 2026-04-15. The deterministic parser returns a dict of the four moving series (dommr, dommr_1w, bofr, bofr_1w — Overnight + 1W per table); aggregate_latest fans them out to per-series metric_history ids and promotes the DOMMR Overnight rate as this indicator's scalar headline. 1M/3M tenors are excluded by decision (BB's minimum-transaction accumulation freezes them for days). as_of is the page's own date-header date, never the run date.",
+      "source": "Bangladesh Bank",
+      "domain": "money_market",
+      "cadence": "daily",
+      "fetch": {
+        "type": "html",
+        "url": "https://www.bb.org.bd/en/index.php/monetaryactivity/money_market_ref_rate",
+        "task": "DOMMR and BOFR reference rates (Overnight and 1W) for the latest business day, from the two header-anchored tables"
+      },
+      "parse": {
+        "deterministic": "html_money_market_ref_rate",
+        "llm_prompt": "html_money_market_ref_rate.txt",
+        "value_type": "percent",
+        "valid_range": [
+          0.0,
+          25.0
+        ]
+      },
+      "anomaly_threshold": 2.0
+    },
+    {
       "id": "usd_bdt_exchange_rate",
       "name": "USD/BDT Exchange Rate",
       "domain": "forex_and_reserves",

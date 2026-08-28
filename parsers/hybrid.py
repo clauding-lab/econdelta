@@ -264,7 +264,9 @@ _HOLD_LAST_GOOD_VALUE_TYPES = frozenset({
 # the 65 llm_prompt indicators in config/sources-v3.json are scalar and must
 # fall through to the scalar rejection path below instead of "succeeding" as
 # an unwritable dict that silently defeats hold-last-good.
-_DICT_SHAPED_LLM_INDICATOR_IDS = frozenset({"call_money_rate", "dse_sector_heat"})
+_DICT_SHAPED_LLM_INDICATOR_IDS = frozenset(
+    {"call_money_rate", "dse_sector_heat", "money_market_ref_rate"}
+)
 
 
 def _expected_dict_keys(indicator_id: str) -> frozenset[str]:
@@ -284,6 +286,9 @@ def _expected_dict_keys(indicator_id: str) -> frozenset[str]:
     if indicator_id == "dse_sector_heat":
         from parsers.dse_sector_heat import _load_taxonomy
         return frozenset(_load_taxonomy())
+    if indicator_id == "money_market_ref_rate":
+        from parsers.html_money_market_ref_rate import _SERIES_KEYS
+        return _SERIES_KEYS
     raise KeyError(indicator_id)
 
 
