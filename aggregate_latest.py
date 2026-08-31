@@ -2426,12 +2426,33 @@ def _yield_ladder_staleness_floor(month_end: date) -> date:
     return date(year, month, day)
 
 
+def _has_auction_in_window(
+    auction_rows: list[dict], *, start: date, end: date,
+) -> bool:
+    """True when at least one row in ``auction_rows`` is a KNOWN tenor whose
+    ``auction_date`` falls in ``[start, end]`` inclusive.
+
+    Gates the open-month leg of the yield-ladder appender. Rows for tenors
+    the ladder doesn't plot don't count -- they can't move the curve, so
+    they must not be what unfreezes it.
+    """
+    for row in auction_rows:
+        if row.get("tenor") not in _YIELD_TENOR_TO_MONTHLY_ID:
+            continue
+        auction_date = _parse_monthly_row_date(row.get("auction_date"))
+        if auction_date is not None and start <= auction_date <= end:
+            return True
+    return False
+
+
 def _yield_ladder_rows_for_month(
     auction_rows: list[dict],
     *,
     month_start: date,
     month_end: date,
     existing_pairs: set[tuple[str, date]],
+    existing_values: dict[tuple[str, date], float] | None = None,
+    refresh: bool = False,
 ) -> tuple[list[dict], list[str]]:
     """Pure transform: auction_results rows (already filtered to
     auction_date <= month_end, newest first) -> the 8-tenor yield-ladder
@@ -2459,6 +2480,21 @@ def _yield_ladder_rows_for_month(
     guards against fabricating a partial CURVE; this guards against
     clobbering an existing value for a tenor that happens to already have
     this exact month.
+
+    ``refresh=True`` (2026-08-31, open-month leg) relaxes Stage 2 for ONE
+    caller only: the CURRENT, still-open month, whose curve is a moving
+    figure by definition -- every new auction inside the month changes it,
+    so "already written" must NOT mean "final". In refresh mode a pair is
+    still dropped when its stored value already EQUALS the freshly derived
+    one (so an ordinary day writes nothing at all and ``ingested_at``
+    doesn't churn), but a CHANGED value is re-emitted and the upsert
+    updates it in place. ``existing_values`` supplies the stored numbers
+    for that comparison; it is ignored entirely when ``refresh`` is False,
+    which keeps the completed-month leg bit-for-bit append-only.
+
+    Completed months never take this path: once a month is over its curve
+    can no longer move, so overwriting one could only ever destroy a
+    correct historical value.
 
     ``source_as_of`` on each written row is the REAL auction_date for that
     tenor (2026-08-08 review M2), not month_start -- matches the CPI leg's
@@ -2527,10 +2563,15 @@ def _yield_ladder_rows_for_month(
         ]
 
     month_start_iso = month_start.isoformat()
+    stored = existing_values or {}
     rows: list[dict] = []
     for tenor, monthly_id in _YIELD_TENOR_TO_MONTHLY_ID.items():
         if (monthly_id, month_start) in existing_pairs:
-            continue  # append-only: already have this tenor for this month
+            if not refresh:
+                continue  # append-only: already have this tenor for this month
+            prior = stored.get((monthly_id, month_start))
+            if prior is not None and prior == values[tenor]:
+                continue  # open month, unchanged since the last run -- no write
         rows.append({
             "metric_id": monthly_id,
             "as_of": month_start_iso,
@@ -2543,15 +2584,32 @@ def _yield_ladder_rows_for_month(
 
 def _write_yield_ladder_monthly_append(today: date | None = None) -> int:
     """Live appender for the 8-tenor yield-ladder chart-feeding monthly
-    series (Phase 2, landmine 51). Returns the number of new
-    metric_history_monthly rows written this run (0-8).
+    series (Phase 2, landmine 51). Returns the number of
+    metric_history_monthly rows written this run (0-16).
 
-    Targets the most recently COMPLETED month M (``_previous_month_start``,
-    the same helper Phase 1's remittance leg uses) -- never the current,
-    still-open month. 0 is the NORMAL outcome on most days: once a given
-    month M is fully written (all 8 tenors), every subsequent day in the
-    SAME calendar month computes the same M and finds it already present,
-    short-circuiting before ever reading auction_results.
+    TWO legs, in this order:
+
+    * **Completed month** M-1 (``_previous_month_start``, the same helper
+      Phase 1's remittance leg uses) -- strictly APPEND-ONLY, exactly as
+      before. A month that is over can no longer move, so its rung is
+      written once and never touched again.
+    * **Open month** M (``today.replace(day=1)``, cut off at ``today``, not
+      at the calendar month end which is still in the future) -- REFRESHED
+      on every run. Added 2026-08-31: the previous behaviour published only
+      completed months, so on the 31st of a month The Brief's ladder still
+      plotted the curve from two months back while auction_results already
+      held that month's real cutoffs. A month-old curve presented as the
+      latest reading is a wrong number on the page, not merely a late one.
+
+    Both legs share ONE ``auction_results`` read (through ``today``, a
+    superset of both cutoffs -- each leg re-filters on its own
+    ``month_end``), so the extra leg costs no extra round-trip.
+
+    The open-month leg does mean the read now happens on EVERY run rather
+    than only on the days a completed month was still unwritten (the L3
+    note below). Writes stay rare regardless: the refresh path emits a row
+    only when a tenor's derived value actually DIFFERS from the stored one,
+    so a day with no new auction writes nothing.
 
     Pure DB reads only -- no Playwright, no live HTTP fetch (unlike the
     remittance leg). Two separate read failure points, each with its OWN
@@ -2561,10 +2619,10 @@ def _write_yield_ladder_monthly_append(today: date | None = None) -> int:
     silently suppressed by the first): the append-only existing-rows
     check, and the auction_results read itself.
 
-    L3 (2026-08-08 re-review, no behavior change): every run within a
-    still-incomplete month re-reads auction_results' FULL history through
-    month_end (not just rows since the last check) -- acceptable for now
-    given the table's size, but a real cost if it grows much larger.
+    L3 (2026-08-08 re-review): each run re-reads auction_results' FULL
+    history through the cutoff (not just rows since the last check) --
+    acceptable for now given the table's size, but a real cost if it grows
+    much larger.
     """
     if today is None:
         today = datetime.now(timezone.utc).date()
@@ -2572,17 +2630,31 @@ def _write_yield_ladder_monthly_append(today: date | None = None) -> int:
     from utils.supabase_reader import get_auction_results_through, get_metric_history_monthly
     from utils.supabase_writer import upsert_metric_history_monthly
 
-    month_start = _previous_month_start(today)
-    month_end = _month_end(month_start)
+    prev_month_start = _previous_month_start(today)
+    prev_month_end = _month_end(prev_month_start)
+    # The open month is cut off at TODAY, never at its calendar month end --
+    # that date is still in the future, and cutting there would silently
+    # promise "the whole month" while only part of it has happened.
+    open_month_start = today.replace(day=1)
     monthly_ids = list(_YIELD_TENOR_TO_MONTHLY_ID.values())
 
     try:
         existing: set[tuple[str, date]] = set()
+        existing_values: dict[tuple[str, date], float] = {}
         for monthly_id in monthly_ids:
             for row in get_metric_history_monthly(monthly_id):
                 as_of = _parse_monthly_row_date(row.get("as_of"))
-                if as_of is not None:
-                    existing.add((monthly_id, as_of))
+                if as_of is None:
+                    continue
+                existing.add((monthly_id, as_of))
+                # Stored value backs the open-month "did it actually change?"
+                # check. A row whose value won't coerce is left out of the
+                # map, which makes the comparison miss and the row get
+                # rewritten -- the safe direction.
+                try:
+                    existing_values[(monthly_id, as_of)] = float(row["value"])
+                except (KeyError, TypeError, ValueError):
+                    continue
     except Exception as e:  # noqa: BLE001 -- R1/M1 lesson: broad on purpose,
         # a JSONDecodeError-class failure here must not escape and crash
         # the caller (or block the CPI/remittance legs, which run as fully
@@ -2596,30 +2668,75 @@ def _write_yield_ladder_monthly_append(today: date | None = None) -> int:
         )
         return 0
 
-    if all((monthly_id, month_start) in existing for monthly_id in monthly_ids):
-        logger.info(
-            "yield ladder append: %s already fully present for all 8 tenors -- "
-            "nothing to do", month_start,
-        )
-        return 0
+    prev_complete = all(
+        (monthly_id, prev_month_start) in existing for monthly_id in monthly_ids
+    )
 
     try:
-        # L3: full-history re-read through month_end on every run this
-        # month isn't fully written yet -- see this function's docstring.
-        auction_rows = get_auction_results_through(month_end)
+        # ONE read for both legs: through `today` is a superset of the
+        # completed month's cutoff, and _yield_ladder_rows_for_month
+        # re-filters on the month_end it is handed. L3: still a
+        # full-history re-read -- see this function's docstring.
+        auction_rows = get_auction_results_through(today)
     except Exception as e:  # noqa: BLE001 -- same reasoning as above.
         logger.warning("yield ladder append: auction_results read failed: %s", e)
         notify(
             "warning",
             _YIELD_AUCTION_READ_FAILED_TITLE,
-            f"Could not read auction_results (through {month_end}) for the "
+            f"Could not read auction_results (through {today}) for the "
             f"yield-ladder append; skipped this run. {type(e).__name__}: {e}",
         )
         return 0
 
-    rows, reasons = _yield_ladder_rows_for_month(
-        auction_rows, month_start=month_start, month_end=month_end, existing_pairs=existing,
-    )
+    rows: list[dict] = []
+    reasons: list[str] = []
+
+    # Leg 1 -- completed month, append-only. Skipped entirely once written,
+    # which preserves the old short-circuit's intent (no repeated writes)
+    # without it also short-circuiting the open-month leg below.
+    if not prev_complete:
+        prev_rows, prev_reasons = _yield_ladder_rows_for_month(
+            auction_rows,
+            month_start=prev_month_start,
+            month_end=prev_month_end,
+            existing_pairs=existing,
+        )
+        rows.extend(prev_rows)
+        reasons.extend(prev_reasons)
+    else:
+        logger.info(
+            "yield ladder append: %s already fully present for all 8 tenors -- "
+            "completed-month leg has nothing to do", prev_month_start,
+        )
+
+    # Leg 2 -- the open month, refreshed every run. Its all-or-nothing
+    # derivation and staleness floor are the completed month's, unchanged;
+    # only Stage 2 differs (see `refresh` in _yield_ladder_rows_for_month).
+    #
+    # Gated on the open month having had at least ONE auction of its own.
+    # Without this gate the first days of a month would publish a rung
+    # derived ENTIRELY by carry-forward -- i.e. a byte-identical copy of the
+    # month before it, drawn as a second line on the chart. Nothing is lost
+    # by waiting: if this month has had no auction, the newest real curve
+    # IS last month's, and last month's rung already plots it.
+    if _has_auction_in_window(auction_rows, start=open_month_start, end=today):
+        open_rows, open_reasons = _yield_ladder_rows_for_month(
+            auction_rows,
+            month_start=open_month_start,
+            month_end=today,
+            existing_pairs=existing,
+            existing_values=existing_values,
+            refresh=True,
+        )
+        rows.extend(open_rows)
+        reasons.extend(open_reasons)
+    else:
+        logger.info(
+            "yield ladder append: no auction_results row in %s..%s -- open-month "
+            "leg deferred (its curve would be a pure carry-forward duplicate of "
+            "the completed month)", open_month_start, today,
+        )
+
     if reasons:
         logger.warning("yield ladder append: %s", "; ".join(reasons))
         notify(
