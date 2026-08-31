@@ -363,7 +363,10 @@ class TestWriteYieldLadderMonthlyAppend:
 
         n = agg._write_yield_ladder_monthly_append(today=TODAY)
         assert n == 8
-        assert captured_as_of_arg["month_end"] == date(2026, 7, 31)
+        # Both legs share one read, cut off at TODAY (each leg re-filters on
+        # its own month_end); the DERIVATION target is proved by the as_of
+        # the rows actually carry, which is July's month-start.
+        assert captured_as_of_arg["month_end"] == TODAY
         assert all(r["as_of"] == "2026-07-01" for r in captured)
 
     def test_january_rolls_back_to_prior_december_end_to_end(self, monkeypatch):
@@ -389,26 +392,32 @@ class TestWriteYieldLadderMonthlyAppend:
 
         n = agg._write_yield_ladder_monthly_append(today=date(2026, 1, 15))
         assert n == 8
-        assert captured_as_of_arg["month_end"] == date(2025, 12, 31)
+        assert captured_as_of_arg["month_end"] == date(2026, 1, 15)
         assert all(r["as_of"] == "2025-12-01" for r in captured)
 
-    def test_append_only_skip_avoids_reading_auction_results_entirely(self, monkeypatch):
-        """Optimization + isolation: once a month is fully written for all
-        8 tenors, subsequent runs in the SAME calendar month must not even
-        read auction_results (matches Phase 1's M6 fetch-skip pattern, here
-        applied to a DB read instead of a browser launch)."""
+    def test_completed_month_written_and_open_month_quiet_writes_nothing(self, monkeypatch):
+        """Once the completed month is fully written for all 8 tenors AND
+        the open month has had no auction of its own, a run must write
+        NOTHING -- the ordinary mid-month no-op.
+
+        Supersedes the pre-2026-08-31 version of this test, which asserted
+        the run skipped the auction_results read entirely. It can't any
+        more: the open-month leg has to look at auction_results to know
+        whether this month has moved. The invariant that actually matters
+        -- no repeated writes -- is what's asserted here instead."""
         import utils.supabase_reader as reader
         import utils.supabase_writer as writer
 
         month_start = agg._previous_month_start(TODAY)
 
         def get_metric_history_monthly_dispatch(metric_id, **kwargs):
-            return [{"metric_id": metric_id, "as_of": month_start.isoformat()}]
+            return [{"metric_id": metric_id, "as_of": month_start.isoformat(), "value": 10.0}]
 
         monkeypatch.setattr(reader, "get_metric_history_monthly", get_metric_history_monthly_dispatch)
+        # Auction history exists, but nothing inside August (TODAY's month).
         monkeypatch.setattr(
             reader, "get_auction_results_through",
-            lambda *a, **k: pytest.fail("must not read auction_results when all 8 tenors already exist"),
+            lambda *a, **k: _full_ladder_rows(date(2026, 7, 10)),
         )
         monkeypatch.setattr(
             writer, "upsert_metric_history_monthly",
@@ -418,6 +427,138 @@ class TestWriteYieldLadderMonthlyAppend:
 
         n = agg._write_yield_ladder_monthly_append(today=TODAY)
         assert n == 0
+
+    def test_open_month_is_written_once_it_has_its_own_auction(self, monkeypatch):
+        """The headline behaviour change (2026-08-31): with July already
+        written and an August auction on the books, a run on 2026-08-08
+        publishes the AUGUST rung too, without waiting for August to end."""
+        import utils.supabase_reader as reader
+        import utils.supabase_writer as writer
+
+        july = agg._previous_month_start(TODAY)
+
+        def get_metric_history_monthly_dispatch(metric_id, **kwargs):
+            return [{"metric_id": metric_id, "as_of": july.isoformat(), "value": 10.0}]
+
+        monkeypatch.setattr(reader, "get_metric_history_monthly", get_metric_history_monthly_dispatch)
+        monkeypatch.setattr(
+            reader, "get_auction_results_through",
+            # August's own 10y auction, plus July history for the other seven.
+            lambda *a, **k: [_auction_row("10y", date(2026, 8, 5), 9.2)]
+            + _full_ladder_rows(date(2026, 7, 10)),
+        )
+        captured = []
+        monkeypatch.setattr(
+            writer, "upsert_metric_history_monthly",
+            lambda rows, **k: (captured.extend(rows), len(rows))[1],
+        )
+        monkeypatch.setattr(agg, "notify", lambda *a, **k: True)
+
+        n = agg._write_yield_ladder_monthly_append(today=TODAY)
+        assert n == 8
+        assert {r["as_of"] for r in captured} == {"2026-08-01"}
+        # The tenor that actually auctioned in August carries its real
+        # August cutoff; the other seven carry forward from July.
+        by_id = {r["metric_id"]: r for r in captured}
+        assert by_id["yield_10y_monthly"]["value"] == 9.2
+        assert by_id["yield_10y_monthly"]["source_as_of"] == "2026-08-05"
+        assert by_id["tbill_91d_yield_monthly"]["source_as_of"] == "2026-07-10"
+
+    def test_open_month_rewrites_only_the_tenors_whose_value_moved(self, monkeypatch):
+        """Refresh mode is not a blind overwrite: an open-month tenor whose
+        stored value already equals the derived one is left alone, so a
+        quiet day doesn't churn ingested_at across all 8 rows."""
+        import utils.supabase_reader as reader
+        import utils.supabase_writer as writer
+
+        july = agg._previous_month_start(TODAY)
+        august = date(2026, 8, 1)
+        # August already written from an earlier auction; 10y has since moved.
+        stored_august = {
+            monthly_id: (9.2 if monthly_id == "yield_10y_monthly" else 10.0 + i * 0.1)
+            for i, monthly_id in enumerate(agg._YIELD_TENOR_TO_MONTHLY_ID.values())
+        }
+
+        def get_metric_history_monthly_dispatch(metric_id, **kwargs):
+            return [
+                {"metric_id": metric_id, "as_of": july.isoformat(), "value": 10.0},
+                {"metric_id": metric_id, "as_of": august.isoformat(),
+                 "value": stored_august[metric_id]},
+            ]
+
+        monkeypatch.setattr(reader, "get_metric_history_monthly", get_metric_history_monthly_dispatch)
+        monkeypatch.setattr(
+            reader, "get_auction_results_through",
+            # A NEWER August 10y print at 8.75 supersedes the stored 9.2.
+            lambda *a, **k: [_auction_row("10y", date(2026, 8, 7), 8.75)]
+            + _full_ladder_rows(date(2026, 7, 10)),
+        )
+        captured = []
+        monkeypatch.setattr(
+            writer, "upsert_metric_history_monthly",
+            lambda rows, **k: (captured.extend(rows), len(rows))[1],
+        )
+        monkeypatch.setattr(agg, "notify", lambda *a, **k: True)
+
+        n = agg._write_yield_ladder_monthly_append(today=TODAY)
+        assert n == 1
+        assert captured[0]["metric_id"] == "yield_10y_monthly"
+        assert captured[0]["as_of"] == "2026-08-01"
+        assert captured[0]["value"] == 8.75
+
+    def test_completed_month_is_never_overwritten_by_the_open_month_leg(self, monkeypatch):
+        """Guard on the one thing refresh mode must never do: reach back
+        into a month that is already over. July is stored at a value that
+        DISAGREES with what today's auction history would derive, and it
+        must survive untouched."""
+        import utils.supabase_reader as reader
+        import utils.supabase_writer as writer
+
+        july = agg._previous_month_start(TODAY)
+
+        def get_metric_history_monthly_dispatch(metric_id, **kwargs):
+            return [{"metric_id": metric_id, "as_of": july.isoformat(), "value": 99.0}]
+
+        monkeypatch.setattr(reader, "get_metric_history_monthly", get_metric_history_monthly_dispatch)
+        monkeypatch.setattr(
+            reader, "get_auction_results_through",
+            lambda *a, **k: [_auction_row("10y", date(2026, 8, 5), 9.2)]
+            + _full_ladder_rows(date(2026, 7, 10)),
+        )
+        captured = []
+        monkeypatch.setattr(
+            writer, "upsert_metric_history_monthly",
+            lambda rows, **k: (captured.extend(rows), len(rows))[1],
+        )
+        monkeypatch.setattr(agg, "notify", lambda *a, **k: True)
+
+        agg._write_yield_ladder_monthly_append(today=TODAY)
+        assert {r["as_of"] for r in captured} == {"2026-08-01"}
+        assert not any(r["as_of"] == july.isoformat() for r in captured)
+
+    def test_open_month_deferred_when_it_has_no_auction_of_its_own(self, monkeypatch):
+        """The duplicate-line guard: on the 1st of a month, before that
+        month has auctioned anything, the open-month rung would be a pure
+        carry-forward copy of the completed month. Publish nothing rather
+        than draw the same curve twice."""
+        import utils.supabase_reader as reader
+        import utils.supabase_writer as writer
+
+        monkeypatch.setattr(reader, "get_metric_history_monthly", lambda *a, **k: [])
+        monkeypatch.setattr(
+            reader, "get_auction_results_through",
+            lambda *a, **k: _full_ladder_rows(date(2026, 7, 10)),
+        )
+        captured = []
+        monkeypatch.setattr(
+            writer, "upsert_metric_history_monthly",
+            lambda rows, **k: (captured.extend(rows), len(rows))[1],
+        )
+        monkeypatch.setattr(agg, "notify", lambda *a, **k: True)
+
+        n = agg._write_yield_ladder_monthly_append(today=date(2026, 8, 1))
+        assert n == 8
+        assert {r["as_of"] for r in captured} == {"2026-07-01"}
 
     def test_all_or_nothing_failure_notifies_and_writes_nothing(self, monkeypatch):
         import utils.supabase_reader as reader
@@ -632,3 +773,39 @@ def test_macro_append_failure_does_not_prevent_yield_ladder_from_running(tmp_pat
     exit_code = agg.main()
     assert exit_code == 0
     assert yield_ladder_calls == [1]  # yield-ladder leg still ran despite the prior leg's crash
+
+
+# ---------------------------------------------------------------------------
+# _has_auction_in_window — open-month gate helper
+# ---------------------------------------------------------------------------
+
+
+class TestHasAuctionInWindow:
+    def test_true_for_a_known_tenor_inside_the_window(self):
+        rows = [_auction_row("10y", date(2026, 8, 5), 9.2)]
+        assert agg._has_auction_in_window(rows, start=date(2026, 8, 1), end=date(2026, 8, 8))
+
+    def test_window_is_inclusive_at_both_ends(self):
+        assert agg._has_auction_in_window(
+            [_auction_row("10y", date(2026, 8, 1), 9.2)],
+            start=date(2026, 8, 1), end=date(2026, 8, 8),
+        )
+        assert agg._has_auction_in_window(
+            [_auction_row("10y", date(2026, 8, 8), 9.2)],
+            start=date(2026, 8, 1), end=date(2026, 8, 8),
+        )
+
+    def test_false_when_every_row_predates_the_window(self):
+        rows = _full_ladder_rows(date(2026, 7, 10))
+        assert not agg._has_auction_in_window(rows, start=date(2026, 8, 1), end=date(2026, 8, 8))
+
+    def test_a_tenor_the_ladder_does_not_plot_cannot_unfreeze_the_month(self):
+        """An auction in a tenor with no rung can't move the curve, so it
+        must not be what makes the open month publishable."""
+        rows = [_auction_row("30y", date(2026, 8, 5), 9.2)]
+        assert "30y" not in agg._YIELD_TENOR_TO_MONTHLY_ID
+        assert not agg._has_auction_in_window(rows, start=date(2026, 8, 1), end=date(2026, 8, 8))
+
+    def test_unparseable_auction_date_is_ignored_not_raised(self):
+        rows = [{"auction_date": "not-a-date", "tenor": "10y", "cutoff": 9.2}]
+        assert not agg._has_auction_in_window(rows, start=date(2026, 8, 1), end=date(2026, 8, 8))
