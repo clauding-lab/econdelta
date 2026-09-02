@@ -303,7 +303,7 @@
       "cadence": "monthly",
       "fetch": {
         "type": "html",
-        "url": "https://gsom.bb.org.bd/mtm-bill.php",
+        "url": "https://gsom.bb.org.bd/index.php/tbill",
         "task": "row=Total Outstanding Balance col=2"
       },
       "parse": {
@@ -329,7 +329,7 @@
       "cadence": "monthly",
       "fetch": {
         "type": "html",
-        "url": "https://gsom.bb.org.bd/mtm.php",
+        "url": "https://gsom.bb.org.bd/index.php/tbond",
         "task": "row=Total Outstanding Balance col=2"
       },
       "parse": {
