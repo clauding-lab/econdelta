@@ -104,6 +104,14 @@ STALE_THRESHOLDS_HOURS_BY_CADENCE: dict[str, float] = {
 # Cumulative-figure guard: a fiscal-year-to-date total can only rise within a FY.
 CUMULATIVE_DROP_TOLERANCE = 0.05   # >5% same-FY drop ⇒ implausible
 FISCAL_YEAR_START_MONTH = 7        # Bangladesh FY = July–June
+# Months (by PUBLICATION date) in which a cumulative series may still be
+# reporting the first figures of a newly-started fiscal year, i.e. a period in
+# which a large drop against the prior FY's closing total is EXPECTED rather
+# than a parse error. July–October: BB's Monthly Economic Trends publishes
+# July's numbers in late August, and a slipped issue can push the first
+# post-reset figure into September or October. Outside this window a cumulative
+# series that falls is a genuine problem and gets no grace. See landmine 56.
+FY_RESET_GRACE_MONTHS = frozenset({7, 8, 9, 10})
 # Granular Opus reject: quarantine up to this many flagged fields; more ⇒ hard reject.
 MAX_QUARANTINE_FIELDS = 5
 
@@ -386,6 +394,11 @@ def _is_cumulative_regression(
     A cumulative fiscal-year-to-date total can only rise within a fiscal year.
     A drop beyond CUMULATIVE_DROP_TOLERANCE in the SAME fiscal year is a parse
     error. A drop across the July FY boundary is the legitimate annual reset.
+
+    ``today_date`` and ``prior_date`` MUST be publication dates (the period the
+    figures describe), not scrape dates -- see ``_cumulative_guard_dates`` and
+    landmine 56. Passing scrape dates makes every 1 July reset look like a
+    same-FY regression, because both scrapes happen in the same fiscal year.
     """
     if not isinstance(today_value, (int, float)) or isinstance(today_value, bool):
         return False
@@ -396,6 +409,109 @@ def _is_cumulative_regression(
     if _fiscal_year(today_date) != _fiscal_year(prior_date):
         return False  # FY reset — drop is legitimate
     return today_value < prior_value * (1 - CUMULATIVE_DROP_TOLERANCE)
+
+
+def _cumulative_guard_dates(
+    snapshot: dict,
+    prior: dict,
+    today: date,
+    prior_scraped: date | None,
+) -> tuple[date | None, date | None, bool]:
+    """Pick the dates the cumulative guard should compare, and say how good they are.
+
+    Returns ``(today_date, prior_date, publication_dated)``.
+
+    A fiscal-year-to-date total is anchored to the period it REPORTS, not to the
+    day we happened to download it. ``source_as_of`` carries that period; when
+    both sides have one, the guard compares real publication dates and the July
+    reset is recognised for what it is. When either side lacks one we fall back
+    to scrape dates, and the caller must treat that answer as unreliable inside
+    the FY reset window -- two August scrapes always land in the same fiscal
+    year, so the fallback cannot tell a reset from a regression.
+    """
+    # _parse_monthly_row_date is a plain ISO-date parser despite the name.
+    today_pub = _parse_monthly_row_date(snapshot.get("source_as_of"))
+    prior_pub = _parse_monthly_row_date(prior.get("source_as_of"))
+    if today_pub is not None and prior_pub is not None:
+        return today_pub, prior_pub, True
+    return today, prior_scraped, False
+
+
+def _cumulative_indicator_ids() -> set[str]:
+    """Registry ids explicitly marked as fiscal-year-to-date cumulative totals."""
+    return {
+        ind["id"]
+        for ind in _load_v3_registry()
+        if ind.get("cumulative") and ind.get("id")
+    }
+
+
+def _drop_expected_fy_resets(
+    flagged: list[str],
+    data: dict[str, Any],
+    history: list[dict[str, Any]],
+    source_as_of_map: dict[str, date],
+    cumulative_ids: set[str],
+) -> tuple[list[str], list[str]]:
+    """Remove flagged ids whose "collapse" is just the 1 July fiscal-year reset.
+
+    Returns ``(still_flagged, excused)``.
+
+    The Opus reviewer has no concept of Bangladesh's July–June fiscal year, so
+    a year-to-date total restarting near zero reads to it as a ~90% overnight
+    collapse. In August 2026 that cost `categorywise_export` and
+    `remittance_by_country` eight days: each run quarantined them back to the
+    prior FY's closing total, and because quarantine rewrites the `data` block
+    that becomes tomorrow's history, the next run compared the correct value
+    against its own substitution and quarantined it again. A quarantine is
+    meant to be a one-day patch; nothing in the design ended this one.
+
+    So the excuse is deterministic and date-driven rather than a plea to the
+    model. An id is excused when ALL of:
+
+      * the registry marks it ``cumulative`` (an explicit opt-in, never a guess
+        from the id's name or its shape);
+      * its fresh value is strictly BELOW the most recent historical value —
+        only a drop can be a reset, an unexplained spike is never excused;
+      * its own ``source_as_of`` falls in ``FY_RESET_GRACE_MONTHS``, i.e. the
+        figure is reporting one of the first months of a fiscal year.
+
+    Note what this deliberately does NOT do: it never substitutes a value and
+    never lets a value through that the upstream cumulative guard rejected. The
+    worst case is that a genuinely bad July figure survives the reviewer's
+    veto — and that figure has already passed ``_is_cumulative_regression`` in
+    ``_build_v3_blocks``, which screens the same series against its own history
+    on publication dates. This is the second layer, and it is the layer that
+    only ever refuses to overwrite fresh data with stale data.
+
+    The window is bounded on purpose: outside July–October a falling cumulative
+    total is a real problem and gets no grace at all.
+    """
+    still: list[str] = []
+    excused: list[str] = []
+    for fid in flagged:
+        if fid not in cumulative_ids:
+            still.append(fid)
+            continue
+        today_value = data.get(fid)
+        if not isinstance(today_value, (int, float)) or isinstance(today_value, bool):
+            still.append(fid)
+            continue
+        as_of = source_as_of_map.get(fid)
+        if as_of is None or as_of.month not in FY_RESET_GRACE_MONTHS:
+            still.append(fid)
+            continue
+        prior_value = None
+        for snap in reversed(history):  # newest-last ⇒ reversed = newest-first
+            v = (snap.get("data") or {}).get(fid)
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
+                prior_value = v
+                break
+        if prior_value is None or not today_value < prior_value:
+            still.append(fid)
+            continue
+        excused.append(fid)
+    return still, excused
 
 
 def _quarantine_flagged(
@@ -531,18 +647,42 @@ def _build_v3_blocks(
             prior = _prior_good_snapshot(indicator_id, now.date())
             if prior is not None:
                 try:
-                    prior_date = datetime.fromisoformat(
+                    prior_scraped = datetime.fromisoformat(
                         prior["scraped_at"].replace("Z", "+00:00")
                     ).date()
                 except (KeyError, ValueError):
-                    prior_date = None
-                if prior_date is not None and _is_cumulative_regression(
-                    snapshot.get("value"), prior.get("value"), now.date(), prior_date
+                    prior_scraped = None
+                today_date, prior_date, publication_dated = _cumulative_guard_dates(
+                    snapshot, prior, now.date(), prior_scraped
+                )
+                if today_date is None or prior_date is None:
+                    pass  # nothing to compare against — leave the snapshot alone
+                elif (
+                    not publication_dated
+                    and today_date.month in FY_RESET_GRACE_MONTHS
+                ):
+                    # Scrape-dated fallback inside the FY reset window: both
+                    # sides sit in the same fiscal year by construction, so the
+                    # guard cannot tell July's legitimate restart from a parse
+                    # error. Declining to act is the cheaper mistake — letting a
+                    # bad figure through gets caught by the Opus review and by
+                    # tomorrow's run, whereas clobbering a correct reset
+                    # republishes last year's closing total as this year's and
+                    # never self-heals (landmine 56).
+                    logger.info(
+                        "cumulative guard stood down for %s: no source_as_of on "
+                        "both sides and %s is inside the FY reset window — "
+                        "cannot distinguish a July restart from a regression",
+                        indicator_id, today_date.isoformat(),
+                    )
+                elif _is_cumulative_regression(
+                    snapshot.get("value"), prior.get("value"), today_date, prior_date
                 ):
                     logger.error(
-                        "cumulative regression for %s: today=%s < prior-good=%s (same FY) "
-                        "— stale-fallback to %s",
-                        indicator_id, snapshot.get("value"), prior.get("value"),
+                        "cumulative regression for %s: today=%s (%s) < prior-good=%s "
+                        "(%s, same FY) — stale-fallback to %s",
+                        indicator_id, snapshot.get("value"), today_date.isoformat(),
+                        prior.get("value"), prior_date.isoformat(),
                         prior.get("scraped_at", "?"),
                     )
                     indicators_failed += 1
@@ -3639,7 +3779,8 @@ def main() -> int:
         if not history:
             logger.info("no archive history yet — skipping Opus review on this run")
         else:
-            verdict = review_data(data, history)
+            cumulative_ids = _cumulative_indicator_ids()
+            verdict = review_data(data, history, cumulative_ids=cumulative_ids)
             status = verdict.get("status", "ok")
             reason = verdict.get("reason", "")
             if verdict.get("skipped"):
@@ -3660,6 +3801,35 @@ def main() -> int:
                 anomalies = verdict.get("anomalies", []) or []
                 flagged = [a.get("indicator") for a in anomalies if a.get("indicator")]
                 flagged = list({*flagged, *missing})
+                # Fiscal-year reset override (landmine 56): drop any flagged id
+                # whose "collapse" is a cumulative total restarting on 1 July,
+                # BEFORE quarantine gets the chance to substitute last FY's
+                # closing figure — that substitution is what poisons tomorrow's
+                # history and makes the misread permanent.
+                flagged, fy_excused = _drop_expected_fy_resets(
+                    flagged, data, history, source_as_of_map, cumulative_ids
+                )
+                if fy_excused:
+                    logger.warning(
+                        "opus review overridden for %d cumulative field(s): %s — "
+                        "reporting an early fiscal-year period, so the drop is the "
+                        "1 July reset, not an anomaly | reason: %s",
+                        len(fy_excused), fy_excused, reason,
+                    )
+                if not flagged:
+                    logger.warning(
+                        "opus review reject fully explained by the fiscal-year "
+                        "reset (%s) — publishing today's data unchanged | reason: %s",
+                        fy_excused, reason,
+                    )
+                    notify(
+                        "warning",
+                        "EconDelta published over an Opus reject (fiscal-year reset)",
+                        f"reason: {reason}\nfields: {fy_excused}\n"
+                        f"these are fiscal-year-to-date totals reporting an early "
+                        f"month of the new FY — the drop is the 1 July reset. "
+                        f"Nothing was quarantined; today's values published as-is.",
+                    )
                 cleaned, quarantined, hard_reject = _quarantine_flagged(data, flagged, history)
                 if hard_reject:
                     logger.error(
@@ -3688,16 +3858,22 @@ def main() -> int:
                     _run_chart_feeding_monthly_appenders()
                     return 1
                 # Granular path: quarantine the flagged fields, publish the rest.
-                logger.warning(
-                    "opus review reject → quarantined %d field(s): %s | reason: %s",
-                    len(quarantined), quarantined, reason,
-                )
-                notify(
-                    "warning",
-                    "EconDelta published with fields quarantined",
-                    f"reason: {reason}\nquarantined: {quarantined}\n"
-                    f"these fields use last-good values; the rest published fresh.",
-                )
+                # `quarantined` can legitimately be empty now — the fiscal-year
+                # override above may have excused every flagged id — in which
+                # case this run publishes clean and the notify it already sent
+                # is the whole story. Don't follow it with an empty
+                # "fields quarantined" alert.
+                if quarantined:
+                    logger.warning(
+                        "opus review reject → quarantined %d field(s): %s | reason: %s",
+                        len(quarantined), quarantined, reason,
+                    )
+                    notify(
+                        "warning",
+                        "EconDelta published with fields quarantined",
+                        f"reason: {reason}\nquarantined: {quarantined}\n"
+                        f"these fields use last-good values; the rest published fresh.",
+                    )
                 data = cleaned
                 bundle = LatestBundle(
                     schema_version="3.0",
