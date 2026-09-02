@@ -15,7 +15,7 @@ import logging
 import os
 import re
 import subprocess
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -40,14 +40,21 @@ Bangladesh-context calibration:
 - **Bangladesh's fiscal year runs 1 July to 30 June.** The indicators listed under
   FISCAL-YEAR-TO-DATE SERIES below are cumulative running totals for the fiscal year.
   They restart near zero every 1 July, so the first figures of a new fiscal year are a
-  small fraction of the previous year's closing total. A 70-95 percent DROP in one of
-  these, in a value reporting July, August or September, is the annual reset — it is
-  CORRECT DATA and must NOT be reported as an anomaly or as missing. Two things follow:
-  the drop appears suddenly (the new figure lands the day the source publishes it, days
-  or weeks after 1 July), and the prior days of history will still show the old fiscal
-  year's much larger total, so "collapsed after N days of stable values" is exactly what
-  a correct reset looks like. Within a single fiscal year these series can only rise; a
-  drop between two figures that both report the SAME fiscal year is a real problem.
+  small fraction of the previous year's closing total. Each one is listed with the
+  publication date of today's figure ("reporting <date>"); when that date falls in
+  July, August, September or October, a 55-98 percent DROP against the prior days of
+  history is the annual reset, not an anomaly. Two things follow: the drop appears
+  suddenly (the new figure lands the day the source publishes it, days or weeks after
+  1 July), and the prior days of history will still show the old fiscal year's much
+  larger total, so "collapsed after N days of stable values" is exactly what a correct
+  reset looks like. Within a single fiscal year these series can only rise; a drop
+  between two figures that both report the SAME fiscal year is a real problem.
+  Report a reset in the normal way if you still think it is wrong — an id you list is
+  re-checked downstream against the publication dates and the size of the drop, and a
+  genuine reset is dropped there. What you must NOT do is omit an id you have doubts
+  about, or fold a doubt about one of these into a complaint about a different
+  indicator: an id that reaches that downstream check under a name it cannot map is
+  treated as an untrustworthy verdict and blocks the whole day's publication.
 
 Return ONLY a single JSON object, no commentary, no code fences. Schema:
 {{
@@ -110,6 +117,7 @@ def review_data(
     history: list[dict[str, Any]],
     *,
     cumulative_ids: Iterable[str] | None = None,
+    source_as_of_map: Mapping[str, Any] | None = None,
     binary: str | None = None,
     model: str = "claude-opus-4-8",
     timeout_s: int = 600,
@@ -130,8 +138,19 @@ def review_data(
     # own `cumulative` flag — the same flag the deterministic guards read — so
     # the prompt and the code can never drift apart on which series these are.
     ids = sorted(cumulative_ids or ())
+    as_of = source_as_of_map or {}
+
+    def _line(i: str) -> str:
+        # The month qualifier in the calibration note is unevaluable without
+        # this: the reviewer sees `.data`, which is bare id→number, while
+        # `source_as_of` lives in `.domains` and load_history() strips it. It
+        # was being asked to judge "a value reporting July" against data that
+        # never says what period any figure reports.
+        d = as_of.get(i)
+        return f"- {i}" + (f" — today's figure reports {d}" if d else "")
+
     cumulative_block = (
-        "\n".join(f"- {i}" for i in ids)
+        "\n".join(_line(i) for i in ids)
         if ids
         else "(none declared for this run)"
     )
@@ -217,8 +236,18 @@ def archive_latest(latest_path: Path, archive_dir: Path) -> Path | None:
 def load_history(archive_dir: Path, days: int = 5) -> list[dict[str, Any]]:
     """Load up to `days` most recent archived latest.json files.
 
-    Each loaded file is reduced to its `.data` dict — Opus only needs to
-    review the flat indicator values, not freshness/alerts/domains metadata.
+    Each loaded file is reduced to its `.data` dict plus the publication dates
+    behind it — Opus does not need the freshness/alerts blocks or the full
+    per-indicator provenance in `.domains`.
+
+    ``source_as_of`` is harvested OUT of `.domains` and flattened alongside the
+    values (28 of 59 indicators carry one). Dropping it entirely, as this
+    function used to, left every consumer unable to tell which PERIOD a
+    historical figure describes — so a fiscal-year-to-date total that restarted
+    on 1 July was indistinguishable from one that collapsed, both for the
+    reviewer reading this prompt and for the code that overrides its verdict.
+    Value and date must travel together or they can be read off different days.
+    See landmine 57.
     """
     if not archive_dir.exists():
         return []
@@ -229,9 +258,16 @@ def load_history(archive_dir: Path, days: int = 5) -> list[dict[str, Any]]:
             blob = json.loads(p.read_text())
         except (json.JSONDecodeError, OSError):
             continue
-        # Keep just the data block + updated_at for context
+        as_of: dict[str, str] = {}
+        for block in (blob.get("domains") or {}).values():
+            if not isinstance(block, dict):
+                continue
+            for iid, entry in block.items():
+                if isinstance(entry, dict) and entry.get("source_as_of"):
+                    as_of[iid] = str(entry["source_as_of"])
         out.append({
             "updated_at": blob.get("updated_at"),
             "data": blob.get("data", {}),
+            "source_as_of": as_of,
         })
     return out
