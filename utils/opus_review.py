@@ -15,6 +15,7 @@ import logging
 import os
 import re
 import subprocess
+from collections.abc import Iterable
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -36,6 +37,17 @@ Bangladesh-context calibration:
 - DSE indices closed Friday and Saturday (weekend) — null/zero values on those days are correct.
 - Bangladesh Bank monthly indicators (BoP, GDP, inflation) only update once a month; same value across many days is normal for these.
 - Reserves typically change by under 1 percent week-over-week.
+- **Bangladesh's fiscal year runs 1 July to 30 June.** The indicators listed under
+  FISCAL-YEAR-TO-DATE SERIES below are cumulative running totals for the fiscal year.
+  They restart near zero every 1 July, so the first figures of a new fiscal year are a
+  small fraction of the previous year's closing total. A 70-95 percent DROP in one of
+  these, in a value reporting July, August or September, is the annual reset — it is
+  CORRECT DATA and must NOT be reported as an anomaly or as missing. Two things follow:
+  the drop appears suddenly (the new figure lands the day the source publishes it, days
+  or weeks after 1 July), and the prior days of history will still show the old fiscal
+  year's much larger total, so "collapsed after N days of stable values" is exactly what
+  a correct reset looks like. Within a single fiscal year these series can only rise; a
+  drop between two figures that both report the SAME fiscal year is a real problem.
 
 Return ONLY a single JSON object, no commentary, no code fences. Schema:
 {{
@@ -53,6 +65,9 @@ Mild data drift, weekend closures, and same-value-as-yesterday for monthly
 indicators are all OK and should produce status="ok".
 
 Today's date (UTC): {today_str}
+
+FISCAL-YEAR-TO-DATE SERIES (cumulative; reset every 1 July — see the calibration note above):
+{cumulative_block}
 
 TODAY'S PROPOSED DATA (the `.data` block of latest.json):
 {today_json}
@@ -94,6 +109,7 @@ def review_data(
     today_data: dict[str, Any],
     history: list[dict[str, Any]],
     *,
+    cumulative_ids: Iterable[str] | None = None,
     binary: str | None = None,
     model: str = "claude-opus-4-8",
     timeout_s: int = 600,
@@ -109,9 +125,20 @@ def review_data(
     today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     today_json = _truncate(json.dumps(today_data, indent=2, default=str), 50_000)
     history_json = _truncate(json.dumps(history, indent=2, default=str), 200_000)
+    # Named explicitly rather than described, so the reviewer never has to infer
+    # "is this one cumulative?" from an indicator id. The list is the registry's
+    # own `cumulative` flag — the same flag the deterministic guards read — so
+    # the prompt and the code can never drift apart on which series these are.
+    ids = sorted(cumulative_ids or ())
+    cumulative_block = (
+        "\n".join(f"- {i}" for i in ids)
+        if ids
+        else "(none declared for this run)"
+    )
 
     prompt = REVIEW_PROMPT.format(
         today_str=today_str,
+        cumulative_block=cumulative_block,
         today_json=today_json,
         n_days=len(history),
         history_json=history_json,

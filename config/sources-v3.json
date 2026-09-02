@@ -1178,6 +1178,7 @@
       "name": "Categorywise Export",
       "domain": "external_sector",
       "cadence": "fiscal_year",
+      "cumulative": true,
       "fetch": {
         "type": "pdf",
         "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
@@ -1374,6 +1375,7 @@
       "name": "Remittance by country",
       "domain": "external_sector",
       "cadence": "monthly",
+      "cumulative": true,
       "fetch": {
         "type": "pdf",
         "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
