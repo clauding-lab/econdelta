@@ -2452,7 +2452,9 @@ def _yield_ladder_rows_for_month(
     month_end: date,
     existing_pairs: set[tuple[str, date]],
     existing_values: dict[tuple[str, date], float] | None = None,
+    existing_source_as_of: dict[tuple[str, date], date] | None = None,
     refresh: bool = False,
+    require_newer_source: bool = False,
 ) -> tuple[list[dict], list[str]]:
     """Pure transform: auction_results rows (already filtered to
     auction_date <= month_end, newest first) -> the 8-tenor yield-ladder
@@ -2481,20 +2483,39 @@ def _yield_ladder_rows_for_month(
     clobbering an existing value for a tenor that happens to already have
     this exact month.
 
-    ``refresh=True`` (2026-08-31, open-month leg) relaxes Stage 2 for ONE
-    caller only: the CURRENT, still-open month, whose curve is a moving
-    figure by definition -- every new auction inside the month changes it,
-    so "already written" must NOT mean "final". In refresh mode a pair is
-    still dropped when its stored value already EQUALS the freshly derived
-    one (so an ordinary day writes nothing at all and ``ingested_at``
-    doesn't churn), but a CHANGED value is re-emitted and the upsert
-    updates it in place. ``existing_values`` supplies the stored numbers
-    for that comparison; it is ignored entirely when ``refresh`` is False,
-    which keeps the completed-month leg bit-for-bit append-only.
+    ``refresh=True`` relaxes Stage 2: "already written" must not mean
+    "final". A pair is still dropped when its stored value already EQUALS
+    the freshly derived one (so an ordinary day writes nothing at all and
+    ``ingested_at`` doesn't churn), but a CHANGED value is re-emitted and
+    the upsert updates it in place. ``existing_values`` supplies the stored
+    numbers for that comparison; it is ignored entirely when ``refresh`` is
+    False.
 
-    Completed months never take this path: once a month is over its curve
-    can no longer move, so overwriting one could only ever destroy a
-    correct historical value.
+    Two callers use it, for two different reasons.
+
+    The OPEN month (2026-08-31) is a moving figure by definition -- every
+    new auction inside the month changes its curve.
+
+    The COMPLETED month (2026-09-02, landmine 54) is not moving, but the
+    runs that happened INSIDE it could never see its final auction: the
+    aggregate fires at 03:00 BDT, hours before that day's auction is
+    published. Left append-only, M-1's rung froze at the second-to-last
+    auction of the month and no later run would ever correct it.
+
+    ``require_newer_source=True`` is the extra guard that makes refreshing
+    a CLOSED month safe, and only the completed-month leg passes it. A row
+    is emitted only when the derived ``source_as_of`` is STRICTLY NEWER
+    than the stored one (``existing_source_as_of``). That makes the rewrite
+    monotonic in the underlying auction date, so it can only ever move a
+    rung FORWARD onto a later auction -- never re-derive a settled month
+    from degraded data. If ``auction_results`` were to lose rows, the
+    derivation would fall back to an OLDER auction, the guard would fail,
+    and the stored value would survive untouched. A missing or unparseable
+    stored ``source_as_of`` also fails the guard: the safe direction for
+    history is to leave it alone.
+
+    This cannot walk backwards through history either: the caller only ever
+    hands this function the open month and the one immediately before it.
 
     ``source_as_of`` on each written row is the REAL auction_date for that
     tenor (2026-08-08 review M2), not month_start -- matches the CPI leg's
@@ -2564,6 +2585,7 @@ def _yield_ladder_rows_for_month(
 
     month_start_iso = month_start.isoformat()
     stored = existing_values or {}
+    stored_source = existing_source_as_of or {}
     rows: list[dict] = []
     for tenor, monthly_id in _YIELD_TENOR_TO_MONTHLY_ID.items():
         if (monthly_id, month_start) in existing_pairs:
@@ -2571,7 +2593,14 @@ def _yield_ladder_rows_for_month(
                 continue  # append-only: already have this tenor for this month
             prior = stored.get((monthly_id, month_start))
             if prior is not None and prior == values[tenor]:
-                continue  # open month, unchanged since the last run -- no write
+                continue  # unchanged since the last run -- no write
+            if require_newer_source:
+                # Closed month: only ever move a rung FORWARD onto a later
+                # auction. No stored date, or one that is not strictly older
+                # than the derived one, means leave history alone.
+                prior_source = stored_source.get((monthly_id, month_start))
+                if prior_source is None or prior_source >= auction_dates[tenor]:
+                    continue
         rows.append({
             "metric_id": monthly_id,
             "as_of": month_start_iso,
@@ -2590,9 +2619,12 @@ def _write_yield_ladder_monthly_append(today: date | None = None) -> int:
     TWO legs, in this order:
 
     * **Completed month** M-1 (``_previous_month_start``, the same helper
-      Phase 1's remittance leg uses) -- strictly APPEND-ONLY, exactly as
-      before. A month that is over can no longer move, so its rung is
-      written once and never touched again.
+      Phase 1's remittance leg uses) -- REFRESHED, not append-only, since
+      2026-09-02 (landmine 54). A month that is over can no longer acquire
+      auctions, but the runs that happened INSIDE it could not see its last
+      one: the aggregate fires at 03:00 BDT, before that day's auction is
+      published. So M-1's rung is re-derived until it matches, which takes
+      exactly one run of month M and is a no-op read thereafter.
     * **Open month** M (``today.replace(day=1)``, cut off at ``today``, not
       at the calendar month end which is still in the future) -- REFRESHED
       on every run. Added 2026-08-31: the previous behaviour published only
@@ -2641,16 +2673,25 @@ def _write_yield_ladder_monthly_append(today: date | None = None) -> int:
     try:
         existing: set[tuple[str, date]] = set()
         existing_values: dict[tuple[str, date], float] = {}
+        existing_source_as_of: dict[tuple[str, date], date] = {}
         for monthly_id in monthly_ids:
             for row in get_metric_history_monthly(monthly_id):
                 as_of = _parse_monthly_row_date(row.get("as_of"))
                 if as_of is None:
                     continue
                 existing.add((monthly_id, as_of))
-                # Stored value backs the open-month "did it actually change?"
-                # check. A row whose value won't coerce is left out of the
-                # map, which makes the comparison miss and the row get
-                # rewritten -- the safe direction.
+                # Stored source_as_of backs the completed month's
+                # monotonicity guard. Absent or unparseable leaves the pair
+                # out of the map, which FAILS the guard and leaves the stored
+                # row alone -- the safe direction for a closed month.
+                source_as_of = _parse_monthly_row_date(row.get("source_as_of"))
+                if source_as_of is not None:
+                    existing_source_as_of[(monthly_id, as_of)] = source_as_of
+                # Stored value backs the "did it actually change?" check. A
+                # row whose value won't coerce is left out of the map, which
+                # makes the comparison miss and the row get rewritten -- the
+                # safe direction for the OPEN month (and still gated by the
+                # guard above for the completed one).
                 try:
                     existing_values[(monthly_id, as_of)] = float(row["value"])
                 except (KeyError, TypeError, ValueError):
@@ -2667,10 +2708,6 @@ def _write_yield_ladder_monthly_append(today: date | None = None) -> int:
             f"append-only check; yield ladder skipped this run. {type(e).__name__}: {e}",
         )
         return 0
-
-    prev_complete = all(
-        (monthly_id, prev_month_start) in existing for monthly_id in monthly_ids
-    )
 
     try:
         # ONE read for both legs: through `today` is a superset of the
@@ -2691,23 +2728,41 @@ def _write_yield_ladder_monthly_append(today: date | None = None) -> int:
     rows: list[dict] = []
     reasons: list[str] = []
 
-    # Leg 1 -- completed month, append-only. Skipped entirely once written,
-    # which preserves the old short-circuit's intent (no repeated writes)
-    # without it also short-circuiting the open-month leg below.
-    if not prev_complete:
-        prev_rows, prev_reasons = _yield_ladder_rows_for_month(
-            auction_rows,
-            month_start=prev_month_start,
-            month_end=prev_month_end,
-            existing_pairs=existing,
-        )
-        rows.extend(prev_rows)
-        reasons.extend(prev_reasons)
-    else:
-        logger.info(
-            "yield ladder append: %s already fully present for all 8 tenors -- "
-            "completed-month leg has nothing to do", prev_month_start,
-        )
+    # Leg 1 -- the completed month, REFRESHED until it settles.
+    #
+    # Append-only until 2026-09-02 (landmine 54). A month's LAST auction is
+    # invisible to every run that happens inside that month: the aggregate
+    # fires at 03:00 BDT, hours before the day's auction is published, so
+    # August's final run only ever saw auctions through 24-27 Aug. The first
+    # run of September then skipped August entirely -- its rows existed -- and
+    # the 31 Aug auction was lost from August's rung permanently. It happened
+    # for real: August's three bill rungs sat at the 24 Aug cutoffs (8.829 /
+    # 8.92 / 9.07) while the 31 Aug auction had cleared ~10bp lower (8.7289 /
+    # 8.8199 / 8.8901), so The Brief's ladder drew a month-end curve that was
+    # never the month's end.
+    #
+    # `require_newer_source=True` is what makes rewriting a CLOSED month
+    # safe, and it is the whole difference from the open month's refresh: a
+    # rung moves only onto a STRICTLY LATER auction date. The rewrite is
+    # therefore monotonic -- it can carry a month forward onto its final
+    # auction, and it cannot re-derive a settled month from degraded data. If
+    # auction_results ever lost rows, the derivation would fall back to an
+    # older auction, the guard would fail, and the stored value would stand.
+    #
+    # Self-terminating too: one run of month M corrects the month just ended,
+    # and every run after that finds nothing newer and writes nothing.
+    prev_rows, prev_reasons = _yield_ladder_rows_for_month(
+        auction_rows,
+        month_start=prev_month_start,
+        month_end=prev_month_end,
+        existing_pairs=existing,
+        existing_values=existing_values,
+        existing_source_as_of=existing_source_as_of,
+        refresh=True,
+        require_newer_source=True,
+    )
+    rows.extend(prev_rows)
+    reasons.extend(prev_reasons)
 
     # Leg 2 -- the open month, refreshed every run. Its all-or-nothing
     # derivation and staleness floor are the completed month's, unchanged;

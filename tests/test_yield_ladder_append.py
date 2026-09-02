@@ -809,3 +809,149 @@ class TestHasAuctionInWindow:
     def test_unparseable_auction_date_is_ignored_not_raised(self):
         rows = [{"auction_date": "not-a-date", "tenor": "10y", "cutoff": 9.2}]
         assert not agg._has_auction_in_window(rows, start=date(2026, 8, 1), end=date(2026, 8, 8))
+
+
+# ---------------------------------------------------------------------------
+# Completed-month refresh (landmine 54, 2026-09-02)
+# ---------------------------------------------------------------------------
+
+
+class TestCompletedMonthRefresh:
+    """A month's LAST auction is invisible to every run inside that month.
+
+    The aggregate fires at 03:00 BDT, hours before the day's auction is
+    published, so the final run of August only ever saw auctions through
+    24-27 Aug. Under the old append-only leg, the first run of September then
+    skipped August because its rows existed -- and the 31 Aug auction was
+    lost from August's rung permanently. That happened for real: August's
+    three bill rungs sat at the 24 Aug cutoffs while the 31 Aug auction had
+    cleared ~10bp lower.
+
+    The correction is gated on ``require_newer_source``: a closed month's
+    rung may only ever move FORWARD onto a strictly later auction date.
+    """
+
+    JULY = date(2026, 7, 1)
+
+    def _stored(self, value: float, source_as_of: str | None):
+        """metric_history_monthly stub: July written at `value`."""
+        def _dispatch(metric_id, **kwargs):
+            row = {"metric_id": metric_id, "as_of": self.JULY.isoformat(), "value": value}
+            if source_as_of is not None:
+                row["source_as_of"] = source_as_of
+            return [row]
+        return _dispatch
+
+    def _run(self, monkeypatch, *, stored, auction_rows):
+        import utils.supabase_reader as reader
+        import utils.supabase_writer as writer
+
+        monkeypatch.setattr(reader, "get_metric_history_monthly", stored)
+        monkeypatch.setattr(reader, "get_auction_results_through", lambda *a, **k: auction_rows)
+        captured: list[dict] = []
+        monkeypatch.setattr(
+            writer, "upsert_metric_history_monthly",
+            lambda rows, **k: (captured.extend(rows), len(rows))[1],
+        )
+        monkeypatch.setattr(agg, "notify", lambda *a, **k: True)
+        agg._write_yield_ladder_monthly_append(today=TODAY)
+        return captured
+
+    def test_later_auction_moves_the_completed_rung_forward(self, monkeypatch):
+        """The headline fix: a 28 Jul auction that landed after July's last
+        successful run corrects July's rung."""
+        captured = self._run(
+            monkeypatch,
+            stored=self._stored(10.0, "2026-07-10"),
+            # 28 Jul supersedes the stored 10 Jul print for every tenor.
+            auction_rows=_full_ladder_rows(date(2026, 7, 28), base=9.0),
+        )
+        july_rows = [r for r in captured if r["as_of"] == "2026-07-01"]
+        assert len(july_rows) == 8
+        assert {r["source_as_of"] for r in july_rows} == {"2026-07-28"}
+        assert all(r["value"] < 10.0 for r in july_rows)
+
+    def test_only_the_tenors_that_actually_moved_are_rewritten(self, monkeypatch):
+        """One late 10y print must not churn the other seven rungs."""
+        captured = self._run(
+            monkeypatch,
+            stored=self._stored(10.0, "2026-07-10"),
+            auction_rows=[_auction_row("10y", date(2026, 7, 28), 8.75)]
+            + _full_ladder_rows(date(2026, 7, 10)),
+        )
+        july_rows = [r for r in captured if r["as_of"] == "2026-07-01"]
+        assert [r["metric_id"] for r in july_rows] == ["yield_10y_monthly"]
+        assert july_rows[0]["value"] == 8.75
+        assert july_rows[0]["source_as_of"] == "2026-07-28"
+
+    def test_second_run_writes_nothing(self, monkeypatch):
+        """Self-terminating: once July's rung sits on July's final auction,
+        every later run is a pure read."""
+        captured = self._run(
+            monkeypatch,
+            stored=self._stored(9.0, "2026-07-28"),
+            auction_rows=_full_ladder_rows(date(2026, 7, 28), base=9.0),
+        )
+        assert [r for r in captured if r["as_of"] == "2026-07-01"] == []
+
+    def test_same_auction_date_never_rewrites_even_if_the_value_differs(self, monkeypatch):
+        """Guard is on the DATE, not the value. A cutoff that changed under a
+        date we already have is not evidence of a later auction -- it is
+        evidence something upstream moved, and history stands."""
+        captured = self._run(
+            monkeypatch,
+            stored=self._stored(10.0, "2026-07-28"),
+            auction_rows=_full_ladder_rows(date(2026, 7, 28), base=9.0),
+        )
+        assert [r for r in captured if r["as_of"] == "2026-07-01"] == []
+
+    def test_older_derivation_cannot_clobber_history(self, monkeypatch):
+        """The row-loss case. If auction_results lost July's late prints, the
+        derivation falls back to an EARLIER auction; monotonicity must keep
+        the stored (better) value."""
+        captured = self._run(
+            monkeypatch,
+            stored=self._stored(9.0, "2026-07-28"),
+            auction_rows=_full_ladder_rows(date(2026, 7, 10), base=10.0),
+        )
+        assert [r for r in captured if r["as_of"] == "2026-07-01"] == []
+
+    def test_missing_stored_source_as_of_leaves_the_row_alone(self, monkeypatch):
+        """Rows written before source_as_of was populated carry no date to
+        compare against. Failing the guard -- leaving them -- is the safe
+        direction for a closed month."""
+        captured = self._run(
+            monkeypatch,
+            stored=self._stored(10.0, None),
+            auction_rows=_full_ladder_rows(date(2026, 7, 28), base=9.0),
+        )
+        assert [r for r in captured if r["as_of"] == "2026-07-01"] == []
+
+    def test_refresh_never_reaches_further_back_than_the_previous_month(self, monkeypatch):
+        """Only M-1 and M are ever handed to the transform. A June row that
+        disagrees with today's auction history must not be touched."""
+        import utils.supabase_reader as reader
+        import utils.supabase_writer as writer
+
+        def _dispatch(metric_id, **kwargs):
+            return [
+                {"metric_id": metric_id, "as_of": "2026-06-01", "value": 99.0,
+                 "source_as_of": "2026-06-02"},
+                {"metric_id": metric_id, "as_of": "2026-07-01", "value": 9.0,
+                 "source_as_of": "2026-07-28"},
+            ]
+
+        monkeypatch.setattr(reader, "get_metric_history_monthly", _dispatch)
+        monkeypatch.setattr(
+            reader, "get_auction_results_through",
+            lambda *a, **k: _full_ladder_rows(date(2026, 7, 28), base=9.0),
+        )
+        captured: list[dict] = []
+        monkeypatch.setattr(
+            writer, "upsert_metric_history_monthly",
+            lambda rows, **k: (captured.extend(rows), len(rows))[1],
+        )
+        monkeypatch.setattr(agg, "notify", lambda *a, **k: True)
+
+        agg._write_yield_ladder_monthly_append(today=TODAY)
+        assert not any(r["as_of"] == "2026-06-01" for r in captured)
