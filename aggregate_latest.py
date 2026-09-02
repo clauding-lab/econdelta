@@ -3315,6 +3315,94 @@ def write_latest(bundle: LatestBundle) -> None:
     os.replace(tmp_path, LATEST_PATH)
 
 
+def _run_chart_feeding_monthly_appenders() -> None:
+    """Run the two chart-feeding metric_history_monthly appenders.
+
+    Extracted from ``main()`` on 2026-08-31 so it can be called from BOTH the
+    happy path and the Opus ``hard_reject`` path (landmine 53). Neither leg
+    reads this run's ``bundle``/``data``: the yield ladder promotes rows out of
+    ``auction_results`` (written by econdelta-auction.service) and the macro
+    leg reads the CPI trio back out of ``metric_history``. So an Opus verdict
+    about today's export/treasury numbers has no bearing on whether these two
+    are correct, and must not stop them running.
+
+    Every failure is contained and notified per-leg — this function never
+    raises, so a caller can invoke it immediately before its own ``return``
+    without changing that return value.
+    """
+    # Macro monthly LIVE APPENDER (2026-08-08 frozen-charts incident,
+    # landmine 50) -- CPI trio + remittance chart-feeding series. Own
+    # try/except (mirrors D5 in main()): a failure here must notify with its
+    # OWN distinct message, not get conflated with the daily
+    # metric_history failure or the reserves-split failure -- three
+    # different tables/paths, three different responder actions. Gated
+    # the same way as the daily metric_history write (not tied to
+    # bb_forex_ok -- this appender is independent of bb_forex) and called
+    # AFTER it on the happy path so a CPI value that changed THIS run is
+    # already persisted to the daily table before the appender reads it back.
+    if os.environ.get("ECONDELTA_SKIP_SUPABASE") != "1":
+        try:
+            macro_rows = _write_macro_monthly_append()
+            if macro_rows:
+                logger.info(
+                    "upserted %d row(s) to Supabase metric_history_monthly "
+                    "(macro monthly append: CPI trio + remittance)", macro_rows,
+                )
+        except Exception as e:  # noqa: BLE001 -- 2026-08-08 review M1/L4b:
+            # defense-in-depth final backstop. _write_macro_monthly_append's
+            # own sub-path try/excepts already contain every known failure
+            # mode (CPI read, remittance existing-rows read, remittance
+            # fetch/parse) -- by construction, only the final
+            # upsert_metric_history_monthly call (SupabaseWriteError) should
+            # ever reach here. Broadened from that single type to Exception
+            # so a future refactor that accidentally lets something else
+            # escape still can't crash the whole daily aggregate run.
+            logger.warning(
+                "macro monthly append failed: %s — continuing with local "
+                "archive only", e,
+            )
+            notify(
+                "error",
+                "aggregate — macro monthly append write failed",
+                "metric_history_monthly upsert (CPI trio / remittance appender) "
+                "failed; The Brief's inflation/remittance charts will serve "
+                f"stale data until the next successful run. {type(e).__name__}: {e}",
+            )
+
+    # Yield-ladder LIVE APPENDER (Phase 2, landmine 51) -- the 8-tenor
+    # T-bill/T-bond curve, promoted from auction_results. Own try/except
+    # (mirrors the macro-append block above and D5 in main()): a fully
+    # SEPARATE function call with its own upsert, so a failure here can
+    # never prevent the CPI/remittance legs above from having already
+    # reached THEIR upsert (they already did, by the time this block
+    # runs), and a failure THERE could never have prevented this leg
+    # from running either -- each leg's try/except fully contains its
+    # own failures before the next leg's call even starts.
+    if os.environ.get("ECONDELTA_SKIP_SUPABASE") != "1":
+        try:
+            yield_rows = _write_yield_ladder_monthly_append()
+            if yield_rows:
+                logger.info(
+                    "upserted %d row(s) to Supabase metric_history_monthly "
+                    "(yield ladder append, Phase 2)", yield_rows,
+                )
+        except Exception as e:  # noqa: BLE001 -- same R1/M1 reasoning as
+            # the macro-append call site above: by construction only the
+            # final upsert_metric_history_monthly call should reach here,
+            # but broadened to Exception as a defense-in-depth backstop.
+            logger.warning(
+                "yield ladder append failed: %s — continuing with local "
+                "archive only", e,
+            )
+            notify(
+                "error",
+                "aggregate — yield ladder append write failed",
+                "metric_history_monthly upsert (yield ladder appender, Phase 2) "
+                "failed; The Brief's yield-curve chart will serve stale data "
+                f"until the next successful run. {type(e).__name__}: {e}",
+            )
+
+
 def main() -> int:
     logging.basicConfig(
         level=logging.INFO,
@@ -3530,6 +3618,19 @@ def main() -> int:
                         f"reason: {reason}\nmissing: {missing[:5]}\nanomalies: {len(anomalies)}\n"
                         f"keeping yesterday's latest.json — retry timers will re-run.",
                     )
+                    # Landmine 53 (2026-08-31 frozen-yield-ladder incident): the
+                    # chart-feeding monthly appenders do NOT read this run's
+                    # bundle. The ladder promotes rows out of auction_results and
+                    # the macro leg reads the CPI trio back out of metric_history
+                    # — neither is implicated by an Opus verdict about today's
+                    # export/treasury numbers. Before this call existed, a
+                    # hard_reject `return 1` here skipped both appenders (they sat
+                    # ~190 lines below), so an unrelated export anomaly silently
+                    # froze The Brief's yield-curve and inflation charts. August
+                    # 2026's rung went missing for exactly this reason and had to
+                    # be written by hand. The function contains and notifies its
+                    # own failures, so this cannot change the `return 1` below.
+                    _run_chart_feeding_monthly_appenders()
                     return 1
                 # Granular path: quarantine the flagged fields, publish the rest.
                 logger.warning(
@@ -3679,77 +3780,14 @@ def main() -> int:
                     f"the next successful run. {type(e).__name__}: {e}",
                 )
 
-        # Macro monthly LIVE APPENDER (2026-08-08 frozen-charts incident,
-        # landmine 50) -- CPI trio + remittance chart-feeding series. Own
-        # try/except (mirrors D5 above): a failure here must notify with its
-        # OWN distinct message, not get conflated with the daily
-        # metric_history failure or the reserves-split failure above -- three
-        # different tables/paths, three different responder actions. Gated
-        # the same way as the daily metric_history write above (not tied to
-        # bb_forex_ok -- this appender is independent of bb_forex) and placed
-        # AFTER it so a CPI value that changed THIS run is already persisted
-        # to the daily table before the appender reads it back.
-        if os.environ.get("ECONDELTA_SKIP_SUPABASE") != "1":
-            try:
-                macro_rows = _write_macro_monthly_append()
-                if macro_rows:
-                    logger.info(
-                        "upserted %d row(s) to Supabase metric_history_monthly "
-                        "(macro monthly append: CPI trio + remittance)", macro_rows,
-                    )
-            except Exception as e:  # noqa: BLE001 -- 2026-08-08 review M1/L4b:
-                # defense-in-depth final backstop. _write_macro_monthly_append's
-                # own sub-path try/excepts already contain every known failure
-                # mode (CPI read, remittance existing-rows read, remittance
-                # fetch/parse) -- by construction, only the final
-                # upsert_metric_history_monthly call (SupabaseWriteError) should
-                # ever reach here. Broadened from that single type to Exception
-                # so a future refactor that accidentally lets something else
-                # escape still can't crash the whole daily aggregate run.
-                logger.warning(
-                    "macro monthly append failed: %s — continuing with local "
-                    "archive only", e,
-                )
-                notify(
-                    "error",
-                    "aggregate — macro monthly append write failed",
-                    "metric_history_monthly upsert (CPI trio / remittance appender) "
-                    "failed; The Brief's inflation/remittance charts will serve "
-                    f"stale data until the next successful run. {type(e).__name__}: {e}",
-                )
-
-        # Yield-ladder LIVE APPENDER (Phase 2, landmine 51) -- the 8-tenor
-        # T-bill/T-bond curve, promoted from auction_results. Own try/except
-        # (mirrors the macro-append block above and D5 before it): a fully
-        # SEPARATE function call with its own upsert, so a failure here can
-        # never prevent the CPI/remittance legs above from having already
-        # reached THEIR upsert (they already did, by the time this block
-        # runs), and a failure THERE could never have prevented this leg
-        # from running either -- each leg's try/except fully contains its
-        # own failures before the next leg's call even starts.
-        if os.environ.get("ECONDELTA_SKIP_SUPABASE") != "1":
-            try:
-                yield_rows = _write_yield_ladder_monthly_append()
-                if yield_rows:
-                    logger.info(
-                        "upserted %d row(s) to Supabase metric_history_monthly "
-                        "(yield ladder append, Phase 2)", yield_rows,
-                    )
-            except Exception as e:  # noqa: BLE001 -- same R1/M1 reasoning as
-                # the macro-append call site above: by construction only the
-                # final upsert_metric_history_monthly call should reach here,
-                # but broadened to Exception as a defense-in-depth backstop.
-                logger.warning(
-                    "yield ladder append failed: %s — continuing with local "
-                    "archive only", e,
-                )
-                notify(
-                    "error",
-                    "aggregate — yield ladder append write failed",
-                    "metric_history_monthly upsert (yield ladder appender, Phase 2) "
-                    "failed; The Brief's yield-curve chart will serve stale data "
-                    f"until the next successful run. {type(e).__name__}: {e}",
-                )
+        # The two chart-feeding monthly appenders (CPI trio + remittance,
+        # then the 8-tenor yield ladder). Body lives in
+        # `_run_chart_feeding_monthly_appenders` so the hard_reject path can
+        # call it too -- see landmine 53. Called here, after the daily
+        # metric_history write above, so a CPI value that changed THIS run is
+        # already persisted to the daily table before the macro leg reads it
+        # back.
+        _run_chart_feeding_monthly_appenders()
 
     summary = " ".join(
         f"{k}={s.status}({s.age_hours}h)" if s.age_hours is not None else f"{k}={s.status}"
