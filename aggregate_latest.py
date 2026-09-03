@@ -15,6 +15,8 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from fetchers.dated_form import DEFAULT_MAX_LOOKBACK_DAYS
+from utils.alert_dedup import should_alert_today
 from utils.anomaly import check_corridor_coherence
 from utils.calendar import last_trading_close, load_holidays
 from utils.notifier import notify
@@ -123,6 +125,40 @@ FY_RESET_GRACE_MONTHS = frozenset({7, 8, 9, 10})
 RESET_PLAUSIBILITY_BAND = (0.02, 0.45)
 # Granular Opus reject: quarantine up to this many flagged fields; more ⇒ hard reject.
 MAX_QUARANTINE_FIELDS = 5
+
+# A stale fallback (today's snapshot is bad, so we republish the last good one)
+# is normal for a day or two — a source is late, the parser missed once. Past
+# this many days it is not lateness, it is a broken fetcher wearing the costume
+# of a working one, and the bundle looks healthy the whole time. That is exactly
+# how `treasury_bill_outstanding` republished one 30 June reading for 60 days:
+# the page had moved, every fetch failed, `_load_last_good_snapshot` covered for
+# it silently at INFO, and The Brief printed a two-month-old number as today's
+# (~14,000 cr / 6.8% light) until the 60-day window finally expired. Seven days
+# clears an ordinary late-source blip plus the Fri/Sat weekend either side of it;
+# anything longer gets an alert and a Discord message. See landmine 58.
+STALE_FALLBACK_ALERT_DAYS = 7
+
+# The `date_form` fetcher walks BACKWARDS from yesterday until it finds a day the
+# source actually filled in, so a long public holiday ends in a PERFECTLY
+# SUCCESSFUL fetch that publishes an 8- or 9-day-old figure — the freshest one
+# that exists. Eid closures run 5-6 days and are routinely bracketed by the
+# Fri/Sat weekend either side, so 8-10 consecutive non-publishing days is the
+# normal shape of Eid, twice a year. Alarming at 7 would call that an emergency,
+# nightly, during the one week nothing is wrong — and an alarm that cries wolf
+# on a holiday is an alarm that gets muted before the real freeze arrives.
+# So this threshold is the indicator's OWN lookback window plus this grace,
+# computed per indicator rather than as a second flat constant, so the two can
+# never drift apart. The invariant: the fetcher must not be able to succeed
+# into its own alarm.
+DATE_FORM_STALE_GRACE_DAYS = 4
+
+# One Discord message per (day, set of stale indicators). The aggregate runs at
+# least twice a night unconditionally (aggregate.timer 20:55 UTC, then
+# aggregate-retry.timer 21:15 UTC — the retry has its own OnCalendar and does
+# NOT check whether the first run succeeded), and `Restart=on-failure` can add
+# more. Each is a fresh process, so utils.notifier's in-memory (level, title)
+# dedup — which only lives as long as one process — cannot collapse them.
+STALE_FALLBACK_ALERT_STATE_PATH = REPO_ROOT / "data" / "stale_fallback_alert_state.json"
 
 logger = logging.getLogger("aggregate_latest")
 
@@ -338,6 +374,31 @@ def _load_last_good_snapshot(indicator_id: str, *, max_days_back: int = 60) -> d
         blob["_stale_from"] = path.stem  # e.g. "2026-04-29"
         return blob
     return None
+
+
+def _iso_age_days(stamp: Any, today: date) -> int | None:
+    """Days between an ISO date (or datetime) stamp and `today`, or None.
+
+    Deliberately returns None rather than guessing: an alarm that fires on an
+    age it cannot justify ("stale for 19,000 days") teaches everyone to ignore
+    it. Accepts both shapes the codebase produces — a filename stem
+    ("2026-04-29") and a full `scraped_at` ("2026-04-29T20:55:10+00:00").
+    """
+    if not isinstance(stamp, str) or not stamp:
+        return None
+    try:
+        return (today - date.fromisoformat(stamp[:10])).days
+    except ValueError:
+        return None
+
+
+def _stale_fallback_age_days(snapshot: dict, today: date) -> int | None:
+    """How many days old the held-over reading is, or None if it isn't stated.
+
+    Reads the `_stale_from` annotation `_load_last_good_snapshot` writes (the
+    snapshot's filename stem, e.g. "2026-04-29").
+    """
+    return _iso_age_days(snapshot.get("_stale_from"), today)
 
 
 def _prior_good_snapshot(indicator_id: str, today: date) -> dict | None:
@@ -705,6 +766,7 @@ def _build_v3_blocks(
         if snapshot is None:
             indicators_failed += 1
             continue
+        stale_alerted = False
 
         # Stale-fallback: if today's snapshot is bad (parser wrote 0.0 with
         # provenance=needs_review), walk back through history for the most
@@ -720,11 +782,33 @@ def _build_v3_blocks(
                     indicator_id,
                 )
                 continue
-            logger.info(
-                "stale-fallback for %s: using %s (today is needs_review)",
-                indicator_id,
-                historical.get("_stale_from", "?"),
-            )
+            age_days = _stale_fallback_age_days(historical, now.date())
+            if age_days is not None and age_days >= STALE_FALLBACK_ALERT_DAYS:
+                stale_alerted = True
+                # Not a late source any more — the fetcher is broken and the
+                # bundle has been hiding it. Loud, and carried in the bundle.
+                logger.error(
+                    "stale-fallback for %s: republishing %s for the %dth day "
+                    "— the source has not parsed since then",
+                    indicator_id,
+                    historical.get("_stale_from", "?"),
+                    age_days,
+                )
+                alerts.append(
+                    Alert(
+                        indicator_id=indicator_id,
+                        type="stale_fallback",
+                        severity="error",
+                        value=historical.get("value"),
+                        age_days=age_days,
+                    )
+                )
+            else:
+                logger.info(
+                    "stale-fallback for %s: using %s (today is needs_review)",
+                    indicator_id,
+                    historical.get("_stale_from", "?"),
+                )
             snapshot = historical
 
         # Cumulative-monotonicity guard: a FYTD/cumulative total can't fall within
@@ -772,6 +856,70 @@ def _build_v3_blocks(
                     prior = {**prior, "_provenance": "stale_fallback",
                              "_stale_from": prior.get("scraped_at")}
                     snapshot = prior
+
+        # Second, independent staleness signal, for indicators whose source
+        # reports a specific day (`date_form`): the page's own answer.
+        #
+        # It exists because the stale-fallback alarm above has a blind spot it
+        # cannot see out of. When a fetch RAISES — a dead host, or (new here)
+        # a date walk that found no day with data — no artifact is written for
+        # today, so `parse_all._load_artifact_for` globs the directory, picks
+        # YESTERDAY's page, and re-parses it. That produces a perfectly healthy
+        # looking snapshot: good value, `_provenance=deterministic`, and a
+        # `scraped_at` of today. `_is_bad_snapshot` says no, the fallback never
+        # runs, freshness counts it fresh, and the figure can sit there for
+        # months. `source_as_of` is the only field that still tells the truth,
+        # and only a parser that recovers it can supply one — which is half the
+        # reason `gsom_total_row` exists. See landmine 58.
+        date_form = ind.get("fetch", {}).get("date_form")
+        if date_form and not stale_alerted:
+            # Alarm only once the age exceeds the window the fetcher is allowed
+            # to walk, so a successful holiday walk is never mistaken for a
+            # freeze. See DATE_FORM_STALE_GRACE_DAYS.
+            stale_after = (
+                int(date_form.get("max_lookback_days", DEFAULT_MAX_LOOKBACK_DAYS))
+                + DATE_FORM_STALE_GRACE_DAYS
+            )
+            as_of_age = _iso_age_days(snapshot.get("source_as_of"), now.date())
+            if as_of_age is None:
+                # A date_form page states its own date on every render — that
+                # echoed date is the thing the fetcher steers by. Losing it is
+                # not a cosmetic gap: it means the page no longer has the shape
+                # the POST assumes, so the number printed beside it is probably
+                # not the day we asked for. And a missing date silently DISABLES
+                # the age check below (`_iso_age_days` returns None and it
+                # declines to fire), which is the exact silence that let one
+                # 30 June reading run for 60 days. So a missing date is itself
+                # the alarm, not an excuse to skip it.
+                logger.error(
+                    "%s has no source_as_of — a date_form page always states its "
+                    "own date, so the page shape has changed and the fetcher can "
+                    "no longer prove which day this figure (%s) belongs to",
+                    indicator_id, snapshot.get("value"),
+                )
+                alerts.append(
+                    Alert(
+                        indicator_id=indicator_id,
+                        type="undated_source",
+                        severity="error",
+                        value=snapshot.get("value"),
+                    )
+                )
+            elif as_of_age >= stale_after:
+                logger.error(
+                    "%s is publishing a figure the source dated %s — %d days old "
+                    "(alarm at %d); today's fetch or parse has not produced a newer one",
+                    indicator_id, snapshot.get("source_as_of"), as_of_age, stale_after,
+                )
+                alerts.append(
+                    Alert(
+                        indicator_id=indicator_id,
+                        type="stale_fallback",
+                        severity="error",
+                        value=snapshot.get("value"),
+                        age_days=as_of_age,
+                    )
+                )
 
         fresh = _is_fresh(snapshot, now) and snapshot.get("_provenance") != "stale_fallback"
         if fresh:
@@ -824,6 +972,68 @@ def _build_v3_blocks(
         },
     )
     return data_additions, domains, freshness, alerts
+
+
+def _notify_long_stale_fallbacks(
+    alerts: list[Alert], *, today: date | None = None
+) -> bool:
+    """At most one Discord message per day for held-over and undated readings.
+
+    Oldest first, because the oldest is the one most likely to be a dead
+    source rather than a late one; undated ones last, since they have no age.
+
+    Deduped through ``should_alert_today`` rather than the notifier's own
+    in-memory window: the aggregate runs at least twice a night in separate
+    processes (and `Restart=on-failure` can add more), and this call sits
+    BEFORE the Opus review, so a hard-reject run reaches it too. Without the
+    state file the same freeze pages 2-6 times a night, every night, which is
+    how an alert gets muted. The dedup key carries the indicator set, so a
+    NEW indicator going stale later the same day still gets through.
+
+    The title deliberately holds no count — a count in the title makes every
+    change in the set look like a different alert.
+
+    Returns True if a message was sent, so the caller can tell silence from a
+    failed webhook.
+    """
+    flagged = [a for a in alerts if a.type in ("stale_fallback", "undated_source")]
+    if not flagged:
+        return False
+    flagged.sort(key=lambda a: (a.age_days is None, -(a.age_days or 0)))
+
+    key = "aggregate_stale_fallback:" + ",".join(sorted(a.indicator_id for a in flagged))
+    if not should_alert_today(
+        key, STALE_FALLBACK_ALERT_STATE_PATH, today=today or date.today()
+    ):
+        logger.info(
+            "stale-fallback Discord message already sent today for %s — not repeating",
+            ", ".join(a.indicator_id for a in flagged),
+        )
+        return False
+
+    lines = "\n".join(
+        f"• {a.indicator_id}: source date missing (publishing {a.value})"
+        if a.age_days is None
+        else f"• {a.indicator_id}: {a.age_days}d old (republishing {a.value})"
+        for a in flagged
+    )
+    sent = notify(
+        "error",
+        "EconDelta: indicators publishing a figure that is not today's",
+        f"{len(flagged)} indicator(s) are holding an old or undateable reading "
+        "because today's fetch/parse keeps failing — the figure in the brief is "
+        f"not today's:\n{lines}",
+    )
+    if not sent:
+        # notify() returns False for a missing webhook URL or an HTTP failure.
+        # The state file has already recorded the attempt, so without this line
+        # a dropped webhook would leave no trace anywhere.
+        logger.error(
+            "stale-fallback Discord message was NOT delivered — the alerts are in "
+            "the bundle but nobody was paged for: %s",
+            ", ".join(a.indicator_id for a in flagged),
+        )
+    return sent
 
 
 def _build_source_as_of_map(domains: dict[str, dict[str, Any]]) -> dict[str, date]:
@@ -3717,6 +3927,8 @@ def main() -> int:
     # v3 indicator values also land in the flat `data` dict for The Brief.
     data_additions, domains, freshness, alerts = _build_v3_blocks(now)
     data.update(data_additions)
+
+    _notify_long_stale_fallbacks(alerts)
 
     # Forex-source aliases AFTER the v3 merge: the parse-stage versions of these
     # indicators come from BB PDFs and frequently fail (Akamai TSPD challenge,

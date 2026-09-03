@@ -304,10 +304,20 @@
       "fetch": {
         "type": "html",
         "url": "https://gsom.bb.org.bd/index.php/tbill",
-        "task": "row=Total Outstanding Balance col=2"
+        "task": "row=Total Outstanding Balance col=2",
+        "date_form": {
+          "field": "picker_date",
+          "format": "%d-%b-%y",
+          "uppercase": true,
+          "extra_fields": {
+            "ci_csrf_token": ""
+          },
+          "start_offset_days": 1,
+          "max_lookback_days": 10
+        }
       },
       "parse": {
-        "deterministic": "html_table_row",
+        "deterministic": "gsom_total_row",
         "llm_prompt": "html_table_row.txt",
         "value_type": "amount_bdt_mn",
         "valid_range": [
@@ -330,10 +340,20 @@
       "fetch": {
         "type": "html",
         "url": "https://gsom.bb.org.bd/index.php/tbond",
-        "task": "row=Total Outstanding Balance col=2"
+        "task": "row=Total Outstanding Balance col=2",
+        "date_form": {
+          "field": "picker_date",
+          "format": "%d-%b-%y",
+          "uppercase": true,
+          "extra_fields": {
+            "ci_csrf_token": ""
+          },
+          "start_offset_days": 1,
+          "max_lookback_days": 10
+        }
       },
       "parse": {
-        "deterministic": "html_table_row",
+        "deterministic": "gsom_total_row",
         "llm_prompt": "html_table_row.txt",
         "value_type": "amount_bdt_mn",
         "valid_range": [

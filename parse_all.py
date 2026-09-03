@@ -14,6 +14,7 @@ from pathlib import Path
 import parsers.bb_bop_row  # noqa: F401
 import parsers.dam_ticker  # noqa: F401
 import parsers.dse_sector_heat  # noqa: F401
+import parsers.gsom_total_row  # noqa: F401
 import parsers.html_call_money  # noqa: F401
 import parsers.html_dated_table_row  # noqa: F401
 

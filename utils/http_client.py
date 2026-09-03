@@ -83,6 +83,35 @@ class HttpClient:
             raise HttpClient.FetchError(url, None, str(exc)) from exc
         return response
 
+    def post(self, url: str, **kwargs: Any) -> requests.Response:
+        """Perform a POST request.
+
+        Used for pages whose only way to ask for a specific date is their own
+        search form (BB's gsom portal posts ``picker_date`` back to the same
+        URL). Deliberately NOT covered by the session's Retry policy: that
+        policy is mounted with ``allowed_methods=["GET", "HEAD"]`` because a
+        blind POST retry is unsafe in general. These forms are read-only
+        queries, but the caller already walks several candidate dates, so a
+        transient failure on one date costs a candidate rather than the run.
+
+        Args:
+            url: Target URL.
+            **kwargs: Passed through to requests.Session.post ('data', 'json',
+                      'headers', ...). 'timeout' defaults to the instance timeout.
+
+        Returns:
+            requests.Response
+
+        Raises:
+            HttpClient.FetchError: On connection error.
+        """
+        kwargs.setdefault("timeout", self._timeout)
+        try:
+            response = self._session.post(url, **kwargs)
+        except requests.exceptions.RequestException as exc:
+            raise HttpClient.FetchError(url, None, str(exc)) from exc
+        return response
+
     def fetch_html(self, url: str, **kwargs: Any) -> str:
         """Fetch a URL and return the response body as text.
 
