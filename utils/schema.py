@@ -39,6 +39,9 @@ class Alert(BaseModel):
     value: float | int | str | None = None
     previous: float | int | str | None = None
     change_pct: float | None = None
+    # Only set on type="stale_fallback": how many days old the republished
+    # reading is. Optional so every existing alert stays valid unchanged.
+    age_days: int | None = None
 
 
 class SourceStatus(BaseModel):

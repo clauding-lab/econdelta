@@ -86,13 +86,60 @@ class TestRepointedUrls:
         assert stale == []
 
     def test_the_deterministic_instruction_is_unchanged(self):
-        """The repoint is a URL move, NOT a re-parse. If a future change
-        needs a different instruction here, that is a signal the total row
-        itself moved and this fixture needs re-capturing."""
+        """The total row itself did not move. If a future change needs a
+        different instruction here, that is a signal it DID and this
+        fixture needs re-capturing.
+
+        The parser name did change (`html_table_row` -> `gsom_total_row`),
+        but only to add `source_as_of` recovery on top of byte-identical
+        extraction -- see TestDatedFetchIsConfigured below."""
         for indicator_id in ("treasury_bill_outstanding", "treasury_bond_outstanding"):
             ind = _indicators()[indicator_id]
             assert ind["fetch"]["task"] == "row=Total Outstanding Balance col=2"
-            assert ind["parse"]["deterministic"] == "html_table_row"
+            assert ind["parse"]["deterministic"] == "gsom_total_row"
+
+
+class TestDatedFetchIsConfigured:
+    """The rebuilt portal answers for ONE date, defaulting to today.
+
+    Fetch runs at 01:11 BDT, before BB populates the day's T-bill row, so
+    "today" renders an empty table whose total reads 0 -- which is exactly
+    what `_is_bad_snapshot` calls a failed parse. Config must therefore ask
+    for a date, and must be allowed to walk back past empty ones (the
+    Fri/Sat weekend, plus the odd blank weekday).
+    """
+
+    @pytest.mark.parametrize(
+        "indicator_id",
+        ["treasury_bill_outstanding", "treasury_bond_outstanding"],
+    )
+    def test_each_treasury_page_is_fetched_for_an_explicit_date(self, indicator_id):
+        form = _indicators()[indicator_id]["fetch"]["date_form"]
+        assert form["field"] == "picker_date"
+        assert form["format"] == "%d-%b-%y"
+        assert form["uppercase"] is True
+
+    @pytest.mark.parametrize(
+        "indicator_id",
+        ["treasury_bill_outstanding", "treasury_bond_outstanding"],
+    )
+    def test_the_walk_starts_before_today_and_clears_a_weekend(self, indicator_id):
+        """Starting at today wastes the first request every night; a
+        lookback shorter than a Fri/Sat weekend plus a blank weekday would
+        give up while data still exists a day or two further back."""
+        form = _indicators()[indicator_id]["fetch"]["date_form"]
+        assert form["start_offset_days"] >= 1
+        assert form["max_lookback_days"] >= 4
+
+    @pytest.mark.parametrize(
+        "indicator_id",
+        ["treasury_bill_outstanding", "treasury_bond_outstanding"],
+    )
+    def test_the_csrf_field_is_posted(self, indicator_id):
+        """The portal's own form ships a hidden `ci_csrf_token`; posting
+        the date without it is how a 200-with-wrong-date creeps back in."""
+        form = _indicators()[indicator_id]["fetch"]["date_form"]
+        assert "ci_csrf_token" in form["extra_fields"]
 
 
 class TestNewPortalMarkup:
