@@ -1464,30 +1464,11 @@
       "anomaly_threshold": 0.05
     },
     {
-      "id": "gdp",
-      "name": "GDP",
-      "domain": "macro",
-      "cadence": "quarterly",
-      "fetch": {
-        "type": "pdf",
-        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/5/27",
-        "task": "Go to latest available PDF, Component 19",
-        "discover": "latest_pdf_link"
-      },
-      "parse": {
-        "deterministic": "pdf_component",
-        "llm_prompt": "pdf_component.txt",
-        "value_type": "amount_bdt_crore",
-        "valid_range": [
-          0.0,
-          100000000.0
-        ]
-      },
-      "anomaly_threshold": 0.05
-    },
-    {
       "id": "debt_gdp_ratio",
-      "name": "Debt-to-GDP Ratio (MoF Debt Bulletin latest print; IMF DataMapper supplies back-history via scrapers/imf_debt_gdp.py)",
+      "name": "MoF Public Debt-to-GDP Ratio",
+      "label": "MoF public debt/GDP ratio",
+      "unit": "percent",
+      "description": "Latest ratio published in Bangladesh's MoF Debt Bulletin, using the MoF definition and coverage. IMF general-government debt estimates are stored separately under imf_general_govt_debt_pct_gdp.",
       "domain": "government_finance",
       "cadence": "quarterly",
       "fetch": {
@@ -1506,6 +1487,27 @@
         ]
       },
       "anomaly_threshold": 0.5
+    },
+    {
+      "id": "gdp_growth_fy_pct",
+      "name": "GDP Growth Rate",
+      "label": "GDP growth rate",
+      "unit": "percent",
+      "domain": "macro",
+      "cadence": "fiscal_year",
+      "description": "Bangladesh Bank WSEI annual GDP growth rate. Bangladesh fiscal-year observations end on 30 June; provisional/final status follows the selected fiscal-year header.",
+      "fetch": {
+        "type": "pdf",
+        "url": "https://www.bb.org.bd/en/index.php/publication/publictn/5/27",
+        "task": "{\"series\":\"gdp_growth\",\"row\":\"GDP Growth Rate (Base: 2015-16)\",\"column\":\"latest_fy\",\"line\":0,\"unit\":\"percent\"}",
+        "discover": "latest_pdf_link"
+      },
+      "parse": {
+        "deterministic": "wsei_observation",
+        "value_type": "percent",
+        "valid_range": [-50.0, 50.0]
+      },
+      "anomaly_threshold": 0.2
     },
     {
       "id": "debt_domestic_stock_cr",

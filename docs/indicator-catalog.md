@@ -6,7 +6,7 @@
 python3 scripts/build_catalog.py > docs/indicator-catalog.md
 ```
 
-**64** scraped indicators × **36** brief aliases × **12** unit conversions × **49** derived = **155** total entries.
+**64** scraped indicators × **36** brief aliases × **12** unit conversions × **50** derived = **156** total entries.
 
 Read the data contract for column semantics and query examples: [`data-contract.md`](data-contract.md).
 
@@ -47,6 +47,7 @@ Read the data contract for column semantics and query examples: [`data-contract.
 | derived (cross-source) | `dommr_1w` | `percent` | daily | — | — | Dhaka Overnight Money Market Rate — 1W tenor, from BB's Money Market Reference Rate page. Fanned out from `money_market_ref_rate`. 1M/3M tenors deliberately not captured (accumulation freezes them for days). |
 | derived (cross-source) | `gross_npl_stock` | `amount_bdt_crore` | fiscal_year | — | — | Gross non-performing loans of the banking sector — from BB FSR Table 2.3 via scrapers/bb_npl_structure.py (annual). |
 | derived (cross-source) | `imf_eff_outstanding_sdr_mn` | `amount_sdr_mn` | monthly | — | — | Scraper-only (S5): Bangladesh's Extended Arrangements (EFF) outstanding under the combined ECF/EFF/RSF programme, in SDR Million, pulled directly from the IMF 'Financial Position in the Fund' page by scrapers/imf_eff.py (NO BD egress; no config indicator). Reported natively in SDR — NOT converted to USD (SDR/USD drifts). Lands in metric_history under its own id; as_of = the IMF month-end position date. |
+| derived (cross-source) | `imf_general_govt_debt_pct_gdp` | `percent` | fiscal_year | — | — | IMF DataMapper GGXWDG_NGDP general-government gross debt as a percentage of GDP. Bangladesh fiscal years end on 30 June. Estimates and projections are preserved in the local timestamped source-payload archive; IMF observations are not treated as independently audited actuals. |
 | derived (cross-source) | `lending_share_sector_agriculture` | `percent` | fiscal_year | — | — | Share of lending — Agriculture — from BB FSR Table 2.3 via scrapers/bb_npl_structure.py (annual). |
 | derived (cross-source) | `lending_share_sector_capital_market` | `percent` | fiscal_year | — | — | Share of lending — Loans to Capital Market — from BB FSR Table 2.3 via scrapers/bb_npl_structure.py (annual). |
 | derived (cross-source) | `lending_share_sector_consumer_credit` | `percent` | fiscal_year | — | — | Share of lending — Consumer Credit — from BB FSR Table 2.3 via scrapers/bb_npl_structure.py (annual). |
@@ -109,7 +110,7 @@ Read the data contract for column semantics and query examples: [`data-contract.
 | government_finance | `bank_borrowing_for_deficit_financing` | `amount_bdt_crore` | monthly | BB | [0.0, 400000.0] | Bank Borrowing for Deficit Financing |
 | government_finance | `debt_domestic_stock_cr` | `amount_bdt_crore` | quarterly | mof.gov.bd | [500000.0, 3000000.0] | Domestic Debt Outstanding Stock (MoF Debt Bulletin; FY25 ~Tk11.95tn). Stock level, NOT the deficit-financing flow domestic_borrowing_for_budget_deficit. |
 | government_finance | `debt_external_stock_cr` | `amount_bdt_crore` | quarterly | mof.gov.bd | [300000.0, 3000000.0] | External Debt Outstanding Stock (MoF Debt Bulletin; FY25 ~Tk9.49tn). Stock level, NOT the deficit-financing flow foreign_borrowing_for_budget_deficit. |
-| government_finance | `debt_gdp_ratio` | `percent` | quarterly | mof.gov.bd | [10.0, 100.0] | Debt-to-GDP Ratio (MoF Debt Bulletin latest print; IMF DataMapper supplies back-history via scrapers/imf_debt_gdp.py) |
+| government_finance | `debt_gdp_ratio` | `percent` | quarterly | mof.gov.bd | [10.0, 100.0] | MoF Public Debt-to-GDP Ratio |
 | government_finance | `domestic_borrowing_for_budget_deficit` | `amount_bdt_crore` | monthly | BB | [0.0, 400000.0] | Domestic Borrowing for Budget Deficit |
 | government_finance | `foreign_borrowing_for_budget_deficit` | `amount_bdt_crore` | monthly | BB | [0.0, 200000.0] | Foreign Borrowing for Budget Deficit |
 | government_finance | `nbr_customs_collected_cr` | `amount_bdt_crore` | monthly | TBS | [10000.0, 800000.0] | NBR FYTD Customs Collection (BDT crore) |
@@ -135,7 +136,7 @@ Read the data contract for column semantics and query examples: [`data-contract.
 | inflation (brief alias) | `macro_cpi_headline` | `percent` | monthly | BB | [0.0, 50.0] | Alias of `general_inflation` — General Inflation |
 | inflation (brief alias) | `macro_cpi_nonfood` | `percent` | monthly | BB | [0.0, 50.0] | Alias of `non_food_inflation` — Non-Food Inflation |
 | macro | `current_account_balance` | `amount_usd_bn` | monthly | BB | [-20.0, 20.0] | Current Account Balance |
-| macro | `gdp` | `amount_bdt_crore` | quarterly | BB | [0.0, 100000000.0] | GDP |
+| macro | `gdp_growth_fy_pct` | `percent` | fiscal_year | BB | [-50.0, 50.0] | GDP Growth Rate |
 | monetary_aggregates | `broad_money` | `amount_bdt_crore` | monthly | BB | [0.0, 30000000.0] | Broad Money |
 | monetary_aggregates | `currency_outside_bank` | `amount_bdt_crore` | monthly | BB | [0.0, 5000000.0] | Currency Outside Bank |
 | monetary_aggregates | `deposits_held_with_bb_crr` | `amount_bdt_crore` | monthly | BB | [0.0, 5000000.0] | Deposits held with BB (CRR) |

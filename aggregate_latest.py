@@ -1433,6 +1433,10 @@ def _apply_media_overrides(
 
 RESERVES_MONTHLY_GROSS_ID = "gross_reserves_usd_bn_monthly"
 RESERVES_MONTHLY_BPM6_ID = "net_reserves_bpm6_usd_bn_monthly"
+RESERVES_MONTHLY_BPM6_LABEL = "FX reserves (BPM6 gross)"
+RESERVES_MONTHLY_BPM6_DESCRIPTION = (
+    "Gross foreign exchange reserves reported by Bangladesh Bank under the IMF BPM6 methodology."
+)
 RESERVES_MONTHLY_SOURCE = "bb_forex"
 RESERVES_MONTHLY_SOURCE_URL = "https://www.bb.org.bd/en/index.php/econdata/intreserve"
 # Mirrors scrapers.bb_forex._BPM6_GROSS_RATIO_MIN/MAX -- see that module for
@@ -1478,12 +1482,12 @@ def _reserves_monthly_definitions() -> list[dict]:
         },
         {
             "metric_id": RESERVES_MONTHLY_BPM6_ID,
-            "display_name": "FX reserves (BPM6/net)",
+            "display_name": RESERVES_MONTHLY_BPM6_LABEL,
             "unit": "USD bn",
             "source_url": RESERVES_MONTHLY_SOURCE_URL,
             "source_attribution": "Bangladesh Bank",
             "domain": "external",
-            "description": "Foreign exchange reserves per IMF BPM6 methodology.",
+            "description": RESERVES_MONTHLY_BPM6_DESCRIPTION,
             "notes": "Sparse — BB began reporting BPM6 ~2021; nulls for earlier months.",
             "grace_days": _RESERVES_MONTHLY_GRACE_DAYS,
         },
@@ -3628,6 +3632,22 @@ def _titleize(metric_id: str) -> str:
 # so the catalog/Supabase definitions stay in sync with the values minted in
 # `_build_v3_blocks`. Keyed by metric_id for idempotent merging.
 DERIVED_DEFINITION_SEEDS: list[dict] = [
+    {
+        "metric_id": "imf_general_govt_debt_pct_gdp",
+        "label": "IMF general-government debt/GDP",
+        "short_label": "IMF debt/GDP",
+        "unit": "percent",
+        "domain": "government_finance",
+        "cadence": "fiscal_year",
+        "description": (
+            "IMF DataMapper GGXWDG_NGDP series: general-government gross debt as a "
+            "percentage of GDP. IMF estimates or projections where designated by the "
+            "IMF; these observations are not audited actuals. Bangladesh fiscal years "
+            "end on 30 June."
+        ),
+        "source": "IMF DataMapper (WEO; estimates/projections where applicable)",
+        "source_url": "https://www.imf.org/external/datamapper/api/v1/GGXWDG_NGDP",
+    },
     {
         "metric_id": "crr_utilisation_pct",
         "label": "CRR balance as % of system deposits",

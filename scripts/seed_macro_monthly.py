@@ -31,6 +31,10 @@ DOMAIN_VALUES: frozenset[str] = frozenset({
 SOURCE_URL: str = "https://macro.thenazmussakib.com/"
 SOURCE_ATTRIBUTION: str = "Nazmus Sakib · BB · BBS · DSE"
 DEFAULT_SOURCE: str = "macro_observer_seed"
+BPM6_GROSS_LABEL = "FX reserves (BPM6 gross)"
+BPM6_GROSS_DESCRIPTION = (
+    "Gross foreign exchange reserves reported by Bangladesh Bank under the IMF BPM6 methodology."
+)
 
 # ---------------------------------------------------------------------------
 # MetricMap dataclass
@@ -87,7 +91,7 @@ KEY_MAP: dict[str, MetricMap] = {
     "impUsd": MetricMap("imports_usd_mn_monthly", "Imports", "USD mn", "external"),
     "remUsd": MetricMap("remittance_usd_mn_monthly", "Remittance", "USD mn", "external"),
     "fxReserve": MetricMap("gross_reserves_usd_bn_monthly", "FX reserves (gross)", "USD bn", "external"),
-    "fxBPM6": MetricMap("net_reserves_bpm6_usd_bn_monthly", "FX reserves (BPM6/net)", "USD bn", "external", notes="Sparse — BB began reporting BPM6 ~2021; nulls for earlier months."),
+    "fxBPM6": MetricMap("net_reserves_bpm6_usd_bn_monthly", BPM6_GROSS_LABEL, "USD bn", "external", notes="Sparse — BB began reporting BPM6 ~2021; nulls for earlier months."),
     "importCov": MetricMap("import_cover_months_monthly", "Import cover", "mo", "external"),
     "bdtUsd": MetricMap("usd_bdt_mid_monthly", "BDT / USD", "BDT", "external"),
     "reer": MetricMap("reer_monthly", "REER (100 baseline)", "index", "external"),
@@ -227,7 +231,11 @@ def build_definitions_rows() -> list[dict]:
             "source_url": SOURCE_URL,
             "source_attribution": SOURCE_ATTRIBUTION,
             "domain": metric.domain,
-            "description": metric.display_name,
+            "description": (
+                BPM6_GROSS_DESCRIPTION
+                if metric.metric_id == "net_reserves_bpm6_usd_bn_monthly"
+                else metric.display_name
+            ),
             "notes": metric.notes,
         })
 

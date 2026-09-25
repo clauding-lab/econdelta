@@ -861,6 +861,16 @@ class TestWriteReservesMonthlySplit:
             agg.RESERVES_MONTHLY_GROSS_ID, agg.RESERVES_MONTHLY_BPM6_ID,
         }
 
+    def test_keeps_legacy_bpm6_id_and_full_source_precision(self, monkeypatch):
+        captured_rows, _ = self._patch_monthly_writers(monkeypatch)
+        n = agg._write_reserves_monthly_split(
+            _reserves_with_bpm6(gross=37.35, bpm6=32.4423, reserves_date=date(2026, 8, 1))
+        )
+        assert n == 2
+        bpm6 = next(r for r in captured_rows if r["metric_id"] == "net_reserves_bpm6_usd_bn_monthly")
+        assert bpm6["value"] == 32.4423
+        assert bpm6["as_of"] == "2026-08-31"
+
     def test_as_of_is_month_end_not_month_start(self, monkeypatch):
         """2026-08-05 review H3: as_of must be _month_end(reserves_date), not
         reserves_date itself -- matches

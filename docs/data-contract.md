@@ -156,6 +156,11 @@ The value type per indicator is in the catalog. Decoder:
 | `ratio` | Plain ratio | `5.16` for money multiplier |
 | `count` | Integer count | `123` for #-of-banks |
 
+GDP growth is `gdp_growth_fy_pct`, measured in percent and observed once per
+Bangladesh fiscal year. The WSEI's FY26P value `4.14` represents the year
+ending 2026-06-30; its provisional marker remains visible in source metadata.
+There is no monetary GDP series under the old ambiguous `gdp` key.
+
 ## 4. Indicator catalog
 
 The full table of every metric_id, with unit / cadence / source / brief
@@ -535,10 +540,23 @@ new default.
 | quarterly | 165 days | |
 | fiscal_year | 400 days | |
 
-**Future `as_of` is excluded from "latest".** `debt_gdp_ratio` carries 6 IMF
-**projection** rows out to `2031-12-31` (verified 2026-07-09; latest *real*
-vintage is `2026-06-05`). Any "latest" read must filter `as_of <= current_date`
-or it will read a value from the future.
+**Fiscal debt series are separate by source and meaning.** `debt_gdp_ratio` is
+the MoF Debt Bulletin's latest public-debt ratio. IMF DataMapper's
+general-government gross debt/GDP history uses
+`imf_general_govt_debt_pct_gdp`; each year is stamped at Bangladesh's fiscal
+year end (30 June), and an incomplete fiscal year is not written. The IMF's
+full response is kept in `data/archive/imf_debt_gdp/` with its UTC retrieval
+time so estimates and projections remain available as source evidence. The
+series is not independently audited by this pipeline.
+
+**Existing mixed history still needs the reviewed R1 repair.** The prior
+projection split was verified on 2026-07-10, but the fresh full-table backup
+captured 2026-09-25 again contained IMF rows, including future years, under
+`debt_gdp_ratio` (and a separate projection series). This code change stops
+new IMF writes to the MoF key; it does not rewrite existing database rows.
+Until the exact R1 manifest is applied and read back, consumers must continue
+to exclude future `as_of` values from "latest" and must treat the old
+`debt_gdp_ratio` history as mixed-source legacy data.
 
 ### 10.2 The surface: `v_metric_freshness`
 
@@ -552,9 +570,13 @@ from this **one view** instead of hand-rolling staleness. The freshness sentinel
 > `pg_get_viewdef` (the `v_metric_freshness` definition is byte-identical to Block
 > 2), the `grace_days` seeding (Block 1 tiers all present), the deprecation flags
 > (Block 3, on every legacy id that has a definition row), the anon-policy set
-> (Block 4 — one anon SELECT policy per history table, duplicates gone), and the
-> projection split (Block 5 — `debt_gdp_ratio` has 0 future rows,
-> `debt_gdp_ratio_proj` holds the 6). Tracked in `supabase/migrations/0012_freshness_contract_e31.sql`.
+> (Block 4 — one anon SELECT policy per history table, duplicates gone). The
+> 2026-07-10 projection split moved the then-existing future rows, but the
+> 2026-09-25 backup found that the legacy IMF writer had repopulated mixed
+> `debt_gdp_ratio` history. E4 separates future writes; the one-time history
+> reconciliation is tracked in the cross-project R1 repair plan and remains
+> unapplied. The historical verification below does not describe current row
+> contents.
 > These are DDL/data changes for Adnan's SQL editor only (no programmatic path —
 > the DB is shared with The Brief; `db push` can't reconcile it). Each block is
 > idempotent, so re-running is a safe no-op — but nothing here needs re-applying.
@@ -680,14 +702,10 @@ select tablename, count(*) as anon_select_policies
  group by tablename;   -- expect 1 and 1
 ```
 
-**Block 5 (optional) — split the IMF projections off `debt_gdp_ratio`** so no
-"latest" read can ever touch a future vintage (the view already filters them, so
-this is cleanliness, not correctness):
-
-```sql
-update metric_history set metric_id = 'debt_gdp_ratio_proj'
- where metric_id = 'debt_gdp_ratio' and as_of > current_date;
-```
+The old Block 5 SQL moved future-stamped IMF rows to
+`debt_gdp_ratio_proj`. It is historical, one-time SQL and is not a substitute
+for the reviewed R1 manifest: it cannot distinguish MoF observations from IMF
+rows or reconcile the complete before-images.
 
 **Verification (run after applying):**
 

@@ -175,14 +175,17 @@ def test_derived_definition_seed_ids_match_computation_ids():
         money_market_ref_rate fan-out (MONEY_MARKET_REF_RATE_FANOUT_IDS).
     Both families must be FULLY seeded, and no seed may exist outside a
     known family — the exact-equality check preserves the original intent.
+    The IMF debt series is a third family, written by scrapers.imf_debt_gdp.
     """
-    from aggregate_latest import (
-        MONEY_MARKET_REF_RATE_FANOUT_IDS,
-        RESERVE_UTIL_DERIVED,
-    )
+    from aggregate_latest import MONEY_MARKET_REF_RATE_FANOUT_IDS, RESERVE_UTIL_DERIVED
+    from scrapers.imf_debt_gdp import IMF_METRIC_ID
 
     seed_ids = {d["metric_id"] for d in DERIVED_DEFINITION_SEEDS}
-    writer_ids = set(RESERVE_UTIL_DERIVED.keys()) | set(MONEY_MARKET_REF_RATE_FANOUT_IDS)
+    writer_ids = (
+        set(RESERVE_UTIL_DERIVED.keys())
+        | set(MONEY_MARKET_REF_RATE_FANOUT_IDS)
+        | {IMF_METRIC_ID}
+    )
     assert seed_ids == writer_ids
 
 

@@ -8,27 +8,26 @@ This mirrors ``scrapers/commodity_prices.py`` / ``scrapers/dse_market.py``,
 which already run as standalone scripts outside that dispatch.
 
 What it does: pulls the IMF general-government gross-debt-as-%-of-GDP series
-(indicator ``GGXWDG_NGDP``) for Bangladesh, then upserts the multi-year history
-into ``metric_history`` under ``debt_gdp_ratio`` — one row per year, each stamped
-``as_of = <year>-12-31`` (a distinct (metric_id, as_of) PK per year, exactly the
-shape ``scripts/backfill_dse_dayend.py`` uses). YieldScope reads this back via
-``fetchSeries(METRIC.DEBT_GDP_RATIO)`` for the Fiscal history chart.
+(indicator ``GGXWDG_NGDP``) for Bangladesh, archives the full response with its
+retrieval time, then upserts completed Bangladesh fiscal years into
+``metric_history`` under ``imf_general_govt_debt_pct_gdp``. Bangladesh fiscal
+years end on 30 June, so each year is stamped ``as_of = <year>-06-30``.
 
-Scope decision (per plan S4 task 2): this seeds a SHORT accumulated series into
-``metric_history`` (the daily-namespace history backend), NOT the monthly
-backfill system (``metric_history_monthly``) — mixing IMF years into the monthly
-namespace would be a namespace-boundary change (landmine D) needing sign-off.
-The latest BD-OFFICIAL print of ``debt_gdp_ratio`` still comes from the MoF Debt
-Bulletin PDF leg (config entry, BD egress); this IMF leg supplies the back-history
-context only. IMF figures are general-government gross debt (a wider definition
-than MoF central-government debt) so they print a touch higher.
+IMF general-government estimates and the MoF Debt Bulletin public-debt ratio
+have different coverage and remain separate series. The IMF series includes
+estimates or projections where designated by the IMF and must not be described
+as a set of audited actuals. Future fiscal years remain in the local raw-payload
+archive for evidence but are not written into ordinary history.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import sys
 from datetime import date, datetime, timezone
+from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import requests
 
@@ -48,9 +47,13 @@ IMF_INDICATOR = "GGXWDG_NGDP"
 IMF_COUNTRY = "BGD"
 IMF_URL = f"https://www.imf.org/external/datamapper/api/v1/{IMF_INDICATOR}"
 
-# The metric these years land under in metric_history. Matches the config id so
-# the MoF Debt Bulletin latest-print leg and this IMF back-history share one id.
-METRIC_ID = "debt_gdp_ratio"
+# MoF's source registry continues to own this stable key. IMF estimates have a
+# separate ID because their government coverage and source status differ.
+MOF_METRIC_ID = "debt_gdp_ratio"
+IMF_METRIC_ID = "imf_general_govt_debt_pct_gdp"
+IMF_SOURCE = "IMF DataMapper (WEO; estimates/projections where applicable)"
+ARCHIVE_DIR = Path(__file__).resolve().parent.parent / "data" / "archive" / "imf_debt_gdp"
+BDT = ZoneInfo("Asia/Dhaka")
 
 # Reject obviously-wrong values defensively (mirrors the config valid_range).
 VALID_RANGE = (10.0, 100.0)
@@ -98,13 +101,14 @@ def parse_imf_series(
     *,
     indicator: str = IMF_INDICATOR,
     country: str = IMF_COUNTRY,
+    today: date,
     valid_range: tuple[float, float] = VALID_RANGE,
 ) -> dict[int, float]:
-    """Extract {year: value} for one country from an IMF DataMapper payload.
+    """Extract completed Bangladesh fiscal-year {end_year: value} observations.
 
     Pure (no I/O) so it unit-tests against the captured fixture with no egress.
-    Drops any value outside ``valid_range`` (defensive — IMF occasionally carries
-    forecast outliers) and any year key that isn't a 4-digit integer. Raises
+    A year is eligible only once its June 30 fiscal-year end is on or before
+    ``today``. Drops any out-of-range value and any non-year key. Raises
     FetchError if the indicator/country slice is missing or empty.
     """
     values = payload.get("values")
@@ -126,8 +130,13 @@ def parse_imf_series(
             val = float(raw)
         except (TypeError, ValueError):
             continue
+        year = int(year_key)
+        if year < 1000:
+            continue
+        if date(year, 6, 30) > today:
+            continue
         if lo <= val <= hi:
-            out[int(year_key)] = val
+            out[year] = val
         else:
             logger.warning("dropping out-of-range %s %s = %s", country, year_key, val)
     if not out:
@@ -135,31 +144,65 @@ def parse_imf_series(
     return out
 
 
-def upsert_history(series: dict[int, float]) -> int:
-    """Upsert each {year: value} as a debt_gdp_ratio row stamped <year>-12-31.
+def upsert_history(series: dict[int, float], *, today: date) -> int:
+    """Upsert eligible IMF estimates under their own key at Bangladesh FY end.
 
     metric_history's PK is (metric_id, as_of); a single flat ``data`` dict can
     only carry one as_of per metric_id, so — like backfill_dse_dayend — we call
     upsert_metric_history once per year. Returns the total rows written.
     """
     # One write timestamp for the whole multi-year run so the E2.2 read-back
-    # counts every year's row this run wrote (scoped to METRIC_ID — the other
+    # counts every year's row this run wrote (scoped to IMF_METRIC_ID — the other
     # Sunday-23:xx writers can't inflate the count).
     write_ts = datetime.now(timezone.utc)
     total = 0
     for year in sorted(series):
-        as_of = date(year, 12, 31)
+        as_of = date(year, 6, 30)
+        if as_of > today:
+            continue
         total += upsert_metric_history(
-            data={METRIC_ID: series[year]},
+            data={IMF_METRIC_ID: series[year]},
             as_of=as_of,
-            source="IMF DataMapper",
-            source_as_of_map={METRIC_ID: as_of},
+            source=IMF_SOURCE,
+            source_as_of_map={IMF_METRIC_ID: as_of},
             ingested_at=write_ts,
             # Plain JSON API parse — no LLM call.
             provenance="deterministic",
         )
-    verify_landed_count(total, since=write_ts, metric_ids=[METRIC_ID], source_label="imf_debt_gdp")
+    verify_landed_count(total, since=write_ts, metric_ids=[IMF_METRIC_ID], source_label="imf_debt_gdp")
     return total
+
+
+def archive_fetched_payload(
+    payload: dict,
+    *,
+    retrieved_at: datetime,
+    archive_dir: Path = ARCHIVE_DIR,
+) -> Path:
+    """Atomically retain the complete API body and a UTC retrieval timestamp."""
+    if retrieved_at.tzinfo is None:
+        raise ValueError("retrieved_at must include a timezone")
+    retrieved_utc = retrieved_at.astimezone(timezone.utc)
+    stamp = retrieved_utc.strftime("%Y%m%dT%H%M%S.%fZ")
+    archive_dir.mkdir(parents=True, exist_ok=True)
+    destination = archive_dir / f"{IMF_INDICATOR}_{IMF_COUNTRY}_{stamp}.json"
+    temporary = destination.with_suffix(".json.tmp")
+    envelope = {
+        "indicator": IMF_INDICATOR,
+        "country": IMF_COUNTRY,
+        "source_url": IMF_URL,
+        "retrieved_at": retrieved_utc.isoformat(),
+        "payload": payload,
+    }
+    try:
+        with temporary.open("x", encoding="utf-8") as handle:
+            json.dump(envelope, handle, ensure_ascii=False, separators=(",", ":"))
+            handle.write("\n")
+        temporary.replace(destination)
+    except OSError as exc:
+        temporary.unlink(missing_ok=True)
+        raise FetchError(f"could not archive IMF source payload: {exc}") from exc
+    return destination
 
 
 def main() -> int:
@@ -169,7 +212,10 @@ def main() -> int:
     )
     try:
         payload = fetch_imf_payload()
-        series = parse_imf_series(payload)
+        retrieved_at = datetime.now(timezone.utc)
+        archived_path = archive_fetched_payload(payload, retrieved_at=retrieved_at)
+        today = datetime.now(BDT).date()
+        series = parse_imf_series(payload, today=today)
     except FetchError as e:
         logger.exception("IMF debt/GDP fetch/parse failed")
         notify("error", "imf_debt_gdp fetch failed", str(e))
@@ -177,7 +223,9 @@ def main() -> int:
 
     latest_year = max(series)
     logger.info(
-        "parsed %d yearly debt/GDP points for %s (%d-%d); latest %d = %.1f%%",
+        "archived source payload at %s; parsed %d completed fiscal-year debt/GDP estimates "
+        "for %s (%d-%d); latest %d = %.1f%%",
+        archived_path,
         len(series),
         IMF_COUNTRY,
         min(series),
@@ -186,8 +234,8 @@ def main() -> int:
         series[latest_year],
     )
 
-    written = upsert_history(series)
-    logger.info("upserted %d %s rows into metric_history", written, METRIC_ID)
+    written = upsert_history(series, today=today)
+    logger.info("upserted %d %s rows into metric_history", written, IMF_METRIC_ID)
     return 0
 
 

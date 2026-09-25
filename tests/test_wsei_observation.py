@@ -32,6 +32,7 @@ def parse(**values: object):
     [
         ({"series": "remittance", "row": "Wage Earners' Remittances", "column": "August, 2026", "line": 0}, 2.97, date(2026, 8, 31), "USD billion"),
         ({"series": "remittance", "row": "Wage Earners' Remittances", "column": "FY26P", "line": 0}, 35.59, date(2026, 6, 30), "USD billion"),
+        ({"series": "gdp_growth", "row": "GDP Growth Rate (Base: 2015-16)", "column": "latest_fy", "line": 0}, 4.14, date(2026, 6, 30), "percent"),
         ({"series": "tax", "row": "Tax Revenue (NBR)", "column": "FY26", "line": 0}, 415_473.0, date(2026, 6, 30), "BDT crore"),
         ({"series": "money", "row": "Broad Money (M2)", "column": "July, 2026", "line": 0}, 2_422_923.9, date(2026, 7, 31), "BDT crore"),
         ({"series": "money", "row": "Reserve Money (RM)", "column": "July, 2026", "line": 0}, 463_461.4, date(2026, 7, 31), "BDT crore"),
@@ -56,6 +57,27 @@ def test_wsei_selects_each_components_own_date_not_cover_date():
     )
     assert result.source_as_of == date(2026, 8, 31)
     assert result.source_as_of != date(2026, 9, 20)
+
+
+def test_wsei_growth_uses_fiscal_year_end_and_preserves_percent_unit():
+    result = parse(
+        series="gdp_growth", row="GDP Growth Rate (Base: 2015-16)",
+        column="latest_fy", line=0, unit="percent",
+    )
+    assert (result.value, result.source_as_of, result.unit, result.release_status) == (
+        4.14, date(2026, 6, 30), "percent", "provisional",
+    )
+
+
+def test_growth_config_uses_distinct_fiscal_year_percent_id_and_negative_range():
+    config = json.loads((ROOT / "config/sources-v3.json").read_text(encoding="utf-8"))
+    indicators = {item["id"]: item for item in config["indicators"]}
+    assert "gdp" not in indicators
+    growth = indicators["gdp_growth_fy_pct"]
+    assert growth["cadence"] == "fiscal_year"
+    assert growth["unit"] == "percent"
+    assert growth["parse"]["valid_range"][0] < 0
+    assert growth["parse"]["deterministic"] == "wsei_observation"
 
 
 def test_two_matching_component_periods_are_rejected():

@@ -14,6 +14,7 @@ from parsers.registry import register
 
 _NUMBER = re.compile(r"(?<![\w.])[-+]?\d[\d,]*(?:\.\d+)?(?![\w.])")
 _SERIES_HEADINGS = {
+    "gdp_growth": "gdp growth rate",
     "remittance": "wage earners' remittances",
     "tax": "tax revenue (nbr)",
     "money": "broad money",
@@ -24,7 +25,7 @@ _SERIES_HEADINGS = {
     "credit": "total domestic credit",
 }
 _SERIES_SECTION = {
-    "remittance": 5, "imports": 6, "exports": 7, "tax": 9,
+    "gdp_growth": 19, "remittance": 5, "imports": 6, "exports": 7, "tax": 9,
     "nsc": 10, "money": 11, "credit": 12, "lc": 13,
 }
 
@@ -105,7 +106,13 @@ def _select_observation(table: list[list[object]], *, selector: dict[str, Any]) 
     scale = float(selector.get("scale", 1))
     section_start, section_end = _section_bounds(table, series)
     section = table[section_start:section_end]
-    if not _unit_proved(section, unit, scale):
+    unit_proved = _unit_proved(section, unit, scale)
+    if unit == "percent" and series == "gdp_growth":
+        # This WSEI table labels the measure as a growth rate but does not
+        # repeat a percent sign in every cell. The named row is the source's
+        # unit declaration; do not infer percent merely from the metric id.
+        unit_proved = "gdp growth rate" in _norm(row_label)
+    if not unit_proved:
         raise ParseError(f"WSEI component unit does not prove {unit!r}")
     if column_label == "latest_month":
         dated = [
