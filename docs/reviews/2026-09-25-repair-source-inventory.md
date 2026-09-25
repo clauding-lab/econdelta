@@ -407,10 +407,14 @@ out of any “all sources recovered” claim until their exact definitions are a
   The sentinel now requests monthly `source_as_of` and judges genuine available
   evidence dates; `ingested_at` never makes an old observation fresh. Legacy
   month-first evidence is not silently repaired by inventing a new day.
-- `data/monthly_evidence/<id>.json` records last successful source check, latest
-  source period, pre-write stored key and numeric revision proposals. It does
+- `data/monthly_evidence/<id>.json` records explicitly typed evidence, pre-write
+  stored key and numeric revision proposals. Direct EPB/remittance/imports polls
+  use `evidence_kind=upstream-source`; CPI/M2 reads use `database-observations`,
+  with a separate database period and upstream source/job status **unknown**.
+  Untyped legacy receipts cannot establish upstream health. Old periods fetched
+  from a source are `observed-older-period`, not inferred legitimate release lag. It does
   **not** claim persistence succeeded. Sentinel logs source status and poll
-  liveness separately; source receipts older than the existing 26h job window
+  liveness separately; actual upstream receipts older than the existing 26h job window
   say “not recently checked”, not “source released nothing”. Catch-up fetch
   skips retain older receipt time. Independent service run logs remain the
   liveness source for ladder/reserves writers.

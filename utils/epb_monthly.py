@@ -5,10 +5,12 @@ unit, goods total, fiscal year and single-month headers. No flash/customs/BOP
 series is an interchangeable source. The XLSX reader uses the standard library;
 only cached numeric cells are accepted (no spreadsheet formula evaluation).
 """
+
 from __future__ import annotations
 
 import calendar
 import io
+import logging
 import math
 import os
 import re
@@ -22,6 +24,8 @@ from urllib.request import Request, urlopen
 
 from fetchers.tls import ssl_context_for
 from utils.monthly_evidence import record_source_check, revision_diff
+
+logger = logging.getLogger(__name__)
 
 INDEX_URL = "https://epb.gov.bd/views/epb-export-data/-/"
 METRIC_ID = "exports_usd_mn_monthly"
@@ -44,9 +48,13 @@ class _Links(HTMLParser):
         if tag == "a" and self.in_row:
             href = dict(attrs).get("href") or ""
             parsed = urlparse(href)
-            if (parsed.scheme == "https" and parsed.path.lower().endswith(".xlsx")
-                    and parsed.hostname == "objectstorage.ap-dcc-gazipur-1.oraclecloud15.com"
-                    and "/office-epb/" in parsed.path and href not in self.urls):
+            if (
+                parsed.scheme == "https"
+                and parsed.path.lower().endswith(".xlsx")
+                and parsed.hostname == "objectstorage.ap-dcc-gazipur-1.oraclecloud15.com"
+                and "/office-epb/" in parsed.path
+                and href not in self.urls
+            ):
                 self.urls.append(href)
 
     def handle_data(self, data: str) -> None:
@@ -64,10 +72,23 @@ def discover_workbooks(html: str) -> list[str]:
     links = _Links()
     links.feed(html)
     # Rank the index's own edition labels, not its non-chronological row order.
-    months = {"জুলাই": 7, "আগস্ট": 8, "অগস্ট": 8, "সেপ্টেম্বর": 9,
-              "অক্টোবর": 10, "নভেম্বর": 11, "ডিসেম্বর": 12,
-              "জানুয়ারি": 1, "জানুয়ারি": 1, "ফেব্রুয়ারি": 2,
-              "ফেব্রুয়ারি": 2, "মার্চ": 3, "এপ্রিল": 4, "মে": 5, "জুন": 6}
+    months = {
+        "জুলাই": 7,
+        "আগস্ট": 8,
+        "অগস্ট": 8,
+        "সেপ্টেম্বর": 9,
+        "অক্টোবর": 10,
+        "নভেম্বর": 11,
+        "ডিসেম্বর": 12,
+        "জানুয়ারি": 1,
+        "জানুয়ারি": 1,
+        "ফেব্রুয়ারি": 2,
+        "ফেব্রুয়ারি": 2,
+        "মার্চ": 3,
+        "এপ্রিল": 4,
+        "মে": 5,
+        "জুন": 6,
+    }
     editions = []
     for text, urls in links.rows:
         normalized = text.translate(str.maketrans("০১২৩৪৫৬৭৮৯", "0123456789"))
@@ -118,20 +139,29 @@ def parse_exports_workbook(content: bytes) -> list[tuple[date, float]]:
             text = " ".join(cells.values()).lower()
             if "report: summary sheet" not in text:
                 continue
-            if not ("export promotion bureau" in text and "value in million us$" in text
-                    and "primary commodities" in text and "manufactured commodities" in text):
+            if not (
+                "export promotion bureau" in text
+                and "value in million us$" in text
+                and "primary commodities" in text
+                and "manufactured commodities" in text
+            ):
                 raise ValueError("EPB summary goods basis/unit is unverified")
             period = re.search(r"period:\s*july(?:[-–][a-z]+)?\s+(20\d{2})-(20\d{2})", text)
             if not period or int(period[2]) != int(period[1]) + 1:
                 raise ValueError("EPB summary fiscal period is unverified")
             fy_start = int(period[1])
-            totals = [ref for ref, val in cells.items()
-                      if re.fullmatch(r"all products\s*\(a\s*\+\s*b\)", val, re.I)]
+            totals = [
+                ref
+                for ref, val in cells.items()
+                if re.fullmatch(r"all products\s*\(a\s*\+\s*b\)", val, re.I)
+            ]
             if len(totals) != 1:
                 raise ValueError("EPB summary has ambiguous goods total")
             total_row = re.search(r"\d+$", totals[0])[0]
             for ref, label in cells.items():
-                match = re.fullmatch(r"Export Performance for ([A-Za-z]+) (20\d{2})-(\d{2}|20\d{2})", label, re.I)
+                match = re.fullmatch(
+                    r"Export Performance for ([A-Za-z]+) (20\d{2})-(\d{2}|20\d{2})", label, re.I
+                )
                 if not match or int(match[2]) != fy_start:
                     continue  # never cumulative July-Aug or prior-FY comparator
                 if int(match[3]) % 100 != (fy_start + 1) % 100:
@@ -166,11 +196,14 @@ def fetch_exports() -> tuple[list[tuple[date, float]], str]:
     urls = discover_workbooks(_download(INDEX_URL).decode("utf-8"))
     candidates = []
     for url in urls:
-        content = _download(url)
         try:
+            content = _download(url)
             rows = parse_exports_workbook(content)
-        except ValueError:
-            continue  # companion region-wise attachments are not summaries
+        except Exception as exc:
+            # A broken companion must not hide another verified summary.
+            # Keep the URL/reason visible; zero surviving summaries still fail.
+            logger.warning("EPB attachment rejected %s: %s: %s", url, type(exc).__name__, exc)
+            continue
         candidates.append((rows, url))
     if not candidates:
         raise ValueError("EPB index yielded no verified goods summary")
@@ -183,17 +216,29 @@ def fetch_exports() -> tuple[list[tuple[date, float]], str]:
 
 
 def plan_exports(
-    parsed: list[tuple[date, float]], existing: list[dict], today: date,
+    parsed: list[tuple[date, float]],
+    existing: list[dict],
+    today: date,
 ) -> tuple[list[dict], list[dict]]:
     """Closed months only; accepted pairs remain immutable, revisions are evidence."""
     existing_dates = {row["as_of"][:10] for row in existing}
     candidates = [
-        {"metric_id": METRIC_ID, "as_of": day.isoformat(), "value": value,
-         "source": SOURCE, "source_as_of": day.replace(day=calendar.monthrange(day.year, day.month)[1]).isoformat()}
-        for day, value in parsed if day < today.replace(day=1)
+        {
+            "metric_id": METRIC_ID,
+            "as_of": day.isoformat(),
+            "value": value,
+            "source": SOURCE,
+            "source_as_of": day.replace(
+                day=calendar.monthrange(day.year, day.month)[1]
+            ).isoformat(),
+        }
+        for day, value in parsed
+        if day < today.replace(day=1)
     ]
-    return ([row for row in candidates if row["as_of"] not in existing_dates],
-            revision_diff(candidates, existing))
+    return (
+        [row for row in candidates if row["as_of"] not in existing_dates],
+        revision_diff(candidates, existing),
+    )
 
 
 def write_exports_monthly(today: date | None = None, *, evidence_dir: Path | None = None) -> int:
@@ -208,6 +253,17 @@ def write_exports_monthly(today: date | None = None, *, evidence_dir: Path | Non
     parsed, source_url = fetch_exports()
     rows, revisions = plan_exports(parsed, existing, today)
     # Record source evidence before persistence: it is not a successful-write receipt.
-    record_source_check(METRIC_ID, parsed, existing, today=today,
-                        revisions=revisions, source_url=source_url, directory=evidence_dir)
+    try:
+        record_source_check(
+            METRIC_ID,
+            parsed,
+            existing,
+            today=today,
+            revisions=revisions,
+            source_url=source_url,
+            evidence_kind="upstream-source",
+            directory=evidence_dir,
+        )
+    except OSError as exc:
+        logger.warning("EPB source receipt failed; continuing validated append: %s", exc)
     return upsert_metric_history_monthly(rows) if rows else 0

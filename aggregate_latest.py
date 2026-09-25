@@ -2611,7 +2611,8 @@ def _write_macro_monthly_append(today: date | None = None) -> int:
             existing_pairs=set(), today=today,
         )
         audit_candidates(cpi_rows, existing_cpi_rows, today=today,
-                         source_url="daily metric_history CPI observations")
+                         source_url="daily metric_history CPI observations",
+                         evidence_kind="database-observations")
         rows_to_write.extend(row for row in cpi_rows
                              if (row["metric_id"], date.fromisoformat(row["as_of"])) not in existing_cpi)
         skip_reasons.extend(cpi_reasons)
@@ -2700,7 +2701,7 @@ def _write_macro_monthly_append(today: date | None = None) -> int:
                 remit_candidates, _ = _select_new_remittance_rows(
                     parsed, existing_as_of=set(), today=today)
                 audit_candidates(remit_candidates, existing_remit_rows, today=today,
-                                 source_url=_REMITTANCE_URL)
+                                 source_url=_REMITTANCE_URL, evidence_kind="upstream-source")
                 remit_rows, remit_reasons = _select_new_remittance_rows(
                     parsed, existing_as_of=existing_remit, today=today,
                 )
@@ -2791,7 +2792,7 @@ def _write_macro_monthly_append(today: date | None = None) -> int:
                     sorted({**revised_imports, **dict(parsed_imports)}.items()),
                     existing_as_of=set(), today=today)
                 audit_candidates(import_candidates, existing_import_rows, today=today,
-                                 source_url=str(pdf_path))
+                                 source_url=str(pdf_path), evidence_kind="upstream-source")
                 pdf_imports = dict(parsed_imports)
                 # HIGH-1 (Opus review round 2): pass the revised (R) column
                 # too, as the splice check's fallback anchor source for the
@@ -2825,7 +2826,8 @@ def _write_macro_monthly_append(today: date | None = None) -> int:
             m2_row=m2, existing_pairs=set(), today=today,
         )
         audit_candidates(m2_rows, existing_m2_rows, today=today,
-                         source_url="daily metric_history M2 observations")
+                         source_url="daily metric_history M2 observations",
+                         evidence_kind="database-observations")
         rows_to_write.extend(row for row in m2_rows
                              if (row["metric_id"], date.fromisoformat(row["as_of"])) not in existing_m2)
         skip_reasons.extend(m2_reasons)
