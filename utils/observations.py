@@ -30,6 +30,7 @@ class Observation:
 
 
 WRITER_CONFIRMATION_IDS = frozenset({"policy_rate_repo", "policy_rate_sdf", "policy_rate_slf"})
+MAX_QUARANTINE_FIELDS = 5
 
 
 def finite_number(value: object) -> bool:
@@ -329,3 +330,164 @@ def expand_aliases(observations: Mapping[str, Observation]) -> dict[str, Observa
             if derived is not None:
                 result[mid] = derived
     return result
+
+
+def _history_observation(value: object, metric_id: str) -> Observation | None:
+    """Decode one archived observation without inventing a period or evidence."""
+    if isinstance(value, Observation):
+        obs = value
+    elif isinstance(value, Mapping):
+        as_of = parse_date(value.get("as_of"))
+        try:
+            captured_at = datetime.fromisoformat(
+                str(value.get("captured_at", "")).replace("Z", "+00:00")
+            )
+        except ValueError:
+            return None
+        if captured_at.utcoffset() is None:
+            return None
+        quality = value.get("quality")
+        basis = value.get("date_basis")
+        if quality not in {"verified", "held"} or basis not in {
+            "observation",
+            "writer_confirmation",
+        }:
+            return None
+        deps = value.get("dependencies", ())
+        if not isinstance(deps, (list, tuple)) or not all(isinstance(d, str) for d in deps):
+            return None
+        obs = Observation(
+            metric_id=str(value.get("metric_id") or metric_id),
+            value=value.get("value"),
+            as_of=as_of,
+            unit=str(value.get("unit") or "unknown"),
+            source=str(value.get("source") or "archive"),
+            source_url=value.get("source_url")
+            if isinstance(value.get("source_url"), str)
+            else None,
+            captured_at=captured_at,
+            quality=quality,
+            date_basis=basis,
+            evidence=str(value.get("evidence") or ""),
+            dependencies=tuple(deps),
+            release_status=value.get("release_status", "unknown")
+            if value.get("release_status", "unknown") in {"final", "provisional", "unknown"}
+            else "unknown",
+        )
+    else:
+        return None
+    if (
+        obs.metric_id != metric_id
+        or not finite_number(obs.value)
+        or obs.as_of is None
+        or obs.as_of > obs.captured_at.date()
+        or obs.quality not in {"verified", "held"}
+        or obs.date_basis not in {"observation", "writer_confirmation"}
+        or (
+            obs.date_basis == "writer_confirmation" and obs.metric_id not in WRITER_CONFIRMATION_IDS
+        )
+        or obs.captured_at.utcoffset() is None
+        or not obs.evidence.strip()
+    ):
+        return None
+    return obs
+
+
+def quarantine_observations(
+    current: Mapping[str, Observation],
+    flagged_ids: list[str],
+    history: list[dict],
+    *,
+    breadth_count: int,
+) -> tuple[dict[str, Observation], list[str], bool]:
+    """Replace rejected dependency families only with dated archived evidence.
+
+    Aliases and ratios are rebuilt from held source observations. If any needed
+    predecessor has no dated archive record, its whole dependent family is
+    omitted. Unknown ids and broad verdicts remain hard rejects.
+    """
+    flagged = sorted(set(flagged_ids))
+    if any(not isinstance(mid, str) or mid not in current for mid in flagged):
+        return dict(current), [], True
+    if breadth_count > MAX_QUARANTINE_FIELDS:
+        return dict(current), [], True
+    if not flagged:
+        return dict(current), [], False
+
+    def roots_for(mid: str, seen: set[str] | None = None) -> set[str]:
+        seen = set() if seen is None else seen
+        if mid in seen:
+            return {mid}
+        seen.add(mid)
+        obs = current.get(mid)
+        if obs is None or not obs.dependencies:
+            return {mid}
+        roots: set[str] = set()
+        for dependency in obs.dependencies:
+            roots.update(roots_for(dependency, seen))
+        return roots
+
+    roots = set().union(*(roots_for(mid) for mid in flagged))
+    # Current capture time bounds any recovered source period; archive ordering
+    # or a future-dated archive must never turn into a future observation.
+    current_dates = [
+        obs.captured_at.date()
+        for obs in current.values()
+        if obs.captured_at.utcoffset() is not None
+    ]
+    today = max(current_dates, default=date.min)
+
+    replacements: dict[str, Observation] = {}
+    for root in roots:
+        candidates = []
+        for archived in history:
+            records = archived.get("observations") if isinstance(archived, Mapping) else None
+            if isinstance(records, Mapping):
+                obs = _history_observation(records.get(root), root)
+                if obs is not None and obs.as_of <= today:
+                    candidates.append(obs)
+                continue
+            # Compatibility with a historical caller that already carries
+            # explicit per-id dates. Undated scalar archives are never trusted.
+            data = archived.get("data", {}) if isinstance(archived, Mapping) else {}
+            dates = archived.get("source_as_of", {}) if isinstance(archived, Mapping) else {}
+            if not isinstance(data, Mapping) or not isinstance(dates, Mapping):
+                continue
+            as_of = parse_date(dates.get(root))
+            scalar = data.get(root)
+            if as_of is None or as_of > today or not finite_number(scalar):
+                continue
+            capture_raw = archived.get("updated_at")
+            try:
+                captured = datetime.fromisoformat(str(capture_raw).replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            if captured.utcoffset() is None:
+                continue
+            candidates.append(
+                Observation(
+                    metric_id=root,
+                    value=scalar,
+                    as_of=as_of,
+                    unit="unknown",
+                    source="archive",
+                    source_url=None,
+                    captured_at=captured,
+                    quality="verified",
+                    date_basis="observation",
+                    evidence=f"Recovered from dated archive record for {root} ({as_of})",
+                )
+            )
+        if candidates:
+            predecessor = max(candidates, key=lambda obs: (obs.as_of, obs.captured_at))
+            replacements[root] = replace(
+                predecessor,
+                quality="held",
+                evidence=f"{predecessor.evidence}; held after review rejection",
+            )
+
+    family_ids = {mid for mid in current if roots_for(mid) & roots}
+    retained = {mid: obs for mid, obs in current.items() if mid not in family_ids}
+    retained.update(replacements)
+    accepted = expand_aliases(retained)
+    return accepted, flagged, False

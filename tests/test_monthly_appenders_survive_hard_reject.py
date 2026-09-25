@@ -19,6 +19,8 @@ from __future__ import annotations
 
 import ast
 import inspect
+import json
+from datetime import date, timedelta
 
 import pytest
 
@@ -199,3 +201,50 @@ class TestHardRejectPathOrdering:
             and n.func.id == "_run_chart_feeding_monthly_appenders"
         ]
         assert len(sites) == 2
+
+    def test_zero_field_reject_keeps_latest_and_history_unpublished_but_runs_appenders(
+        self, tmp_path, monkeypatch
+    ):
+        import aggregate_latest as a
+
+        config = tmp_path / "config"
+        data = tmp_path / "data"
+        archive = data / "archive"
+        config.mkdir()
+        archive.mkdir(parents=True)
+        (config / "sources.json").write_text(json.dumps({"sources": {}}))
+        registry = config / "sources-v3.json"
+        registry.write_text(json.dumps({"version": "3.0", "indicators": []}))
+        yesterday = (date.today() - timedelta(days=1)).isoformat()
+        (archive / f"latest_{yesterday}.json").write_text(json.dumps({
+            "updated_at": f"{yesterday}T00:00:00+00:00", "data": {"prior": 5.0}
+        }))
+        latest_path = data / "latest.json"
+        prior_latest = '{"data":{"prior":5.0}}'
+        latest_path.write_text(prior_latest)
+
+        monkeypatch.setattr(a, "REPO_ROOT", tmp_path)
+        monkeypatch.setattr(a, "DATA_DIR", data)
+        monkeypatch.setattr(a, "LATEST_PATH", latest_path)
+        monkeypatch.setattr(a, "ARCHIVE_DIR", archive)
+        monkeypatch.setattr(a, "CONFIG_PATH", config / "sources.json")
+        monkeypatch.setattr(a, "SOURCES_V3_PATH", registry)
+        monkeypatch.setattr(a, "review_data", lambda *args, **kwargs: {
+            "status": "reject", "reason": "no safe field mapping", "missing": [],
+            "anomalies": [],
+        })
+        appender_calls: list[str] = []
+        monkeypatch.setattr(
+            a, "_run_chart_feeding_monthly_appenders",
+            lambda: appender_calls.append("ran"),
+        )
+        monkeypatch.setenv("ECONDELTA_SKIP_OPUS_REVIEW", "0")
+        monkeypatch.setenv("ECONDELTA_SKIP_SUPABASE", "1")
+        monkeypatch.setenv("ECONDELTA_DRY_RUN", "1")
+
+        assert a.main() == 1
+        assert latest_path.read_text() == prior_latest
+        assert sorted(p.name for p in archive.glob("latest_*.json")) == [
+            f"latest_{yesterday}.json"
+        ]
+        assert appender_calls == ["ran"]

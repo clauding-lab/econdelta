@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import ast
 import json
+import subprocess
 import sys
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -77,6 +78,70 @@ class TestOpusReviewArgvHardening:
         )
 
         assert captured["timeout"] == 123
+
+
+class TestReviewVerdictShape:
+    @pytest.mark.parametrize(
+        "stdout",
+        [
+            "{}",
+            '{"status": "maybe", "reason": "unknown"}',
+            '{"status": "ok", "reason": "bad lists", "missing": {}, "anomalies": []}',
+            '{"status": "ok", "reason": "bad lists", "missing": [], "anomalies": "none"}',
+        ],
+    )
+    def test_invalid_non_reject_verdicts_are_reported_as_skipped(self, monkeypatch, stdout):
+        class _Done:
+            returncode = 0
+            stderr = ""
+
+        _Done.stdout = stdout
+        monkeypatch.setattr("utils.opus_review.subprocess.run", lambda *a, **kw: _Done())
+
+        verdict = review_data({}, [], binary="claude")
+
+        assert verdict["status"] == "ok"
+        assert verdict["skipped"] is True
+        assert verdict["reason"].startswith("review_skipped:")
+
+    @pytest.mark.parametrize(
+        "stdout",
+        [
+            '{"status": "reject", "reason": "empty id", "missing": [""], "anomalies": [], "confidence": 0.9}',
+            '{"status": "reject", "reason": "wrong type", "missing": "bad", "anomalies": [], "confidence": 0.9}',
+            '{"status": "reject", "reason": "no mapping", "missing": [], "anomalies": [{}], "confidence": 0.9}',
+        ],
+    )
+    def test_explicit_reject_without_safe_mapping_is_preserved(self, monkeypatch, stdout):
+        class _Done:
+            returncode = 0
+            stderr = ""
+
+        _Done.stdout = stdout
+        monkeypatch.setattr("utils.opus_review.subprocess.run", lambda *a, **kw: _Done())
+
+        verdict = review_data({}, [], binary="claude")
+
+        assert verdict["status"] == "reject"
+        assert verdict.get("skipped") is not True
+        assert "unmappable" in verdict["reason"]
+
+    @pytest.mark.parametrize(
+        "failure", [FileNotFoundError("claude missing"), subprocess.TimeoutExpired("claude", 1)]
+    )
+    def test_unavailable_reviewer_is_always_advisory_and_marked_skipped(
+        self, monkeypatch, failure
+    ):
+        def _unavailable(*args, **kwargs):
+            raise failure
+
+        monkeypatch.setattr("utils.opus_review.subprocess.run", _unavailable)
+
+        verdict = review_data({}, [], binary="claude")
+
+        assert verdict["status"] == "ok"
+        assert verdict["skipped"] is True
+        assert verdict["reason"].startswith("review_skipped:")
 
 
 @pytest.fixture(autouse=True)

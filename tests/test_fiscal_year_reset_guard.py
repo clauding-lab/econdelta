@@ -26,7 +26,7 @@ on the wrong row. See landmine 57.
 """
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime, timezone
 
 import pytest
 
@@ -656,15 +656,34 @@ class TestExcusingCannotUnlockQuarantine:
     quarantine substitute stale values into the five that remained.
     """
 
-    HISTORY = [{"data": {f"id{i}": 100.0 for i in range(9)}}]
-    DATA = {f"id{i}": 1.0 for i in range(9)}
+    def _observations(self):
+        from utils.observations import Observation
+
+        capture = datetime(2026, 8, 1, tzinfo=timezone.utc)
+        return {
+            f"id{i}": Observation(
+                metric_id=f"id{i}", value=1.0, as_of=date(2026, 7, 31),
+                unit="unknown", source="fixture", source_url=None,
+                captured_at=capture, quality="verified", date_basis="observation",
+                evidence="dated fixture observation",
+            )
+            for i in range(9)
+        }
+
+    def test_only_nonempty_fully_explained_reject_is_excused(self):
+        from aggregate_latest import _fully_excused_fy_reject
+
+        assert _fully_excused_fy_reject(1, [], ["tax_revenue"]) is True
+        assert _fully_excused_fy_reject(0, [], []) is False
+        assert _fully_excused_fy_reject(0, [], ["tax_revenue"]) is False
+        assert _fully_excused_fy_reject(1, ["unexplained"], ["tax_revenue"]) is False
 
     def test_breadth_is_judged_on_what_the_reviewer_flagged(self):
         from aggregate_latest import _quarantine_flagged
 
         survivors = [f"id{i}" for i in range(5)]      # 5 <= MAX_QUARANTINE_FIELDS
         _, quarantined, hard_reject = _quarantine_flagged(
-            self.DATA, survivors, self.HISTORY, breadth_count=7,
+            self._observations(), survivors, [], breadth_count=7,
         )
         assert hard_reject is True
         assert quarantined == []
@@ -676,21 +695,21 @@ class TestExcusingCannotUnlockQuarantine:
         from aggregate_latest import _quarantine_flagged
 
         cleaned, quarantined, hard_reject = _quarantine_flagged(
-            self.DATA, [], self.HISTORY, breadth_count=0,
+            self._observations(), [], [], breadth_count=0,
         )
         assert hard_reject is False
         assert quarantined == []
-        assert cleaned == self.DATA
+        assert cleaned == self._observations()
 
     def test_the_default_is_the_pre_existing_behaviour(self):
         from aggregate_latest import _quarantine_flagged
 
         _, _, hard_reject = _quarantine_flagged(
-            self.DATA, [f"id{i}" for i in range(5)], self.HISTORY,
+            self._observations(), [f"id{i}" for i in range(5)], [],
         )
         assert hard_reject is False
         _, _, hard_reject = _quarantine_flagged(
-            self.DATA, [f"id{i}" for i in range(6)], self.HISTORY,
+            self._observations(), [f"id{i}" for i in range(6)], [],
         )
         assert hard_reject is True
 
@@ -700,7 +719,7 @@ class TestExcusingCannotUnlockQuarantine:
         from aggregate_latest import _quarantine_flagged
 
         _, _, hard_reject = _quarantine_flagged(
-            self.DATA, ["treasury_bill_outstanding"], self.HISTORY, breadth_count=1,
+            self._observations(), ["treasury_bill_outstanding"], [], breadth_count=1,
         )
         assert hard_reject is True
 
@@ -781,6 +800,30 @@ class TestHistoryCarriesItsPublicationDates:
         assert history[0]["source_as_of"]["categorywise_export"] == "2026-07-31"
         # an undated indicator is simply absent, never a null placeholder
         assert "usd_bdt_mid" not in history[0]["source_as_of"]
+
+    def test_old_archive_recovers_observation_only_from_matching_dated_domain(self, tmp_path):
+        from utils.opus_review import load_history
+
+        self._archive(
+            tmp_path, "latest_2026-08-29.json",
+            {"categorywise_export": EXPORT_FY27_JULY, "undated": 3.0},
+            {"external_sector": {
+                "categorywise_export": {
+                    "value": EXPORT_FY27_JULY,
+                    "source_as_of": "2026-07-31",
+                    "source": "EPB",
+                    "evidence": "July official export release",
+                },
+                "undated": {"value": 3.0, "source_as_of": None},
+            }},
+        )
+
+        record = load_history(tmp_path, days=5)[0]["observations"]
+
+        assert record["categorywise_export"]["as_of"] == "2026-07-31"
+        assert record["categorywise_export"]["evidence"] == "July official export release"
+        assert record["categorywise_export"]["source"] == "EPB"
+        assert "undated" not in record
 
     def test_an_archive_with_no_domains_block_still_loads(self, tmp_path):
         """Older archives predate the domains block entirely."""

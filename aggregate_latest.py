@@ -24,12 +24,14 @@ from utils.notifier import notify
 from utils.observations import (
     BRIEF_ALIASES,
     BRIEF_CONVERSIONS,
+    MAX_QUARANTINE_FIELDS,
     RESERVE_UTIL_DERIVED,
     Observation,
     eligible,
     expand_aliases,
     finite_number,
     from_snapshot,
+    quarantine_observations,
     select_observation,
     serialize_observations,
 )
@@ -136,9 +138,6 @@ FY_RESET_GRACE_MONTHS = frozenset({7, 8, 9, 10})
 # against last FY's 48.38 is indistinguishable from a real reset: it is a drop,
 # in an early-FY month, on a cumulative series. See landmine 57.
 RESET_PLAUSIBILITY_BAND = (0.02, 0.45)
-# Granular Opus reject: quarantine up to this many flagged fields; more ⇒ hard reject.
-MAX_QUARANTINE_FIELDS = 5
-
 # A stale fallback (today's snapshot is bad, so we republish the last good one)
 # is normal for a day or two — a source is late, the parser missed once. Past
 # this many days it is not lateness, it is a broken fetcher wearing the costume
@@ -651,54 +650,22 @@ def _drop_expected_fy_resets(
     return still, excused, evidence
 
 
+def _fully_excused_fy_reject(
+    raw_flagged_count: int, flagged: list[str], fy_excused: list[str]
+) -> bool:
+    """Only an observed reject fully explained by dated FY evidence may pass."""
+    return raw_flagged_count > 0 and not flagged and bool(fy_excused)
+
+
 def _quarantine_flagged(
-    data: dict[str, Any],
+    current: dict[str, Observation],
     flagged_ids: list[str],
     history: list[dict[str, Any]],
     breadth_count: int | None = None,
-) -> tuple[dict[str, Any], list[str], bool]:
-    """Quarantine Opus-flagged fields instead of rejecting the whole snapshot.
-
-    Returns (cleaned_data, quarantined_ids, hard_reject).
-    hard_reject is True when the verdict is untrustworthy or too broad:
-      * any flagged id is not present in `data`, or
-      * more than MAX_QUARANTINE_FIELDS ids are flagged.
-    Otherwise each flagged id is replaced with its most-recent good value from
-    `history` (newest-last list of archived `.data` dicts); if no historical
-    value exists, the field is dropped.
-
-    ``breadth_count`` is how many fields the reviewer ACTUALLY flagged, which is
-    not always how many are left in ``flagged_ids``. The fiscal-year override
-    removes ids from that list before this function sees it, and the breadth
-    gate is a statement about how broken the run looks — "the reviewer distrusts
-    eight fields" stays true whether or not two of them were later explained.
-    Without this, excusing ids could pull a 7-field reject under the 5-field
-    ceiling and convert a refusal-to-publish into a publish carrying five stale
-    substitutions (landmine 57). Defaults to ``len(present)`` so every caller
-    that has nothing to distinguish keeps the original behaviour.
-    """
-    present = [fid for fid in flagged_ids if fid in data]
-    if len(present) != len(flagged_ids):
-        return data, [], True   # unmappable flagged id ⇒ don't trust the verdict
-    breadth = len(present) if breadth_count is None else breadth_count
-    if breadth > MAX_QUARANTINE_FIELDS:
-        return data, [], True   # too broadly broken to publish
-
-    cleaned = dict(data)
-    quarantined: list[str] = []
-    for fid in present:
-        last_good = None
-        for snap in reversed(history):  # newest-last ⇒ reversed = newest-first
-            v = (snap.get("data") or {}).get(fid)
-            if isinstance(v, (int, float)) and not isinstance(v, bool):
-                last_good = v
-                break
-        if last_good is not None:
-            cleaned[fid] = last_good
-        else:
-            cleaned.pop(fid, None)
-        quarantined.append(fid)
-    return cleaned, quarantined, False
+) -> tuple[dict[str, Observation], list[str], bool]:
+    """Quarantine rejected fields using dated observations and source evidence."""
+    breadth = len(flagged_ids) if breadth_count is None else breadth_count
+    return quarantine_observations(current, flagged_ids, history, breadth_count=breadth)
 
 
 def _compute_reserve_utilisation(data_additions: dict[str, Any]) -> None:
@@ -4082,7 +4049,9 @@ def main() -> int:
             elif status == "reject":
                 missing = verdict.get("missing", []) or []
                 anomalies = verdict.get("anomalies", []) or []
-                flagged = [a.get("indicator") for a in anomalies if a.get("indicator")]
+                # Keep empty ids visible: the review decoder marks those as an
+                # explicit but unmappable rejection, which must fail closed.
+                flagged = [a.get("indicator") for a in anomalies if isinstance(a, dict)]
                 # sorted, not set-order: this list is logged, notified and used
                 # to decide breadth, and a run's alert should read the same way
                 # twice (landmine 57).
@@ -4105,7 +4074,10 @@ def main() -> int:
                         "reset, not an anomaly | evidence: %s | reason: %s",
                         len(fy_excused), fy_excused, "; ".join(fy_evidence), reason,
                     )
-                if not flagged:
+                fully_excused = _fully_excused_fy_reject(
+                    raw_flagged_count, flagged, fy_excused
+                )
+                if fully_excused:
                     logger.warning(
                         "opus review reject fully explained by the fiscal-year "
                         "reset (%s) — publishing today's data unchanged | reason: %s",
@@ -4125,10 +4097,26 @@ def main() -> int:
                 # every single one, which is the real 1 July case (all seven
                 # cumulative series reset the same night) and publishes clean
                 # with zero substitutions. See _quarantine_flagged.
-                cleaned, quarantined, hard_reject = _quarantine_flagged(
-                    data, flagged, history,
-                    breadth_count=raw_flagged_count if flagged else 0,
-                )
+                if not flagged and not fully_excused:
+                    # An explicit reject with no safely mappable field cannot
+                    # be interpreted as a clean fiscal reset.
+                    cleaned, quarantined, hard_reject = dict(data), [], True
+                else:
+                    accepted_observations, quarantined, hard_reject = _quarantine_flagged(
+                        observations, flagged, history,
+                        breadth_count=raw_flagged_count if flagged else 0,
+                    )
+                    cleaned = dict(data)
+                    if not hard_reject:
+                        removed = set(observations) - set(accepted_observations)
+                        for mid in removed:
+                            cleaned.pop(mid, None)
+                        for mid, obs in accepted_observations.items():
+                            cleaned[mid] = obs.value
+                        for indicators in domains.values():
+                            for mid in removed:
+                                indicators.pop(mid, None)
+                        observations = accepted_observations
                 if hard_reject:
                     logger.error(
                         "opus review REJECTED (hard): %s | missing=%s | anomalies=%d "
@@ -4176,23 +4164,9 @@ def main() -> int:
                         "warning",
                         "EconDelta published with fields quarantined",
                         f"reason: {reason}\nquarantined: {quarantined}\n"
-                        f"these fields use last-good values; the rest published fresh.",
+                        "dated last-known observations are held where available; "
+                        "a rejected family without dated history is omitted.",
                     )
-                # E2 will recover dated predecessors and rebuild complete families.
-                # Until then a scalar substitution has no verified replacement date.
-                invalidated = set(quarantined)
-                while True:
-                    children = {mid for mid, obs in observations.items()
-                                if invalidated.intersection(obs.dependencies)}
-                    if children <= invalidated:
-                        break
-                    invalidated |= children
-                for mid in invalidated:
-                    if mid in observations:
-                        observations[mid] = replace(observations[mid],
-                            value=cleaned.get(mid) if finite_number(cleaned.get(mid)) else None,
-                            as_of=None, quality="unavailable", date_basis="unknown",
-                            evidence="Scalar quarantine replacement lacks dated evidence")
                 data = cleaned
                 _project_observations(data, domains, observations)
                 source_as_of_map = {mid: obs.as_of for mid, obs in observations.items()
