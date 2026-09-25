@@ -46,6 +46,7 @@ from utils.schema import (  # noqa: E402
 )
 
 _NOW = datetime.now(timezone.utc)
+_QUOTE_DATE_DEFAULT = object()
 
 
 def _forex_snapshot(
@@ -95,7 +96,9 @@ def _dse_snapshot(scraped_at: datetime = _NOW, trading_day_date: date = date(202
 
 
 def _commodity_snapshot(
-    scraped_at: datetime = _NOW, snapshot_date: date | None = None
+    scraped_at: datetime = _NOW,
+    snapshot_date: date | None = None,
+    quote_date: date | None | object = _QUOTE_DATE_DEFAULT,
 ) -> CommoditySnapshot:
     """`date` defaults to `scraped_at.date()` -- realistic pairing, mirroring
     `_forex_snapshot` (scrapers/commodity_prices.py sets both fields at the
@@ -107,6 +110,9 @@ def _commodity_snapshot(
         prices={
             "brent_crude": CommodityPrice(
                 price=95.23, prev_close=90.38, change_pct=0.0537, currency="USD", unit="barrel",
+                quote_date=(
+                    snapshot_date if snapshot_date is not None else scraped_at.date()
+                ) if quote_date is _QUOTE_DATE_DEFAULT else quote_date,
             ),
         },
         provider="yfinance",
@@ -283,11 +289,9 @@ class TestCommodityPerTickerQuoteDate:
         assert m["brent_crude_usd_barrel"] == date(2026, 6, 10)
         assert m["gold_usd_oz"] == date(2026, 6, 11)
 
-    def test_falls_back_to_snapshot_wide_date_when_ticker_quote_date_is_none(self):
-        """A ticker whose OWN history() call failed this run (quote_date is
-        None, per scrapers/commodity_prices.py's documented "never
-        fabricate" contract) still gets a usable date from the snapshot-wide
-        fallback, rather than going undated entirely."""
+    def test_missing_quote_date_does_not_borrow_sibling_snapshot_date(self):
+        """A ticker whose own date is unknown stays undated even when a
+        sibling has a newer date and the shared bundle has that date."""
         commodities = CommoditySnapshot(
             date=date(2026, 6, 11),
             scraped_at=_NOW,
@@ -295,11 +299,16 @@ class TestCommodityPerTickerQuoteDate:
                 "brent_crude": CommodityPrice(
                     price=85.0, currency="USD", unit="barrel", quote_date=None,
                 ),
+                "gold": CommodityPrice(
+                    price=2300.0, currency="USD", unit="oz",
+                    quote_date=date(2026, 6, 11),
+                ),
             },
             provider="yfinance",
         )
         m = agg._build_tier1_source_as_of_map({"commodity_prices": commodities}, bb_forex_ok=False)
-        assert m["brent_crude_usd_barrel"] == date(2026, 6, 11)
+        assert "brent_crude_usd_barrel" not in m
+        assert m["gold_usd_oz"] == date(2026, 6, 11)
 
 
 class TestAliasPropagation:
@@ -505,7 +514,7 @@ def test_commodity_without_own_quote_date_cannot_inherit_a_siblings_date():
     from utils.schema import SourceStatus
     from utils.supabase_writer import _rows_from_data
     now = datetime(2026, 9, 25, tzinfo=timezone.utc)
-    commodity = _commodity_snapshot(scraped_at=now)
+    commodity = _commodity_snapshot(scraped_at=now, quote_date=None)
     obs = agg._build_observations({"commodity_prices": commodity}, {},
         {"commodity_prices": SourceStatus(status="ok")}, now=now, holidays=set(),
         yield_values={}, yield_dates={})

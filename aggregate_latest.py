@@ -1335,19 +1335,15 @@ def _build_tier1_source_as_of_map(
         # boundary that scraped_at's UTC calendar date can land a day behind
         # either the quote date or the intended local reporting day.
         #
-        # L1 (2026-08-22 round-1 review): prefer each commodity's OWN
-        # `cp.quote_date` over the snapshot-wide max when it's available --
-        # brent/WTI/gold virtually always agree, but on the rare run where
-        # one ticker's quote genuinely lags the others, this stamps THAT
-        # metric with its own true date instead of borrowing a sibling
-        # ticker's (possibly later) one. Falls back to the snapshot-wide
-        # `commodity_date` only for a ticker whose own quote_date is None
-        # (its history() call failed this run) -- never leaves a metric
-        # entirely undated when the snapshot itself has SOME usable date.
-        commodity_date = commodities.date
+        # L1 (2026-08-22 round-1 review): use each commodity's OWN
+        # `cp.quote_date`. If that ticker has no quote date, leave its
+        # observation undated; another ticker's later quote must not make
+        # this value appear current, including when an anomaly quarantines
+        # the shared bundle.
         for key, cp in commodities.prices.items():
             unit_suffix = f"{cp.currency.lower()}_{cp.unit.replace(' ', '_')}"
-            result[f"{key}_{unit_suffix}"] = cp.quote_date or commodity_date
+            if cp.quote_date is not None:
+                result[f"{key}_{unit_suffix}"] = cp.quote_date
 
     return result
 

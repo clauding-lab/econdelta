@@ -418,3 +418,44 @@ def test_main_anomaly_skips_write(mock_ticker_cls, mock_notify, mock_write, tmp_
     call_args = mock_notify.call_args[0]
     assert call_args[0] == "warning"
     assert "brent_crude" in call_args[2]
+
+
+def test_observed_brent_20260924_quote_remains_held_with_mixed_quote_dates():
+    """The 8.78% BZ=F jump stays behind the existing 8% bundle hold."""
+    import json
+
+    fixture = json.loads(
+        (Path(__file__).parent / "fixtures/commodity_brent_anomaly_20260924.json").read_text()
+    )
+    previous = _make_snapshot({
+        "brent_crude": CommodityPrice(
+            price=fixture["accepted_prior_metric_history"]["value"],
+            currency="USD", unit="barrel", quote_date=date(2026, 9, 23),
+        ),
+        "wti_crude": CommodityPrice(
+            price=94.0, currency="USD", unit="barrel", quote_date=date(2026, 9, 23),
+        ),
+        "gold": CommodityPrice(
+            price=3700.0, currency="USD", unit="oz", quote_date=date(2026, 9, 23),
+        ),
+    })
+    new_quotes = {
+        "BZ=F": (fixture["quoted_price_usd_per_barrel"], fixture["provider_previous_close"], "2026-09-24"),
+        "CL=F": (94.61, 94.0, "2026-09-25"),
+        "GC=F": (3770.0, 3700.0, "2026-09-25"),
+    }
+
+    with (
+        patch("scrapers.commodity_prices.yf.Ticker", side_effect=lambda sym: _make_ticker_mock(*new_quotes[sym])),
+        patch("scrapers.commodity_prices.load_previous_snapshot", return_value=previous) as load_previous,
+        patch("scrapers.commodity_prices.write_snapshot") as write_snapshot,
+        patch("scrapers.commodity_prices.notify") as notify,
+    ):
+        result = main()
+
+    assert result == 2
+    assert fixture["configured_anomaly_threshold"] == 0.08
+    assert load_previous.call_args.args[0] == date(2026, 9, 25)
+    write_snapshot.assert_not_called()
+    notify.assert_called_once()
+    assert "8.78%" in notify.call_args.args[2]

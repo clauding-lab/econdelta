@@ -1,0 +1,108 @@
+{
+  "success": true,
+  "data": {
+    "commodityNameList": [
+      {
+        "value": 628,
+        "commodity_group_id": 26,
+        "commodity_sub_group_id": 192,
+        "text": "Ata (Packet)",
+        "text_en": "Ata (Packet)",
+        "text_bn": "আটা (প্যাকেটজাত)",
+        "status": 1,
+        "unit_id": null,
+        "unit_grower": 1,
+        "unit_whole_sale": 1,
+        "unit_retail": 2
+      },
+      {
+        "value": 682,
+        "commodity_group_id": 39,
+        "commodity_sub_group_id": 240,
+        "text": "Egg Farm-Red",
+        "text_en": "Egg Farm-Red",
+        "text_bn": "ডিম ফার্ম- লাল ",
+        "status": 1,
+        "unit_id": null,
+        "unit_grower": 8,
+        "unit_whole_sale": 8,
+        "unit_retail": 5
+      },
+      {
+        "value": 676,
+        "commodity_group_id": 37,
+        "commodity_sub_group_id": 236,
+        "text": "Farm-raised Hen",
+        "text_en": "Farm-raised Hen",
+        "text_bn": "খামারের  ‍মুরগী ",
+        "status": 1,
+        "unit_id": null,
+        "unit_grower": 1,
+        "unit_whole_sale": 1,
+        "unit_retail": 2
+      },
+      {
+        "value": 831,
+        "commodity_group_id": 32,
+        "commodity_sub_group_id": 217,
+        "text": "Onion (local)",
+        "text_en": "Onion (local)",
+        "text_bn": "পেঁয়াজ- দেশীয়",
+        "status": 1,
+        "unit_id": null,
+        "unit_grower": 1,
+        "unit_whole_sale": 1,
+        "unit_retail": 2
+      },
+      {
+        "value": 604,
+        "commodity_group_id": 26,
+        "commodity_sub_group_id": 190,
+        "text": "Rice - Aman - Coarse",
+        "text_en": "Rice - Aman - Coarse",
+        "text_bn": "চাল -আমন - মোটা",
+        "status": 1,
+        "unit_id": null,
+        "unit_grower": 1,
+        "unit_whole_sale": 1,
+        "unit_retail": 2
+      },
+      {
+        "value": 760,
+        "commodity_group_id": 44,
+        "commodity_sub_group_id": 278,
+        "text": "Sugar (Local)",
+        "text_en": "Sugar (Local)",
+        "text_bn": "চিনি- দেশী",
+        "status": 1,
+        "unit_id": null,
+        "unit_grower": 1,
+        "unit_whole_sale": 1,
+        "unit_retail": 2
+      }
+    ],
+    "measurementUnitList": [
+      {
+        "value": 5,
+        "text": "4 Pieces",
+        "text_en": "4 Pieces",
+        "text_bn": "৪ পিছ",
+        "status": 1
+      },
+      {
+        "value": 2,
+        "text": "Kilogram",
+        "text_en": "Kilogram",
+        "text_bn": "কিলোগ্রাম",
+        "status": 1
+      },
+      {
+        "value": 3,
+        "text": "Liter",
+        "text_en": "Liter",
+        "text_bn": "লিটার",
+        "status": 1
+      }
+    ]
+  }
+}

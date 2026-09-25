@@ -12,6 +12,7 @@ import pytest
 from scrapers.dse_market import (
     ParseError,
     parse_homepage_indices,
+    parse_live_market_payload,
     parse_market_stats,
     parse_trading_date,
 )
@@ -185,6 +186,31 @@ class TestParseTradingDate:
         assert parse_trading_date(text) == date(2026, 4, 20)
 
 
+class TestParseLiveMarketPayload:
+    def test_uses_source_session_date_and_converts_million_turnover(self):
+        payload = json.loads((FIXTURES_DIR / "dse_market_api_20260924.json").read_text())
+        trading_date, indices, market = parse_live_market_payload(payload)
+        assert trading_date == date(2026, 9, 24)
+        assert trading_date != date.fromisoformat(payload["session"]["date"])
+        assert indices.dsex == pytest.approx(5578.3276)
+        assert indices.dsex_change_pct == pytest.approx(-0.3197)
+        assert market.turnover_crore == pytest.approx(756.3161)
+        assert market.total_trades == 202860
+
+    def test_rejects_missing_or_invalid_session_date(self):
+        with pytest.raises(ParseError, match="sessionDate"):
+            parse_live_market_payload({"session": {"date": "2026-09-25"}})
+
+    def test_holiday_calendar_does_not_override_actual_session_date(self):
+        payload = json.loads((FIXTURES_DIR / "dse_market_api_20260924.json").read_text())
+        trading_date, _, _ = parse_live_market_payload(payload)
+        # 25 Sep is a closed/no-session day, but DSE explicitly identifies the
+        # last completed session as 24 Sep; the calendar date is never substituted.
+        assert payload["session"]["date"] == "2026-09-25"
+        assert payload["session"]["tradingDay"] is False
+        assert trading_date == date(2026, 9, 24)
+
+
 # ---------------------------------------------------------------------------
 # Integration tests: main() entry point
 # ---------------------------------------------------------------------------
@@ -226,12 +252,18 @@ def _make_snapshot(trading_day: bool = True, dsex: float = 5000.0) -> dict:
     return snap.model_dump(mode="json")
 
 
+def _live_api_payload(*, trading_date: str = "2026-04-20", dsex: float | None = None) -> dict:
+    payload = json.loads((FIXTURES_DIR / "dse_market_api_20260924.json").read_text())
+    payload["session"]["sessionDate"] = trading_date
+    if dsex is not None:
+        next(row for row in payload["indices"] if row["key"] == "DSEX")["value"] = dsex
+    return payload
+
+
 class TestMainEntryPoint:
     """main()'s gate now runs AFTER fetch+parse and evaluates the PARSED trading
-    date, never date.today() or a pre-fetch run-date check. The real fixtures
-    (dse_market_statistics.html / dse_homepage.html) carry trading date
-    2026-04-20, so DEFAULT_CLIENT.fetch_html is mocked with an ordered
-    side_effect: [stats_html, homepage_html] (summary is fetched first)."""
+    date, never date.today() or a pre-fetch run-date check. The official API
+    fixture supplies the session date, index levels and market totals together."""
 
     def test_already_ingested_no_ops_without_second_fetch(self, tmp_path, monkeypatch):
         """Parsed trading date already has a snapshot on disk -> no-op, exit 0,
@@ -241,20 +273,18 @@ class TestMainEntryPoint:
 
         (tmp_path / "2026-04-20.json").write_text(json.dumps(_make_snapshot(dsex=5000.0)))
 
-        stats_html = (FIXTURES_DIR / "dse_market_statistics.html").read_text(encoding="utf-8")
-
         with (
-            patch("scrapers.dse_market.DEFAULT_CLIENT.fetch_html") as mock_fetch,
+            patch("scrapers.dse_market.DEFAULT_CLIENT.fetch_json") as mock_fetch,
             patch("scrapers.dse_market.notify") as mock_notify,
         ):
-            mock_fetch.side_effect = [stats_html]
+            mock_fetch.side_effect = [_live_api_payload()]
 
             from scrapers.dse_market import main
 
             result = main()
 
         assert result == 0
-        assert mock_fetch.call_count == 1  # stats only -- homepage never fetched
+        assert mock_fetch.call_count == 1
         mock_notify.assert_not_called()
         # No new file written, existing one untouched
         written_files = list(tmp_path.glob("*.json"))
@@ -269,7 +299,7 @@ class TestMainEntryPoint:
 
         with (
             patch(
-                "scrapers.dse_market.DEFAULT_CLIENT.fetch_html",
+                "scrapers.dse_market.DEFAULT_CLIENT.fetch_json",
                 side_effect=HttpClient.FetchError(
                     "https://www.dse.com.bd/", 503, "Service Unavailable"
                 ),
@@ -292,18 +322,13 @@ class TestMainEntryPoint:
         monkeypatch.setenv("ECONDELTA_DRY_RUN", "1")
         monkeypatch.setattr("scrapers.dse_market.DATA_DIR", tmp_path)
 
-        stats_html_no_date = (
-            "<html><body><table><tr><td><code>\n"
-            "A. NO. OF TRADES : 100\nC. VALUE(Tk) : 1000000000.00\n"
-            "ISSUES ADVANCED : 10\nISSUES DECLINED : 5\nISSUES UNCHANGED : 2\n"
-            "</code></td></tr></table></body></html>"
-        )
+        response_without_session_date = {"session": {"date": "2026-04-21"}}
 
         with (
-            patch("scrapers.dse_market.DEFAULT_CLIENT.fetch_html") as mock_fetch,
+            patch("scrapers.dse_market.DEFAULT_CLIENT.fetch_json") as mock_fetch,
             patch("scrapers.dse_market.notify") as mock_notify,
         ):
-            mock_fetch.side_effect = [stats_html_no_date]
+            mock_fetch.side_effect = [response_without_session_date]
 
             from scrapers.dse_market import main
 
@@ -331,11 +356,7 @@ class TestMainEntryPoint:
 
         monkeypatch.setattr("scrapers.dse_market.date", _FixedDate)
 
-        stats_html = (FIXTURES_DIR / "dse_market_statistics.html").read_text(encoding="utf-8")
-        home_html = (FIXTURES_DIR / "dse_homepage.html").read_text(encoding="utf-8")
-
-        with patch("scrapers.dse_market.DEFAULT_CLIENT.fetch_html") as mock_fetch:
-            mock_fetch.side_effect = [stats_html, home_html]
+        with patch("scrapers.dse_market.DEFAULT_CLIENT.fetch_json", return_value=_live_api_payload()):
 
             from scrapers.dse_market import main
 
@@ -358,32 +379,12 @@ class TestMainEntryPoint:
         prev_file = tmp_path / "2026-04-19.json"
         prev_file.write_text(json.dumps(prev_data))
 
-        home_html = (FIXTURES_DIR / "dse_homepage.html").read_text(encoding="utf-8")
-        stats_html = (FIXTURES_DIR / "dse_market_statistics.html").read_text(encoding="utf-8")
-
-        # Parse real indices from fixture but inflate DSEX
-        real_indices = parse_homepage_indices(home_html)
-        inflated_dsex = 5000.0 * 1.12  # 12% jump
-
-        from utils.schema import DseIndices
-
-        mock_indices = DseIndices(
-            dsex=inflated_dsex,
-            dsex_change=real_indices.dsex_change,
-            dsex_change_pct=real_indices.dsex_change_pct,
-            ds30=real_indices.ds30,
-            dses=real_indices.dses,
-        )
-
         with (
             patch("scrapers.dse_market.load_holidays", return_value=set()),
             patch("scrapers.dse_market.previous_trading_day", return_value=date(2026, 4, 19)),
-            patch("scrapers.dse_market.DEFAULT_CLIENT.fetch_html") as mock_fetch,
-            patch("scrapers.dse_market.parse_homepage_indices", return_value=mock_indices),
+            patch("scrapers.dse_market.DEFAULT_CLIENT.fetch_json", return_value=_live_api_payload(dsex=5600.0)),
             patch("scrapers.dse_market.notify") as mock_notify,
         ):
-            mock_fetch.side_effect = [stats_html, home_html]
-
             from scrapers.dse_market import main
 
             result = main()
@@ -417,31 +418,12 @@ class TestMainEntryPoint:
         prev_file = tmp_path / "2026-04-13.json"
         prev_file.write_text(json.dumps(prev_data))
 
-        home_html = (FIXTURES_DIR / "dse_homepage.html").read_text(encoding="utf-8")
-        stats_html = (FIXTURES_DIR / "dse_market_statistics.html").read_text(encoding="utf-8")
-
-        real_indices = parse_homepage_indices(home_html)
-        inflated_dsex = 5000.0 * 1.12  # 12% jump -- same magnitude as the blocked test above
-
-        from utils.schema import DseIndices
-
-        mock_indices = DseIndices(
-            dsex=inflated_dsex,
-            dsex_change=real_indices.dsex_change,
-            dsex_change_pct=real_indices.dsex_change_pct,
-            ds30=real_indices.ds30,
-            dses=real_indices.dses,
-        )
-
         with (
             patch("scrapers.dse_market.load_holidays", return_value=set()),
             patch("scrapers.dse_market.previous_trading_day", return_value=date(2026, 4, 13)),
-            patch("scrapers.dse_market.DEFAULT_CLIENT.fetch_html") as mock_fetch,
-            patch("scrapers.dse_market.parse_homepage_indices", return_value=mock_indices),
+            patch("scrapers.dse_market.DEFAULT_CLIENT.fetch_json", return_value=_live_api_payload(dsex=5600.0)),
             patch("scrapers.dse_market.notify") as mock_notify,
         ):
-            mock_fetch.side_effect = [stats_html, home_html]
-
             from scrapers.dse_market import main
 
             result = main()
@@ -464,16 +446,11 @@ class TestMainEntryPoint:
         monkeypatch.setenv("ECONDELTA_DRY_RUN", "1")
         monkeypatch.setattr("scrapers.dse_market.DATA_DIR", tmp_path)
 
-        stats_html = (FIXTURES_DIR / "dse_market_statistics.html").read_text(encoding="utf-8")
-        home_html = (FIXTURES_DIR / "dse_homepage.html").read_text(encoding="utf-8")
-
         with (
             patch("scrapers.dse_market.is_bd_trading_day", return_value=False),
             patch("scrapers.dse_market.load_holidays", return_value=set()),
-            patch("scrapers.dse_market.DEFAULT_CLIENT.fetch_html") as mock_fetch,
+            patch("scrapers.dse_market.DEFAULT_CLIENT.fetch_json", return_value=_live_api_payload()),
         ):
-            mock_fetch.side_effect = [stats_html, home_html]
-
             from scrapers.dse_market import main
 
             result = main()

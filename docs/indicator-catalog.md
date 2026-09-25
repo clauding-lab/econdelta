@@ -16,30 +16,30 @@ Read the data contract for column semantics and query examples: [`data-contract.
 
 | Section | metric_id | Unit | Cadence | Source | Valid range | Description |
 |---------|-----------|------|---------|--------|-------------|-------------|
-| commodities | `food_atta_packet` | `rate` | daily | DAM | [20.0, 200.0] | Retail price — Atta packaged (BDT/kg) |
-| commodities | `food_chicken_farm` | `rate` | daily | DAM | [80.0, 400.0] | Retail price — Farm chicken (BDT/kg) |
-| commodities | `food_egg_red` | `rate` | daily | DAM | [20.0, 150.0] | Retail price — Red farm egg (BDT/4 pcs) |
+| commodities | `food_atta_packet` | `rate` | daily | moa-services.com | [20.0, 200.0] | Retail price — Atta packaged (BDT/kg) |
+| commodities | `food_chicken_farm` | `rate` | daily | moa-services.com | [80.0, 400.0] | Retail price — Farm chicken (BDT/kg) |
+| commodities | `food_egg_red` | `rate` | daily | moa-services.com | [20.0, 150.0] | Retail price — Red farm egg (BDT/4 pcs) |
 | commodities | `food_lentil_moong` | `rate` | daily | DAM | [50.0, 250.0] | Retail price — Moong lentil (BDT/kg) |
 | commodities | `food_oil_soybean` | `rate` | daily | DAM | [80.0, 400.0] | Retail price — Soybean oil (BDT/litre) |
-| commodities | `food_onion_local` | `rate` | daily | DAM | [20.0, 400.0] | Retail price — Local onion (BDT/kg) |
-| commodities | `food_rice_coarse` | `rate` | daily | DAM | [20.0, 200.0] | Retail price — Aman coarse rice (BDT/kg) |
-| commodities | `food_sugar_local` | `rate` | daily | DAM | [50.0, 250.0] | Retail price — Sugar local (BDT/kg) |
-| commodities (brief alias) | `dam_chicken` | `rate` | daily | DAM | [80.0, 400.0] | Alias of `food_chicken_farm` — Retail price — Farm chicken (BDT/kg) |
-| commodities (brief alias) | `dam_egg` | `rate` | daily | DAM | [20.0, 150.0] | Alias of `food_egg_red` — Retail price — Red farm egg (BDT/4 pcs) |
-| commodities (brief alias) | `dam_flour` | `rate` | daily | DAM | [20.0, 200.0] | Alias of `food_atta_packet` — Retail price — Atta packaged (BDT/kg) |
+| commodities | `food_onion_local` | `rate` | daily | moa-services.com | [20.0, 400.0] | Retail price — Local onion (BDT/kg) |
+| commodities | `food_rice_coarse` | `rate` | daily | moa-services.com | [20.0, 200.0] | Retail price — Aman coarse rice (BDT/kg) |
+| commodities | `food_sugar_local` | `rate` | daily | moa-services.com | [50.0, 250.0] | Retail price — Sugar local (BDT/kg) |
+| commodities (brief alias) | `dam_chicken` | `rate` | daily | moa-services.com | [80.0, 400.0] | Alias of `food_chicken_farm` — Retail price — Farm chicken (BDT/kg) |
+| commodities (brief alias) | `dam_egg` | `rate` | daily | moa-services.com | [20.0, 150.0] | Alias of `food_egg_red` — Retail price — Red farm egg (BDT/4 pcs) |
+| commodities (brief alias) | `dam_flour` | `rate` | daily | moa-services.com | [20.0, 200.0] | Alias of `food_atta_packet` — Retail price — Atta packaged (BDT/kg) |
 | commodities (brief alias) | `dam_lentil` | `rate` | daily | DAM | [50.0, 250.0] | Alias of `food_lentil_moong` — Retail price — Moong lentil (BDT/kg) |
 | commodities (brief alias) | `dam_oil` | `rate` | daily | DAM | [80.0, 400.0] | Alias of `food_oil_soybean` — Retail price — Soybean oil (BDT/litre) |
-| commodities (brief alias) | `dam_onion` | `rate` | daily | DAM | [20.0, 400.0] | Alias of `food_onion_local` — Retail price — Local onion (BDT/kg) |
-| commodities (brief alias) | `dam_rice_coarse` | `rate` | daily | DAM | [20.0, 200.0] | Alias of `food_rice_coarse` — Retail price — Aman coarse rice (BDT/kg) |
-| commodities (brief alias) | `dam_sugar` | `rate` | daily | DAM | [50.0, 250.0] | Alias of `food_sugar_local` — Retail price — Sugar local (BDT/kg) |
-| commodities (brief alias) | `food_atta_packet_bdt` | `rate` | daily | DAM | [20.0, 200.0] | Alias of `food_atta_packet` — Retail price — Atta packaged (BDT/kg) |
-| commodities (brief alias) | `food_chicken_farm_bdt` | `rate` | daily | DAM | [80.0, 400.0] | Alias of `food_chicken_farm` — Retail price — Farm chicken (BDT/kg) |
-| commodities (brief alias) | `food_egg_red_bdt` | `rate` | daily | DAM | [20.0, 150.0] | Alias of `food_egg_red` — Retail price — Red farm egg (BDT/4 pcs) |
+| commodities (brief alias) | `dam_onion` | `rate` | daily | moa-services.com | [20.0, 400.0] | Alias of `food_onion_local` — Retail price — Local onion (BDT/kg) |
+| commodities (brief alias) | `dam_rice_coarse` | `rate` | daily | moa-services.com | [20.0, 200.0] | Alias of `food_rice_coarse` — Retail price — Aman coarse rice (BDT/kg) |
+| commodities (brief alias) | `dam_sugar` | `rate` | daily | moa-services.com | [50.0, 250.0] | Alias of `food_sugar_local` — Retail price — Sugar local (BDT/kg) |
+| commodities (brief alias) | `food_atta_packet_bdt` | `rate` | daily | moa-services.com | [20.0, 200.0] | Alias of `food_atta_packet` — Retail price — Atta packaged (BDT/kg) |
+| commodities (brief alias) | `food_chicken_farm_bdt` | `rate` | daily | moa-services.com | [80.0, 400.0] | Alias of `food_chicken_farm` — Retail price — Farm chicken (BDT/kg) |
+| commodities (brief alias) | `food_egg_red_bdt` | `rate` | daily | moa-services.com | [20.0, 150.0] | Alias of `food_egg_red` — Retail price — Red farm egg (BDT/4 pcs) |
 | commodities (brief alias) | `food_lentil_moong_bdt` | `rate` | daily | DAM | [50.0, 250.0] | Alias of `food_lentil_moong` — Retail price — Moong lentil (BDT/kg) |
 | commodities (brief alias) | `food_oil_soybean_bdt` | `rate` | daily | DAM | [80.0, 400.0] | Alias of `food_oil_soybean` — Retail price — Soybean oil (BDT/litre) |
-| commodities (brief alias) | `food_onion_local_bdt` | `rate` | daily | DAM | [20.0, 400.0] | Alias of `food_onion_local` — Retail price — Local onion (BDT/kg) |
-| commodities (brief alias) | `food_rice_coarse_bdt` | `rate` | daily | DAM | [20.0, 200.0] | Alias of `food_rice_coarse` — Retail price — Aman coarse rice (BDT/kg) |
-| commodities (brief alias) | `food_sugar_local_bdt` | `rate` | daily | DAM | [50.0, 250.0] | Alias of `food_sugar_local` — Retail price — Sugar local (BDT/kg) |
+| commodities (brief alias) | `food_onion_local_bdt` | `rate` | daily | moa-services.com | [20.0, 400.0] | Alias of `food_onion_local` — Retail price — Local onion (BDT/kg) |
+| commodities (brief alias) | `food_rice_coarse_bdt` | `rate` | daily | moa-services.com | [20.0, 200.0] | Alias of `food_rice_coarse` — Retail price — Aman coarse rice (BDT/kg) |
+| commodities (brief alias) | `food_sugar_local_bdt` | `rate` | daily | moa-services.com | [50.0, 250.0] | Alias of `food_sugar_local` — Retail price — Sugar local (BDT/kg) |
 | derived (cross-source) | `bofr` | `percent` | daily | — | — | Bangladesh Overnight Financing Rate — Overnight tenor, from BB's Money Market Reference Rate page. Fanned out from `money_market_ref_rate`; as_of = the page's own date header. |
 | derived (cross-source) | `bofr_1w` | `percent` | daily | — | — | Bangladesh Overnight Financing Rate — 1W tenor, from BB's Money Market Reference Rate page. Fanned out from `money_market_ref_rate`. |
 | derived (cross-source) | `crr_utilisation_pct` | `percent` | monthly | — | — | Derived (S2): deposits_held_with_bb_crr / deposits_of_the_system × 100 — CRR balance held with BB as a % of total system deposits (NOT the regulated statutory maintenance ratio; no hardcoded policy rate). Computed in aggregate_latest._compute_reserve_utilisation, null/zero-denominator safe. Lands in metric_history under its own id. |

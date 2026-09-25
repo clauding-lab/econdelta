@@ -81,3 +81,36 @@ def test_pdf_index_fetch_error_is_contained_not_crashing(tmp_path: Path):
     # debt_gdp_ratio is skipped (its index 404'd); policy_rate after it still fetched.
     assert [r.indicator_id for r in results] == ["policy_rate"]
     html_mock.assert_called_once()
+
+
+def test_pdf_discovery_failure_is_contained_and_later_sources_run(tmp_path: Path, caplog):
+    """A successful index download with no discoverable PDF must not abort
+    the registry walk; all 61 following indicators still get attempted."""
+    indicators = []
+    for index in range(64):
+        fetch = {"type": "pdf", "url": f"https://example.test/{index}"}
+        if index == 2:
+            fetch["discover"] = "latest_pdf_link"
+        indicators.append({
+            "id": f"metric_{index}", "cadence": "monthly", "domain": "test",
+            "fetch": fetch,
+        })
+    cfg = tmp_path / "sources-v3.json"
+    cfg.write_text(json.dumps({"version": "3.0", "indicators": indicators}))
+
+    fetched = []
+
+    def fake_pdf(*, url, indicator_id, **kwargs):
+        fetched.append(indicator_id)
+        return MagicMock(cache_hit=False, indicator_id=indicator_id)
+
+    with patch("fetch_all._download_index_html", return_value="<html>200 OK</html>"), \
+         patch("fetch_all.discover_latest_pdf", side_effect=ValueError("no dated PDF links found")), \
+         patch("fetch_all.fetch_pdf", side_effect=fake_pdf):
+        results = fetch_all.run(config_path=cfg, data_root=tmp_path / "data")
+
+    assert len(results) == 63
+    assert "metric_2" not in fetched
+    assert fetched[-61:] == [f"metric_{i}" for i in range(3, 64)]
+    assert "fetch_failed: metric_2" in caplog.text
+    assert "no dated PDF links found" in caplog.text

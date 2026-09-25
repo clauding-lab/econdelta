@@ -336,3 +336,14 @@ Observed IDs absent from the checked-in list: `ACMELAB`, `BSRMLTD`, `POWERGRID`.
 - **Unavailable source (E5):** the DSE direct scraper’s market-statistics endpoint returned HTTP 404; last verified direct snapshot was 22 September. Commodity quotes were held by the existing 8% Brent threshold after an 8.78% move; acceptance of the rejected quote remains unverified. Do not disable the threshold.
 - **Static/manual seed or release lag (E6):** monthly exports have no live appender after the official backfill; monthly imports have a live MEI appender with a source-period/splice gate, but its latest stored month is June. Several other monthly rows still cite `macro_observer_seed`. Remittance archive’s latest July and import archive’s latest June require a publication check before calling them broken. An unchanged local-food value for 51 days requires source verification; unchanged is not proof of error.
 - **Pending verification:** every row marked “pending source-row verification” still needs the official document row and period checked. The table’s unverified classifications are triage labels, not permission to edit history. Historical correction plans need row-by-row source proof and separate approval.
+
+## E5 recovery update — 25 September 2026 BDT
+
+This dated update supersedes the E5 summary-source and six DAM retail-feed statuses above. It does not update the point-in-time production row sample.
+
+| Series family | Verified source and period | Current status |
+|---|---|---|
+| DSE summary metrics (`dsex`, change, `ds30`, `dses`, breadth, turnover, trades) | Official public `/api/live/market`; `session.sessionDate=2026-09-24` | Source recovered in code; `session.date=2026-09-25` is not used as an observation date. Direct `dse_close_*` ticker family remains unavailable and outside this summary-endpoint recovery. |
+| DAM rice, packaged atta, red farm eggs, farm-raised hen, local onion, local sugar | Official public dated national-retail feed; `price_date=2026-09-24`; product and unit IDs cross-checked against official public definitions | Six exact source identities configured. Onion keeps its 30% anomaly warning for the 62.00→42.045 move; a reviewer rejection uses E2's dated held-observation path. |
+| DAM soybean oil and moong lentil | Portal has a dated national ticker, but the old IDs do not define oil packaging or lentil origin/grade | Not promoted; old undated banner is rejected, and no product variant is inferred. |
+| Brent | Yahoo `BZ=F` 106.95 for 24 Sep; Reuters settlement 106.60 is not exact instrument/contract/time corroboration | Existing 8% hard hold remains active; source recovery is incomplete. |

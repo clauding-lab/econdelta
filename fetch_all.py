@@ -158,15 +158,16 @@ def _fetch_one(indicator: dict, data_root: Path) -> FetchResult | None:
         # (E1 MEI leftover). None for fixed-URL PDFs (no discovery) → mtime fallback.
         period: tuple[int, int] | None = None
         if fetch_block.get("discover") == "latest_pdf_link":
-            # Contain a per-indicator index-fetch failure (e.g. a moved page → 404,
-            # or a TLS error) as a FetchError so run() skips just this indicator
-            # instead of an uncaught HTTPError/URLError aborting the whole fetch
-            # stage. Mirrors the html discovery branch above.
+            # Both a failed index download and an HTTP-200 page with no usable
+            # PDF link are source-local failures. Keep them inside this
+            # indicator's boundary so the rest of the registry still runs.
             try:
                 html = _download_index_html(url)
+                url, period = discover_latest_pdf(html=html, base_url=url)
             except Exception as e:
-                raise FetchError(f"index fetch failed for {url}: {e}") from e
-            url, period = discover_latest_pdf(html=html, base_url=url)
+                raise FetchError(
+                    f"PDF discovery failed for {indicator_id}: {type(e).__name__}: {e}"
+                ) from e
         as_of_month = datetime.now(timezone.utc).strftime("%Y-%m")
         if fetch_block.get("stealth"):
             return fetch_pdf_stealth(

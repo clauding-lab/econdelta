@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import re
 import sys
@@ -30,6 +31,7 @@ FetchError = HttpClient.FetchError
 logger = logging.getLogger("dse_market")
 
 _TAKA_PER_CRORE = 10_000_000
+_DSE_API_TURNOVER_MILLION_TO_CRORE = 10.0
 
 
 class ParseError(Exception):
@@ -232,6 +234,47 @@ def parse_market_stats(html: str) -> DseMarket:
     )
 
 
+def parse_live_market_payload(payload: dict) -> tuple[date, DseIndices, DseMarket]:
+    """Extract one completed DSE session from the official live-market API.
+
+    The response has both the calendar's ``session.date`` and the observation
+    field ``session.sessionDate``. Only the latter identifies the last actual
+    trading session (for example, on a closed day the two can differ).
+    API turnover is in million BDT; one crore is ten million BDT.
+    """
+    try:
+        raw_date = payload["session"]["sessionDate"]
+        trading_date = date.fromisoformat(raw_date)
+        rows = {row["key"].upper(): row for row in payload["indices"]}
+        dsex = rows["DSEX"]
+        ds30 = rows["DS30"]
+        dses = rows["DSES"]
+        indices = DseIndices(
+            dsex=float(dsex["value"]),
+            dsex_change=float(dsex["change"]),
+            dsex_change_pct=float(dsex["percent"]),
+            ds30=float(ds30["value"]),
+            dses=float(dses["value"]),
+        )
+        totals = payload["totals"]
+        breadth = payload["breadth"]
+        turnover_million = float(totals["turnover"])
+        if not math.isfinite(turnover_million) or turnover_million <= 0:
+            raise ValueError("turnover must be a positive finite number")
+        market = DseMarket(
+            turnover_crore=round(turnover_million / _DSE_API_TURNOVER_MILLION_TO_CRORE, 4),
+            total_trades=int(totals["trades"]),
+            advancing=int(breadth["advanced"]),
+            declining=int(breadth["declined"]),
+            unchanged=int(breadth["unchanged"]),
+        )
+        if any(not math.isfinite(value) or value <= 0 for value in (indices.dsex, indices.ds30, indices.dses)):
+            raise ValueError("DSE index levels must be positive and finite")
+    except (KeyError, TypeError, ValueError, OverflowError) as exc:
+        raise ParseError(f"invalid DSE live-market response: {exc}") from exc
+    return trading_date, indices, market
+
+
 def load_previous_snapshot_for(d: date, holidays: set[date]) -> DseSnapshot | None:
     """Find the most recent snapshot file for the previous trading day before d."""
     if not DATA_DIR.exists():
@@ -281,20 +324,15 @@ def main() -> int:
     with CONFIG_PATH.open() as f:
         sources = json.load(f)["sources"]
     summary_url: str = sources["dse_market_summary"]["url"]
-    homepage_url = "https://www.dse.com.bd/"
 
     thresholds = load_thresholds(THRESHOLDS_PATH)
 
-    # Fetch + parse market-statistics FIRST -- it carries the page's own
-    # trading date, which is what the gate below evaluates against. There is
-    # no cheap way to know the trading date without fetching, so (unlike the
-    # old run-date pre-check this replaces) every invocation attempts the
-    # fetch; the skip/no-op decision happens AFTER a successful parse, not
-    # before it.
+    # The official API supplies the last completed session, index levels and
+    # market totals in one response. ``sessionDate`` is the observation date;
+    # do not substitute the calendar's ``session.date`` or the run date.
     try:
-        stats_html = DEFAULT_CLIENT.fetch_html(summary_url)
-        trading_date = parse_trading_date(_extract_code_block_text(stats_html))
-        market = parse_market_stats(stats_html)
+        payload = DEFAULT_CLIENT.fetch_json(summary_url)
+        trading_date, indices, market = parse_live_market_payload(payload)
         logger.info(
             "Parsed market: date=%s trades=%d turnover=%.4f crore adv=%d dec=%d unc=%d",
             trading_date.isoformat(),
@@ -335,19 +373,12 @@ def main() -> int:
             trading_date.isoformat(),
         )
 
-    try:
-        home_html = DEFAULT_CLIENT.fetch_html(homepage_url)
-        indices = parse_homepage_indices(home_html)
-        logger.info(
-            "Parsed indices: DSEX=%.5f DS30=%.5f DSES=%.5f",
-            indices.dsex,
-            indices.ds30 or 0,
-            indices.dses or 0,
-        )
-    except (FetchError, ParseError) as e:
-        logger.exception("fetch/parse failed")
-        notify("error", "dse_market fetch failed", f"{type(e).__name__}: {e}")
-        return 1
+    logger.info(
+        "Parsed indices: DSEX=%.5f DS30=%.5f DSES=%.5f",
+        indices.dsex,
+        indices.ds30 or 0,
+        indices.dses or 0,
+    )
 
     # Anomaly check vs previous trading day. MEDIUM-2 (2026-08-22 round-1
     # review): the threshold was calibrated for a ONE-trading-day move.

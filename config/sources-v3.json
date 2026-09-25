@@ -612,12 +612,11 @@
       "cadence": "daily",
       "fetch": {
         "type": "html",
-        "url": "http://market.dam.gov.bd/market_daily_price_report",
-        "task": "আমন চাল - মোটা"
+        "url": "https://moa-services.com/agri-service/crop-price-info/reports/price-report/daily-price-scroll",
+        "task": "commodity_id=604 unit_retail=2"
       },
       "parse": {
         "deterministic": "dam_ticker",
-        "llm_prompt": "html_footer_ticker.txt",
         "value_type": "rate",
         "valid_range": [
           20.0,
@@ -633,12 +632,11 @@
       "cadence": "daily",
       "fetch": {
         "type": "html",
-        "url": "http://market.dam.gov.bd/market_daily_price_report",
-        "task": "আটা (প্যাকেটজাত)"
+        "url": "https://moa-services.com/agri-service/crop-price-info/reports/price-report/daily-price-scroll",
+        "task": "commodity_id=628 unit_retail=2"
       },
       "parse": {
         "deterministic": "dam_ticker",
-        "llm_prompt": "html_footer_ticker.txt",
         "value_type": "rate",
         "valid_range": [
           20.0,
@@ -654,12 +652,11 @@
       "cadence": "daily",
       "fetch": {
         "type": "html",
-        "url": "http://market.dam.gov.bd/market_daily_price_report",
-        "task": "ডিম ফার্ম - লাল"
+        "url": "https://moa-services.com/agri-service/crop-price-info/reports/price-report/daily-price-scroll",
+        "task": "commodity_id=682 unit_retail=5"
       },
       "parse": {
         "deterministic": "dam_ticker",
-        "llm_prompt": "html_footer_ticker.txt",
         "value_type": "rate",
         "valid_range": [
           20.0,
@@ -675,12 +672,11 @@
       "cadence": "daily",
       "fetch": {
         "type": "html",
-        "url": "http://market.dam.gov.bd/market_daily_price_report",
-        "task": "খামারের মুরগী"
+        "url": "https://moa-services.com/agri-service/crop-price-info/reports/price-report/daily-price-scroll",
+        "task": "commodity_id=676 unit_retail=2"
       },
       "parse": {
         "deterministic": "dam_ticker",
-        "llm_prompt": "html_footer_ticker.txt",
         "value_type": "rate",
         "valid_range": [
           80.0,
@@ -701,7 +697,6 @@
       },
       "parse": {
         "deterministic": "dam_ticker",
-        "llm_prompt": "html_footer_ticker.txt",
         "value_type": "rate",
         "valid_range": [
           80.0,
@@ -717,12 +712,11 @@
       "cadence": "daily",
       "fetch": {
         "type": "html",
-        "url": "http://market.dam.gov.bd/market_daily_price_report",
-        "task": "পেঁয়াজ - দেশী"
+        "url": "https://moa-services.com/agri-service/crop-price-info/reports/price-report/daily-price-scroll",
+        "task": "commodity_id=831 unit_retail=2"
       },
       "parse": {
         "deterministic": "dam_ticker",
-        "llm_prompt": "html_footer_ticker.txt",
         "value_type": "rate",
         "valid_range": [
           20.0,
@@ -743,7 +737,6 @@
       },
       "parse": {
         "deterministic": "dam_ticker",
-        "llm_prompt": "html_footer_ticker.txt",
         "value_type": "rate",
         "valid_range": [
           50.0,
@@ -759,12 +752,11 @@
       "cadence": "daily",
       "fetch": {
         "type": "html",
-        "url": "http://market.dam.gov.bd/market_daily_price_report",
-        "task": "চিনি (দেশী)"
+        "url": "https://moa-services.com/agri-service/crop-price-info/reports/price-report/daily-price-scroll",
+        "task": "commodity_id=760 unit_retail=2"
       },
       "parse": {
         "deterministic": "dam_ticker",
-        "llm_prompt": "html_footer_ticker.txt",
         "value_type": "rate",
         "valid_range": [
           50.0,

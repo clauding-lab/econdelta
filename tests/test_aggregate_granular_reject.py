@@ -135,6 +135,41 @@ class TestObservationQuarantine:
         )
         _, _, hard_reject = quarantine_observations(current, ["unknown"], [], breadth_count=1)
         assert hard_reject is True
+
+    def test_explicit_onion_rejection_holds_dated_value_and_rebuilds_alias(self):
+        """A source review can reject the 24 Sep move; E2 restores the last
+        dated onion observation and derives the Brief alias from that row."""
+        from utils.observations import quarantine_observations
+
+        prior = Observation(
+            metric_id="food_onion_local", value=62.0,
+            as_of=date(2026, 9, 23), unit="BDT/kg", source="DAM",
+            source_url="https://moa-services.com/", captured_at=datetime(2026, 9, 23, tzinfo=timezone.utc),
+            quality="verified", date_basis="observation", evidence="23 Sep official DAM ticker",
+        )
+        current = expand_aliases({
+            "food_onion_local": Observation(
+                metric_id="food_onion_local", value=42.045,
+                as_of=date(2026, 9, 24), unit="BDT/kg", source="DAM",
+                source_url="https://moa-services.com/", captured_at=datetime(2026, 9, 24, tzinfo=timezone.utc),
+                quality="verified", date_basis="observation", evidence="24 Sep dated retail ticker",
+            )
+        })
+        accepted, quarantined, hard_reject = quarantine_observations(
+            current,
+            ["food_onion_local"],
+            [{"observations": {"food_onion_local": prior}}],
+            breadth_count=1,
+        )
+
+        assert hard_reject is False
+        assert quarantined == ["food_onion_local"]
+        assert accepted["food_onion_local"].value == 62.0
+        assert accepted["food_onion_local"].as_of == date(2026, 9, 23)
+        assert accepted["food_onion_local"].quality == "held"
+        assert accepted["food_onion_local_bdt"].value == 62.0
+        assert accepted["food_onion_local_bdt"].as_of == date(2026, 9, 23)
+        assert accepted["food_onion_local_bdt"].quality == "held"
         _, _, hard_reject = quarantine_observations(
             current, ["general_inflation"], [], breadth_count=6
         )
