@@ -23,6 +23,7 @@ import parsers.html_footer_ticker  # noqa: F401
 import parsers.html_labeled_value  # noqa: F401
 import parsers.html_money_market_ref_rate  # noqa: F401
 import parsers.html_table_row  # noqa: F401
+import parsers.mei_observation  # noqa: F401
 import parsers.pdf_component  # noqa: F401
 import parsers.pdf_fsr_ownership_cluster  # noqa: F401
 import parsers.pdf_mfr_row  # noqa: F401
@@ -30,7 +31,6 @@ import parsers.pdf_table_column_latest  # noqa: F401
 import parsers.pdf_table_latest  # noqa: F401
 import parsers.pdf_table_row  # noqa: F401
 import parsers.pdf_table_total  # noqa: F401
-import parsers.mei_observation  # noqa: F401
 import parsers.wsei_observation  # noqa: F401
 from fetchers.base import FetchResult, parse_period
 from parsers.hybrid import parse_one

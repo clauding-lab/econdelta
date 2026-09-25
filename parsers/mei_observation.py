@@ -42,9 +42,9 @@ def _numeric(value: object) -> float:
 
 
 def _release_status(header: str) -> str:
-    if re.search(r"(?:\d{4}|\bFY\s*\d{2})P\b", header, re.IGNORECASE):
+    if re.search(r"(?:\d{4}|\bFY\s*\d{2})P\d*\b", header, re.IGNORECASE):
         return "provisional"
-    if re.search(r"(?:\d{4}|\bFY\s*\d{2})R\b", header, re.IGNORECASE):
+    if re.search(r"(?:\d{4}|\bFY\s*\d{2})R\d*\b", header, re.IGNORECASE):
         return "final"
     return "unknown"
 
@@ -69,7 +69,7 @@ def _row_index(table: list[list[object]], label: str, *, strategy: str | None = 
         joined = f"{first} {next_first}".strip()
         if strategy == "latest_fy":
             if not re.fullmatch(
-                r"(?:fy\s*\d{2}[PR]?|july\s*[-–]\s*may\s+of\s+fy\s*\d{2}[PR]?)",
+                r"(?:fy\s*\d{2}(?:[PR]\d*)?|july\s*[-–]\s*may\s+of\s+fy\s*\d{2}(?:[PR]\d*)?)",
                 first,
                 re.IGNORECASE,
             ):
@@ -99,8 +99,29 @@ def _row_index(table: list[list[object]], label: str, *, strategy: str | None = 
     return matches[0]
 
 
-def _unit_in_table(table: list[list[object]], unit: str, page_text: str = "") -> bool:
-    text = _norm(" ".join(str(cell or "") for row in table for cell in row) + " " + page_text)
+def _associated_unit_caption(page_text: str, table_kind: str) -> str:
+    """Return only the unit caption immediately associated with this MEI section."""
+    lines = page_text.splitlines()
+    heading = _HEADINGS[table_kind]
+    for index, line in enumerate(lines):
+        if heading not in _norm(line):
+            continue
+        caption_lines: list[str] = []
+        for candidate in lines[index + 1:index + 4]:
+            normalized = _norm(candidate)
+            if re.match(r"\d+\.\s", normalized):
+                break
+            if "bdt in crore" in normalized or "usd in million" in normalized:
+                caption_lines.append(candidate)
+                break
+            if normalized:
+                break
+        return " ".join(caption_lines)
+    return ""
+
+
+def _unit_in_table(table: list[list[object]], unit: str, caption: str = "") -> bool:
+    text = _norm(" ".join(str(cell or "") for row in table for cell in row) + " " + caption)
     if unit == "BDT crore cumulative":
         unit = "BDT crore"
     if unit == "ratio":
@@ -131,13 +152,13 @@ def _select_month_column(table: list[list[object]]) -> tuple[int, date, str]:
 
 
 def _select_observation(
-    table: list[list[object]], *, selector: dict[str, Any], page_text: str = "",
+    table: list[list[object]], *, selector: dict[str, Any], caption: str = "",
 ) -> ParseResult:
     """Select a value and its unit/release marker/period from one table."""
     row_selector = str(selector.get("row", ""))
     column_selector = str(selector.get("column", ""))
     unit = str(selector.get("unit", ""))
-    if not _unit_in_table(table, unit, page_text):
+    if not _unit_in_table(table, unit, caption):
         raise ParseError(f"MEI table unit does not prove {unit!r}")
 
     if column_selector == "latest_month":
@@ -240,7 +261,10 @@ class MeiObservationParser:
                 for table in page.extract_tables():
                     try:
                         result = _select_observation(
-                            table, selector=selector, page_text=page.extract_text() or "",
+                            table, selector=selector,
+                            caption=_associated_unit_caption(
+                                page.extract_text() or "", str(selector["table"]),
+                            ),
                         )
                     except ParseError:
                         continue

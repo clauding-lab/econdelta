@@ -83,3 +83,44 @@ def test_missing_period_header_is_rejected_even_if_value_exists():
             "series": "tax", "row": "Tax Revenue", "column": "June, 2026",
             "line": 0, "unit": "BDT crore",
         })
+
+
+def test_wsei_rejects_unit_found_only_in_another_numbered_component():
+    from parsers.wsei_observation import _select_observation
+
+    table = [
+        ["5.", "", ""],
+        ["", "Billion US$ / BDT in crore", "FY26"],
+        ["", "Wage Earners' Remittances", "35.59"],
+        ["9.", "", ""],
+        ["", "", "FY26"],
+        ["", "Tax Revenue (NBR)", "415473"],
+    ]
+    with pytest.raises(ParseError, match="unit"):
+        _select_observation(table, selector={
+            "series": "tax", "row": "Tax Revenue (NBR)",
+            "column": "latest_fy", "line": 0, "unit": "BDT crore",
+        })
+
+
+@pytest.mark.parametrize(
+    ("marker", "status", "fy_end"),
+    [("FY26P2", "provisional", 2026), ("FY25R1", "final", 2025)],
+)
+def test_wsei_revision_suffix_sets_period_and_release_status(marker, status, fy_end):
+    from parsers.wsei_observation import _select_observation
+
+    result = _select_observation(
+        [
+            ["5.", "", ""],
+            ["", "", marker],
+            ["", "Wage Earners' Remittances (billion US$)", "35.59"],
+        ],
+        selector={
+            "series": "remittance", "row": "Wage Earners' Remittances",
+            "column": "latest_complete_fy", "line": 0, "unit": "USD billion",
+        },
+    )
+    assert (result.source_as_of, result.unit, result.release_status) == (
+        date(fy_end, 6, 30), "USD billion", status,
+    )

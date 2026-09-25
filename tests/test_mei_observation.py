@@ -144,18 +144,53 @@ def test_missing_header_cannot_be_replaced_by_report_cover_month():
         })
 
 
-@pytest.mark.parametrize(("suffix", "status"), [("P", "provisional"), ("R", "final")])
-def test_deficit_fiscal_row_suffix_preserves_release_status(suffix, status):
+@pytest.mark.parametrize(
+    ("suffix", "status", "fy_end"),
+    [("P", "provisional", 2026), ("R", "final", 2026),
+     ("P2", "provisional", 2026), ("R1", "final", 2025)],
+)
+def test_deficit_fiscal_row_suffix_preserves_release_status(suffix, status, fy_end):
     from parsers.mei_observation import _select_observation
 
     result = _select_observation(
         [["(BDT in crore)", "Particulars", "Banking system"],
-         [f"FY26{suffix}", "Borrowing", "42"]],
+         [f"FY{fy_end % 100:02d}{suffix}", "Borrowing", "42"]],
         selector={
             "table": "deficit_financing", "row": "latest_fy",
             "column": "banking system", "unit": "BDT crore cumulative",
         },
     )
     assert (result.value, result.source_as_of, result.unit, result.release_status) == (
-        42.0, date(2026, 6, 30), "BDT crore cumulative", status,
+        42.0, date(fy_end, 6, 30), "BDT crore cumulative", status,
     )
+
+
+def test_mei_rejects_unit_found_only_in_neighboring_page_table():
+    from parsers.mei_observation import _associated_unit_caption, _select_observation
+
+    table = [
+        ["Month", "June, 2026P"],
+        ["Deposits", "123"],
+    ]
+    neighboring_page = (
+        "1. Money and credit developments\n"
+        "(USD in million)\n"
+        "Unrelated table: (BDT in crore)"
+    )
+    caption = _associated_unit_caption(neighboring_page, "money_credit")
+    assert "bdt in crore" not in caption.casefold()
+    with pytest.raises(ParseError, match="unit"):
+        _select_observation(
+            table, selector={
+                "table": "money_credit", "row": "Deposits",
+                "column": "latest_month", "unit": "BDT crore",
+            },
+            caption=caption,
+        )
+
+
+@pytest.mark.parametrize(("marker", "expected"), [("FY26P2", "provisional"), ("FY25R1", "final")])
+def test_mei_revision_suffix_sets_release_status(marker, expected):
+    from parsers.mei_observation import _release_status
+
+    assert _release_status(marker) == expected

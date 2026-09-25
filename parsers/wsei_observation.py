@@ -48,9 +48,9 @@ def _number(value: object) -> float:
 
 
 def _release_status(header: str) -> str:
-    if re.search(r"(?:\d{4}|\bFY\s*\d{2})P\b", header, re.IGNORECASE):
+    if re.search(r"(?:\d{4}|\bFY\s*\d{2})P\d*\b", header, re.IGNORECASE):
         return "provisional"
-    if re.search(r"(?:\d{4}|\bFY\s*\d{2})R\b", header, re.IGNORECASE):
+    if re.search(r"(?:\d{4}|\bFY\s*\d{2})R\d*\b", header, re.IGNORECASE):
         return "final"
     return "unknown"
 
@@ -103,11 +103,10 @@ def _select_observation(table: list[list[object]], *, selector: dict[str, Any]) 
     line_index = int(selector.get("line", 0))
     unit = str(selector.get("unit", ""))
     scale = float(selector.get("scale", 1))
-    if not _unit_proved(table, unit, scale):
-        raise ParseError(f"WSEI table unit does not prove {unit!r}")
-
     section_start, section_end = _section_bounds(table, series)
     section = table[section_start:section_end]
+    if not _unit_proved(section, unit, scale):
+        raise ParseError(f"WSEI component unit does not prove {unit!r}")
     if column_label == "latest_month":
         dated = [
             (row_index + section_start, column, str(cell))
