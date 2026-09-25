@@ -23,6 +23,8 @@ class ParseResult:
     _parse_strategy: str = ""
     sanity_note: str | None = None
     source_as_of: date | None = None
+    unit: str | None = None
+    release_status: Literal["final", "provisional", "unknown"] = "unknown"
     """Actual economic observation date or period end, when recoverable.
 
     This travels with the selected value into daily history. A report's cover,

@@ -121,12 +121,11 @@
       "fetch": {
         "type": "pdf",
         "url": "https://www.bb.org.bd/en/index.php/publication/publictn/5/27",
-        "task": "Go to the latest available PDF, Component 9 (NBR tax revenue). Return the CUMULATIVE fiscal-year-to-date (July to the latest reported month) NBR tax revenue total in BDT crore — the running cumulative total, which mid-year is typically 200,000+ crore. NEVER return a single month's collection or a target/shortfall figure.",
+        "task": "{\"series\":\"tax\",\"row\":\"Tax Revenue (NBR)\",\"column\":\"latest_fy\",\"line\":0,\"unit\":\"BDT crore\"}",
         "discover": "latest_pdf_link"
       },
       "parse": {
-        "deterministic": "pdf_component",
-        "llm_prompt": "pdf_component.txt",
+        "deterministic": "wsei_observation",
         "value_type": "amount_bdt_crore",
         "valid_range": [
           0.0,
@@ -186,7 +185,7 @@
           60000.0
         ]
       },
-      "anomaly_threshold": 0.10
+      "anomaly_threshold": 0.1
     },
     {
       "id": "foreign_borrowing_for_budget_deficit",
@@ -196,12 +195,11 @@
       "fetch": {
         "type": "pdf",
         "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
-        "task": "page=16 table=1 header=\"1 2 3 4 = 2+3 5 6 = 4+5 7 8 9\" row=\"July-May of FY 26\" col=5",
+        "task": "{\"table\":\"deficit_financing\",\"row\":\"latest_fy\",\"column\":\"Net foreign financing\",\"unit\":\"BDT crore cumulative\"}",
         "discover": "latest_pdf_link"
       },
       "parse": {
-        "deterministic": "pdf_table_row",
-        "llm_prompt": "pdf_table_row.txt",
+        "deterministic": "mei_observation",
         "value_type": "amount_bdt_crore",
         "valid_range": [
           0.0,
@@ -223,12 +221,11 @@
       "fetch": {
         "type": "pdf",
         "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
-        "task": "page=16 table=1 header=\"1 2 3 4 = 2+3 5 6 = 4+5 7 8 9\" row=\"July-May of FY 26\" col=4",
+        "task": "{\"table\":\"deficit_financing\",\"row\":\"latest_fy\",\"column\":\"Total net domestic financing\",\"unit\":\"BDT crore cumulative\"}",
         "discover": "latest_pdf_link"
       },
       "parse": {
-        "deterministic": "pdf_table_row",
-        "llm_prompt": "pdf_table_row.txt",
+        "deterministic": "mei_observation",
         "value_type": "amount_bdt_crore",
         "valid_range": [
           0.0,
@@ -250,12 +247,11 @@
       "fetch": {
         "type": "pdf",
         "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
-        "task": "page=16 table=1 header=\"1 2 3 4 = 2+3 5 6 = 4+5 7 8 9\" row=\"July-May of FY 26\" col=2",
+        "task": "{\"table\":\"deficit_financing\",\"row\":\"latest_fy\",\"column\":\"banking system\",\"unit\":\"BDT crore cumulative\"}",
         "discover": "latest_pdf_link"
       },
       "parse": {
-        "deterministic": "pdf_table_row",
-        "llm_prompt": "pdf_table_row.txt",
+        "deterministic": "mei_observation",
         "value_type": "amount_bdt_crore",
         "valid_range": [
           0.0,
@@ -277,12 +273,11 @@
       "fetch": {
         "type": "pdf",
         "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
-        "task": "page=16 table=1 header=\"1 2 3 4 = 2+3 5 6 = 4+5 7 8 9\" row=\"July-May of FY 26\" col=3",
+        "task": "{\"table\":\"deficit_financing\",\"row\":\"latest_fy\",\"column\":\"non-bank\",\"unit\":\"BDT crore cumulative\"}",
         "discover": "latest_pdf_link"
       },
       "parse": {
-        "deterministic": "pdf_table_row",
-        "llm_prompt": "pdf_table_row.txt",
+        "deterministic": "mei_observation",
         "value_type": "amount_bdt_crore",
         "valid_range": [
           -50000.0,
@@ -629,7 +624,7 @@
           200.0
         ]
       },
-      "anomaly_threshold": 0.20
+      "anomaly_threshold": 0.2
     },
     {
       "id": "food_atta_packet",
@@ -650,7 +645,7 @@
           200.0
         ]
       },
-      "anomaly_threshold": 0.20
+      "anomaly_threshold": 0.2
     },
     {
       "id": "food_egg_red",
@@ -671,7 +666,7 @@
           150.0
         ]
       },
-      "anomaly_threshold": 0.20
+      "anomaly_threshold": 0.2
     },
     {
       "id": "food_chicken_farm",
@@ -692,7 +687,7 @@
           400.0
         ]
       },
-      "anomaly_threshold": 0.20
+      "anomaly_threshold": 0.2
     },
     {
       "id": "food_oil_soybean",
@@ -713,7 +708,7 @@
           400.0
         ]
       },
-      "anomaly_threshold": 0.20
+      "anomaly_threshold": 0.2
     },
     {
       "id": "food_onion_local",
@@ -734,7 +729,7 @@
           400.0
         ]
       },
-      "anomaly_threshold": 0.30
+      "anomaly_threshold": 0.3
     },
     {
       "id": "food_lentil_moong",
@@ -755,7 +750,7 @@
           250.0
         ]
       },
-      "anomaly_threshold": 0.20
+      "anomaly_threshold": 0.2
     },
     {
       "id": "food_sugar_local",
@@ -776,7 +771,7 @@
           250.0
         ]
       },
-      "anomaly_threshold": 0.20
+      "anomaly_threshold": 0.2
     },
     {
       "id": "nbr_vat_collected_cr",
@@ -800,7 +795,7 @@
           800000.0
         ]
       },
-      "anomaly_threshold": 0.30
+      "anomaly_threshold": 0.3
     },
     {
       "id": "nbr_it_collected_cr",
@@ -824,7 +819,7 @@
           800000.0
         ]
       },
-      "anomaly_threshold": 0.30
+      "anomaly_threshold": 0.3
     },
     {
       "id": "nbr_customs_collected_cr",
@@ -848,7 +843,7 @@
           800000.0
         ]
       },
-      "anomaly_threshold": 0.30
+      "anomaly_threshold": 0.3
     },
     {
       "id": "fx_reserve_gross_and_bpm6",
@@ -885,12 +880,11 @@
       "fetch": {
         "type": "pdf",
         "url": "https://www.bb.org.bd/en/index.php/publication/publictn/5/27",
-        "task": "Go to latest available PDF, Component 12c",
+        "task": "{\"series\":\"credit\",\"row\":\"c) Credit to the Private Sector\",\"column\":\"latest_month\",\"line\":3,\"unit\":\"BDT crore\"}",
         "discover": "latest_pdf_link"
       },
       "parse": {
-        "deterministic": "pdf_component",
-        "llm_prompt": "pdf_component.txt",
+        "deterministic": "wsei_observation",
         "value_type": "amount_bdt_crore",
         "valid_range": [
           0.0,
@@ -961,12 +955,11 @@
       "fetch": {
         "type": "pdf",
         "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
-        "task": "row=\"Deposits of the\" min=1000000 page=6",
+        "task": "{\"table\":\"money_credit\",\"row\":\"B. Deposits of the banking system\",\"column\":\"latest_month\",\"unit\":\"BDT crore\"}",
         "discover": "latest_pdf_link"
       },
       "parse": {
-        "deterministic": "pdf_table_latest",
-        "llm_prompt": "pdf_component.txt",
+        "deterministic": "mei_observation",
         "value_type": "amount_bdt_crore",
         "valid_range": [
           0.0,
@@ -983,12 +976,11 @@
       "fetch": {
         "type": "pdf",
         "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
-        "task": "row=\"Currency outside\" min=250000 page=6",
+        "task": "{\"table\":\"money_credit\",\"row\":\"A. Currency outside banks\",\"column\":\"latest_month\",\"unit\":\"BDT crore\"}",
         "discover": "latest_pdf_link"
       },
       "parse": {
-        "deterministic": "pdf_table_latest",
-        "llm_prompt": "pdf_component.txt",
+        "deterministic": "mei_observation",
         "value_type": "amount_bdt_crore",
         "valid_range": [
           0.0,
@@ -1005,12 +997,11 @@
       "fetch": {
         "type": "pdf",
         "url": "https://www.bb.org.bd/en/index.php/publication/publictn/5/27",
-        "task": "row=\"b) Broad Money\" min=1000",
+        "task": "{\"series\":\"money\",\"row\":\"Broad Money (M2)\",\"column\":\"latest_month\",\"line\":0,\"unit\":\"BDT crore\"}",
         "discover": "latest_pdf_link"
       },
       "parse": {
-        "deterministic": "pdf_table_latest",
-        "llm_prompt": "pdf_component.txt",
+        "deterministic": "wsei_observation",
         "value_type": "amount_bdt_crore",
         "valid_range": [
           0.0,
@@ -1032,12 +1023,11 @@
       "fetch": {
         "type": "pdf",
         "url": "https://www.bb.org.bd/en/index.php/publication/publictn/5/27",
-        "task": "row=\"a) Reserve Money\" min=1000",
+        "task": "{\"series\":\"money\",\"row\":\"Reserve Money (RM)\",\"column\":\"latest_month\",\"line\":0,\"unit\":\"BDT crore\"}",
         "discover": "latest_pdf_link"
       },
       "parse": {
-        "deterministic": "pdf_table_latest",
-        "llm_prompt": "pdf_component.txt",
+        "deterministic": "wsei_observation",
         "value_type": "amount_bdt_crore",
         "valid_range": [
           0.0,
@@ -1059,12 +1049,11 @@
       "fetch": {
         "type": "pdf",
         "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
-        "task": "row=\"Deposits held with BB\" min=60000 page=7",
+        "task": "{\"table\":\"reserve_money\",\"row\":\"B. Deposits held with BB\",\"column\":\"latest_month\",\"unit\":\"BDT crore\"}",
         "discover": "latest_pdf_link"
       },
       "parse": {
-        "deterministic": "pdf_table_latest",
-        "llm_prompt": "pdf_component.txt",
+        "deterministic": "mei_observation",
         "value_type": "amount_bdt_crore",
         "valid_range": [
           0.0,
@@ -1081,12 +1070,11 @@
       "fetch": {
         "type": "pdf",
         "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
-        "task": "row=\"Money multiplier\" page=7",
+        "task": "{\"table\":\"reserve_money\",\"row\":\"Money multiplier\",\"column\":\"latest_month\",\"unit\":\"ratio\"}",
         "discover": "latest_pdf_link"
       },
       "parse": {
-        "deterministic": "pdf_table_latest",
-        "llm_prompt": "pdf_component.txt",
+        "deterministic": "mei_observation",
         "value_type": "ratio",
         "valid_range": [
           1.0,
@@ -1125,12 +1113,11 @@
       "fetch": {
         "type": "pdf",
         "url": "https://www.bb.org.bd/en/index.php/publication/publictn/5/27",
-        "task": "Go to latest available PDF, Component 10b",
+        "task": "{\"series\":\"nsc\",\"row\":\"b) Total Outstanding\",\"column\":\"latest_month\",\"line\":1,\"unit\":\"BDT crore\"}",
         "discover": "latest_pdf_link"
       },
       "parse": {
-        "deterministic": "pdf_component",
-        "llm_prompt": "pdf_component.txt",
+        "deterministic": "wsei_observation",
         "value_type": "amount_bdt_crore",
         "valid_range": [
           0.0,
@@ -1152,12 +1139,11 @@
       "fetch": {
         "type": "pdf",
         "url": "https://www.bb.org.bd/en/index.php/publication/publictn/5/27",
-        "task": "Go to latest available PDF, Component 7a",
+        "task": "{\"series\":\"exports\",\"row\":\"a) Export (f.o.b)\",\"column\":\"latest_month\",\"line\":0,\"unit\":\"USD billion\"}",
         "discover": "latest_pdf_link"
       },
       "parse": {
-        "deterministic": "pdf_component",
-        "llm_prompt": "pdf_component.txt",
+        "deterministic": "wsei_observation",
         "value_type": "amount_usd_bn",
         "valid_range": [
           0.0,
@@ -1179,12 +1165,11 @@
       "fetch": {
         "type": "pdf",
         "url": "https://www.bb.org.bd/en/index.php/publication/publictn/5/27",
-        "task": "Go to latest available PDF, Component 7a",
+        "task": "{\"series\":\"exports\",\"row\":\"a) Export (f.o.b)\",\"column\":\"latest_complete_fy\",\"line\":0,\"unit\":\"USD billion\"}",
         "discover": "latest_pdf_link"
       },
       "parse": {
-        "deterministic": "pdf_component",
-        "llm_prompt": "pdf_component.txt",
+        "deterministic": "wsei_observation",
         "value_type": "amount_usd_bn",
         "valid_range": [
           0.0,
@@ -1224,12 +1209,11 @@
       "fetch": {
         "type": "pdf",
         "url": "https://www.bb.org.bd/en/index.php/publication/publictn/5/27",
-        "task": "WSEI page 1, row labelled 'Import(f.o.b.) (in million USS)' specifically (NOT 'Import (C&F)'), latest single-month column. Convert from million USD to USD billion (divide by 1000).",
+        "task": "{\"series\":\"imports\",\"row\":\"b) Import(f.o.b)\",\"column\":\"latest_month\",\"line\":0,\"unit\":\"USD billion\"}",
         "discover": "latest_pdf_link"
       },
       "parse": {
-        "deterministic": "pdf_component",
-        "llm_prompt": "pdf_component.txt",
+        "deterministic": "wsei_observation",
         "value_type": "amount_usd_bn",
         "valid_range": [
           0.0,
@@ -1246,12 +1230,11 @@
       "fetch": {
         "type": "pdf",
         "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
-        "task": "Go to page 23 of the doc, first table",
+        "task": "{\"table\":\"imports_lc\",\"row\":\"latest_month\",\"column\":\"Import LCs opening\",\"unit\":\"USD million\"}",
         "discover": "latest_pdf_link"
       },
       "parse": {
-        "deterministic": "pdf_table_row",
-        "llm_prompt": "pdf_table_row.txt",
+        "deterministic": "mei_observation",
         "value_type": "amount_usd_mn",
         "valid_range": [
           0.0,
@@ -1268,12 +1251,11 @@
       "fetch": {
         "type": "pdf",
         "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
-        "task": "Go to page 23 of the doc, first table",
+        "task": "{\"table\":\"imports_lc\",\"row\":\"latest_month\",\"column\":\"Import LCs settlement\",\"unit\":\"USD million\"}",
         "discover": "latest_pdf_link"
       },
       "parse": {
-        "deterministic": "pdf_table_row",
-        "llm_prompt": "pdf_table_row.txt",
+        "deterministic": "mei_observation",
         "value_type": "amount_usd_mn",
         "valid_range": [
           0.0,
@@ -1344,12 +1326,11 @@
       "fetch": {
         "type": "pdf",
         "url": "https://www.bb.org.bd/en/index.php/publication/publictn/5/27",
-        "task": "Go to latest available PDF, Component 5a",
+        "task": "{\"series\":\"remittance\",\"row\":\"Wage Earners' Remittances\",\"column\":\"latest_month\",\"line\":0,\"unit\":\"USD billion\"}",
         "discover": "latest_pdf_link"
       },
       "parse": {
-        "deterministic": "pdf_component",
-        "llm_prompt": "pdf_component.txt",
+        "deterministic": "wsei_observation",
         "value_type": "amount_usd_bn",
         "valid_range": [
           0.0,
@@ -1371,12 +1352,11 @@
       "fetch": {
         "type": "pdf",
         "url": "https://www.bb.org.bd/en/index.php/publication/publictn/5/27",
-        "task": "WSEI page 1, row 5a 'Wage Earners' Remittances (in million USS)', latest complete fiscal year column (e.g. 'FY25'). Convert from million USD to USD billion.",
+        "task": "{\"series\":\"remittance\",\"row\":\"Wage Earners' Remittances\",\"column\":\"latest_complete_fy\",\"line\":0,\"unit\":\"USD billion\"}",
         "discover": "latest_pdf_link"
       },
       "parse": {
-        "deterministic": "pdf_component",
-        "llm_prompt": "pdf_component.txt",
+        "deterministic": "wsei_observation",
         "value_type": "amount_usd_bn",
         "valid_range": [
           0.0,

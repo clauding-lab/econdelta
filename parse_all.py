@@ -30,6 +30,8 @@ import parsers.pdf_table_column_latest  # noqa: F401
 import parsers.pdf_table_latest  # noqa: F401
 import parsers.pdf_table_row  # noqa: F401
 import parsers.pdf_table_total  # noqa: F401
+import parsers.mei_observation  # noqa: F401
+import parsers.wsei_observation  # noqa: F401
 from fetchers.base import FetchResult, parse_period
 from parsers.hybrid import parse_one
 from utils.alert_dedup import should_alert_today

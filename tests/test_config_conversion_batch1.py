@@ -107,14 +107,14 @@ def test_fixture_sha256_matches_captured_sidecar():
 # mirroring pdf_component.py's (see parsers/pdf_table_latest.py docstring).
 BATCH1_CASES = [
     # (indicator_id, expected_value, expected_source_as_of)
-    ("money_multiplier", 4.92, date(2026, 6, 30)),
-    ("currency_outside_bank", 349374.0, date(2026, 6, 30)),
-    ("deposits_of_the_system", 2041692.7, date(2026, 6, 30)),
-    ("deposits_held_with_bb_crr", 115326.7, date(2026, 6, 30)),
-    ("bank_borrowing_for_deficit_financing", 94158.9, date(2026, 6, 30)),
-    ("non_bank_borrowing_for_deficit_financing", -567.67, date(2026, 6, 30)),
-    ("domestic_borrowing_for_budget_deficit", 93591.23, date(2026, 6, 30)),
-    ("foreign_borrowing_for_budget_deficit", 21944.28, date(2026, 6, 30)),
+    ("money_multiplier", 4.92, date(2026, 5, 31)),
+    ("currency_outside_bank", 349374.0, date(2026, 5, 31)),
+    ("deposits_of_the_system", 2041692.7, date(2026, 5, 31)),
+    ("deposits_held_with_bb_crr", 115326.7, date(2026, 5, 31)),
+    ("bank_borrowing_for_deficit_financing", 94158.9, date(2026, 5, 31)),
+    ("non_bank_borrowing_for_deficit_financing", -567.67, date(2026, 5, 31)),
+    ("domestic_borrowing_for_budget_deficit", 93591.23, date(2026, 5, 31)),
+    ("foreign_borrowing_for_budget_deficit", 21944.28, date(2026, 5, 31)),
     # point_to_point_inflation REMOVED 2026-08-22 (PR-C, build-brief item 2,
     # AGENTS.md landmine 52): repointed away from this PDF/pdf_component
     # entirely to BB's live econdata/inflation HTML page (parsers/
@@ -181,9 +181,9 @@ def test_deficit_financing_row_arithmetic_reconciles_against_report_prose():
     non_bank = _indicator("non_bank_borrowing_for_deficit_financing")
     domestic = _indicator("domestic_borrowing_for_budget_deficit")
 
-    bank_v = get_parser("pdf_table_row").parse(_artifact("x"), bank["fetch"]["task"]).value
-    non_bank_v = get_parser("pdf_table_row").parse(_artifact("x"), non_bank["fetch"]["task"]).value
-    domestic_v = get_parser("pdf_table_row").parse(_artifact("x"), domestic["fetch"]["task"]).value
+    bank_v = get_parser(bank["parse"]["deterministic"]).parse(_artifact("x"), bank["fetch"]["task"]).value
+    non_bank_v = get_parser(non_bank["parse"]["deterministic"]).parse(_artifact("x"), non_bank["fetch"]["task"]).value
+    domestic_v = get_parser(domestic["parse"]["deterministic"]).parse(_artifact("x"), domestic["fetch"]["task"]).value
 
     assert domestic_v == pytest.approx(93591.23)  # the Exec-Summary's own literal figure
     assert bank_v + non_bank_v == pytest.approx(domestic_v)
@@ -194,14 +194,14 @@ def test_batch1_ids_are_registered_with_a_real_parser_in_config():
     `deterministic` field actually changed to a real, registered parser (not
     left as a stale/mismatched name)."""
     expected_parser_by_id = {
-        "money_multiplier": "pdf_table_latest",
-        "currency_outside_bank": "pdf_table_latest",
-        "deposits_of_the_system": "pdf_table_latest",
-        "deposits_held_with_bb_crr": "pdf_table_latest",
-        "bank_borrowing_for_deficit_financing": "pdf_table_row",
-        "non_bank_borrowing_for_deficit_financing": "pdf_table_row",
-        "domestic_borrowing_for_budget_deficit": "pdf_table_row",
-        "foreign_borrowing_for_budget_deficit": "pdf_table_row",
+        "money_multiplier": "mei_observation",
+        "currency_outside_bank": "mei_observation",
+        "deposits_of_the_system": "mei_observation",
+        "deposits_held_with_bb_crr": "mei_observation",
+        "bank_borrowing_for_deficit_financing": "mei_observation",
+        "non_bank_borrowing_for_deficit_financing": "mei_observation",
+        "domestic_borrowing_for_budget_deficit": "mei_observation",
+        "foreign_borrowing_for_budget_deficit": "mei_observation",
         # point_to_point_inflation removed 2026-08-22 -- see BATCH1_CASES above.
     }
     for indicator_id, expected_parser in expected_parser_by_id.items():
