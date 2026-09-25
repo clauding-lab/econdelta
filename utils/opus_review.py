@@ -21,6 +21,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from utils.observations import WRITER_CONFIRMATION_IDS
+
 logger = logging.getLogger("opus_review")
 
 REVIEW_PROMPT = """You are reviewing today's Bangladesh economic indicators data file (latest.json) before it ships to a daily brief read by senior bankers at IDLC Finance PLC.
@@ -322,12 +324,44 @@ def load_history(archive_dir: Path, days: int = 5) -> list[dict[str, Any]]:
                     source_date = entry.get("source_as_of")
                     value = entry.get("value")
                     data = blob.get("data")
-                    if not source_date or not isinstance(data, dict) or iid not in data:
+                    if (
+                        not isinstance(source_date, str)
+                        or not source_date
+                        or not isinstance(data, dict)
+                        or iid not in data
+                    ):
                         continue
                     if data.get(iid) != value:
                         continue
+                    raw_quality = entry.get("quality", "verified")
+                    if (
+                        not isinstance(raw_quality, str)
+                        or raw_quality not in {"verified", "held"}
+                    ):
+                        continue
+                    raw_basis = entry.get("date_basis")
+                    if raw_basis is not None and (
+                        not isinstance(raw_basis, str)
+                        or raw_basis not in {"observation", "writer_confirmation"}
+                    ):
+                        continue
+                    if iid in WRITER_CONFIRMATION_IDS:
+                        # These rows confirm that a standing rate was re-read;
+                        # their date is never the MPC decision date.
+                        date_basis = "writer_confirmation"
+                    elif raw_basis is None:
+                        date_basis = "observation"
+                    else:
+                        date_basis = raw_basis
                     evidence = entry.get("evidence") or entry.get("_artifact_sha256") or (
                         f"Recovered from dated archive domain snapshot for {iid}"
+                    )
+                    raw_release_status = entry.get("release_status", "unknown")
+                    release_status = (
+                        raw_release_status
+                        if isinstance(raw_release_status, str)
+                        and raw_release_status in {"final", "provisional", "unknown"}
+                        else "unknown"
                     )
                     observations[iid] = {
                         "metric_id": iid,
@@ -337,17 +371,11 @@ def load_history(archive_dir: Path, days: int = 5) -> list[dict[str, Any]]:
                         "source": entry.get("source") or iid,
                         "source_url": entry.get("source_url"),
                         "captured_at": entry.get("scraped_at") or updated_at,
-                        "quality": entry.get("quality")
-                        if entry.get("quality") in {"verified", "held"}
-                        else "verified",
-                        "date_basis": entry.get("date_basis")
-                        if entry.get("date_basis") in {"observation", "writer_confirmation"}
-                        else "observation",
+                        "quality": raw_quality,
+                        "date_basis": date_basis,
                         "evidence": str(evidence),
                         "dependencies": [],
-                        "release_status": entry.get("release_status")
-                        if entry.get("release_status") in {"final", "provisional", "unknown"}
-                        else "unknown",
+                        "release_status": release_status,
                     }
         out.append({
             "updated_at": blob.get("updated_at"),

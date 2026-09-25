@@ -348,7 +348,9 @@ def _history_observation(value: object, metric_id: str) -> Observation | None:
             return None
         quality = value.get("quality")
         basis = value.get("date_basis")
-        if quality not in {"verified", "held"} or basis not in {
+        if not isinstance(quality, str) or quality not in {"verified", "held"}:
+            return None
+        if not isinstance(basis, str) or basis not in {
             "observation",
             "writer_confirmation",
         }:
@@ -356,6 +358,13 @@ def _history_observation(value: object, metric_id: str) -> Observation | None:
         deps = value.get("dependencies", ())
         if not isinstance(deps, (list, tuple)) or not all(isinstance(d, str) for d in deps):
             return None
+        release_status = value.get("release_status", "unknown")
+        if not isinstance(release_status, str) or release_status not in {
+            "final",
+            "provisional",
+            "unknown",
+        }:
+            release_status = "unknown"
         obs = Observation(
             metric_id=str(value.get("metric_id") or metric_id),
             value=value.get("value"),
@@ -370,9 +379,7 @@ def _history_observation(value: object, metric_id: str) -> Observation | None:
             date_basis=basis,
             evidence=str(value.get("evidence") or ""),
             dependencies=tuple(deps),
-            release_status=value.get("release_status", "unknown")
-            if value.get("release_status", "unknown") in {"final", "provisional", "unknown"}
-            else "unknown",
+            release_status=release_status,
         )
     else:
         return None
@@ -381,7 +388,9 @@ def _history_observation(value: object, metric_id: str) -> Observation | None:
         or not finite_number(obs.value)
         or obs.as_of is None
         or obs.as_of > obs.captured_at.date()
+        or not isinstance(obs.quality, str)
         or obs.quality not in {"verified", "held"}
+        or not isinstance(obs.date_basis, str)
         or obs.date_basis not in {"observation", "writer_confirmation"}
         or (
             obs.date_basis == "writer_confirmation" and obs.metric_id not in WRITER_CONFIRMATION_IDS
@@ -390,6 +399,12 @@ def _history_observation(value: object, metric_id: str) -> Observation | None:
         or not obs.evidence.strip()
     ):
         return None
+    if not isinstance(obs.release_status, str) or obs.release_status not in {
+        "final",
+        "provisional",
+        "unknown",
+    }:
+        obs = replace(obs, release_status="unknown")
     return obs
 
 

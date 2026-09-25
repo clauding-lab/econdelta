@@ -825,6 +825,54 @@ class TestHistoryCarriesItsPublicationDates:
         assert record["categorywise_export"]["source"] == "EPB"
         assert "undated" not in record
 
+    def test_malformed_legacy_metadata_is_skipped_or_unknown_without_crashing(self, tmp_path):
+        from utils.opus_review import load_history
+
+        self._archive(
+            tmp_path,
+            "latest_2026-08-29.json",
+            {"bad_quality": 1.0, "bad_basis": 2.0, "bad_release": 3.0},
+            {"macro": {
+                "bad_quality": {
+                    "value": 1.0, "source_as_of": "2026-07-31", "quality": [],
+                },
+                "bad_basis": {
+                    "value": 2.0, "source_as_of": "2026-07-31", "date_basis": {},
+                },
+                "bad_release": {
+                    "value": 3.0, "source_as_of": "2026-07-31", "release_status": [],
+                },
+            }},
+        )
+
+        observations = load_history(tmp_path, days=5)[0]["observations"]
+
+        assert "bad_quality" not in observations
+        assert "bad_basis" not in observations
+        assert observations["bad_release"]["release_status"] == "unknown"
+
+    @pytest.mark.parametrize(
+        "metric_id", ["policy_rate_repo", "policy_rate_sdf", "policy_rate_slf"]
+    )
+    def test_legacy_policy_rate_archive_keeps_writer_confirmation_basis(
+        self, tmp_path, metric_id
+    ):
+        from utils.opus_review import load_history
+
+        value = 7.5
+        self._archive(
+            tmp_path,
+            "latest_2026-08-29.json",
+            {metric_id: value},
+            {"money_market": {
+                metric_id: {"value": value, "source_as_of": "2026-08-29"}
+            }},
+        )
+
+        observation = load_history(tmp_path, days=5)[0]["observations"][metric_id]
+
+        assert observation["date_basis"] == "writer_confirmation"
+
     def test_an_archive_with_no_domains_block_still_loads(self, tmp_path):
         """Older archives predate the domains block entirely."""
         import json

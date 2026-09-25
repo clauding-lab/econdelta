@@ -32,6 +32,39 @@ def _observation(metric_id: str, value: float, as_of: str, *, quality="verified"
 
 
 class TestObservationQuarantine:
+    @pytest.mark.parametrize(
+        ("field", "bad_value", "usable"),
+        [
+            ("quality", [], False),
+            ("date_basis", {}, False),
+            ("release_status", ["final"], True),
+        ],
+    )
+    def test_malformed_archived_observation_metadata_is_safe(
+        self, field, bad_value, usable
+    ):
+        from utils.observations import _history_observation
+
+        record = {
+            "metric_id": "general_inflation",
+            "value": 8.0,
+            "as_of": "2026-07-31",
+            "unit": "%",
+            "source": "BBS",
+            "captured_at": "2026-08-25T00:00:00+00:00",
+            "quality": "verified",
+            "date_basis": "observation",
+            "evidence": "July official source observation",
+            "release_status": "final",
+        }
+        record[field] = bad_value
+
+        observation = _history_observation(record, "general_inflation")
+
+        assert (observation is not None) is usable
+        if field == "release_status" and observation is not None:
+            assert observation.release_status == "unknown"
+
     def test_rejecting_base_restores_dated_base_and_rebuilds_alias(self):
         from utils.observations import quarantine_observations
 
