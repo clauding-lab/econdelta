@@ -210,6 +210,43 @@ class TestParseLiveMarketPayload:
         assert payload["session"]["tradingDay"] is False
         assert trading_date == date(2026, 9, 24)
 
+    @pytest.mark.parametrize(
+        "mutate",
+        [
+            lambda payload: next(row for row in payload["indices"] if row["key"] == "DSEX").update(change="NaN"),
+            lambda payload: next(row for row in payload["indices"] if row["key"] == "DSEX").update(percent="Infinity"),
+            lambda payload: next(row for row in payload["indices"] if row["key"] == "DSEX").update(change=True),
+            lambda payload: payload["totals"].update(trades="-1"),
+            lambda payload: payload["totals"].update(trades=202860.5),
+            lambda payload: payload["breadth"].update(advanced="-1"),
+            lambda payload: payload["breadth"].update(advanced=True),
+            lambda payload: payload["breadth"].update(declined="-1"),
+            lambda payload: payload["breadth"].update(unchanged="-1"),
+        ],
+        ids=["nonfinite-change", "nonfinite-percent", "boolean-change", "negative-trades", "fractional-trades", "negative-advancing", "boolean-advancing", "negative-declining", "negative-unchanged"],
+    )
+    def test_rejects_invalid_change_or_market_count_before_snapshot(self, mutate):
+        payload = json.loads((FIXTURES_DIR / "dse_market_api_20260924.json").read_text())
+        mutate(payload)
+        with pytest.raises(ParseError):
+            parse_live_market_payload(payload)
+
+    def test_rejects_nonstring_index_key(self):
+        payload = json.loads((FIXTURES_DIR / "dse_market_api_20260924.json").read_text())
+        payload["indices"][0]["key"] = 123
+        with pytest.raises(ParseError, match="index"):
+            parse_live_market_payload(payload)
+
+    def test_accepts_zero_trade_and_breadth_counts(self):
+        payload = json.loads((FIXTURES_DIR / "dse_market_api_20260924.json").read_text())
+        payload["totals"]["trades"] = 0
+        payload["breadth"].update(advanced=0, declined=0, unchanged=0)
+
+        _, _, market = parse_live_market_payload(payload)
+
+        assert market.total_trades == 0
+        assert market.advancing == market.declining == market.unchanged == 0
+
 
 # ---------------------------------------------------------------------------
 # Integration tests: main() entry point
@@ -339,6 +376,65 @@ class TestMainEntryPoint:
         call_args = mock_notify.call_args[0]
         assert call_args[0] == "error"
         assert list(tmp_path.glob("*.json")) == []
+
+    def test_malformed_api_json_uses_handled_error_path_without_snapshot(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("ECONDELTA_DRY_RUN", "1")
+        monkeypatch.setattr("scrapers.dse_market.DATA_DIR", tmp_path)
+        malformed = json.JSONDecodeError("invalid JSON", "<html>not json</html>", 0)
+        with (
+            patch("scrapers.dse_market.DEFAULT_CLIENT.fetch_json", side_effect=malformed),
+            patch("scrapers.dse_market.notify") as mock_notify,
+        ):
+            from scrapers.dse_market import main
+
+            assert main() == 1
+
+        mock_notify.assert_called_once()
+        assert mock_notify.call_args.args[:2] == ("error", "dse_market fetch failed")
+        assert list(tmp_path.glob("*.json")) == []
+
+    def test_invalid_api_index_shape_uses_handled_error_path_without_snapshot(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("ECONDELTA_DRY_RUN", "1")
+        monkeypatch.setattr("scrapers.dse_market.DATA_DIR", tmp_path)
+        payload = _live_api_payload()
+        payload["indices"][0]["key"] = 123
+        with (
+            patch("scrapers.dse_market.DEFAULT_CLIENT.fetch_json", return_value=payload),
+            patch("scrapers.dse_market.notify") as mock_notify,
+        ):
+            from scrapers.dse_market import main
+
+            assert main() == 1
+
+        mock_notify.assert_called_once()
+        assert mock_notify.call_args.args[:2] == ("error", "dse_market fetch failed")
+        assert list(tmp_path.glob("*.json")) == []
+
+    def test_invalid_session_can_be_corrected_and_retried_before_ingest(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("ECONDELTA_DRY_RUN", "1")
+        monkeypatch.setattr("scrapers.dse_market.DATA_DIR", tmp_path)
+        monkeypatch.setattr("scrapers.dse_market.load_holidays", lambda _p: set())
+        invalid = _live_api_payload()
+        invalid["breadth"]["advanced"] = "-1"
+        corrected = _live_api_payload()
+        with (
+            patch(
+                "scrapers.dse_market.DEFAULT_CLIENT.fetch_json",
+                side_effect=[invalid, corrected],
+            ),
+            patch("scrapers.dse_market.notify") as mock_notify,
+        ):
+            from scrapers.dse_market import main
+
+            assert main() == 1
+            assert list(tmp_path.glob("*.json")) == []
+            assert main() == 0
+
+        mock_notify.assert_called_once()
+        written = tmp_path / "2026-04-20.json"
+        assert written.exists()
+        snapshot = json.loads(written.read_text())
+        assert snapshot["market"]["advancing"] >= 0
 
     def test_writes_snapshot_dated_by_parsed_date_not_run_date(self, tmp_path, monkeypatch):
         """The written snapshot's `date` field is the PARSED trading date

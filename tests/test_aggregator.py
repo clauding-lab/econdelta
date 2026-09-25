@@ -833,36 +833,6 @@ class TestWriteReservesMonthlySplit:
         assert captured_defs == []
         assert "column-identification failure" in caplog.text
 
-
-def test_dam_onion_anomaly_threshold_still_emits_review_alert(monkeypatch):
-    """The newly dated DAM onion row keeps the existing 30% warning intact."""
-    indicator = next(
-        item for item in agg._load_v3_registry() if item["id"] == "food_onion_local"
-    )
-    assert indicator["anomaly_threshold"] == 0.3
-    monkeypatch.setattr(agg, "_load_v3_registry", lambda: [indicator])
-    monkeypatch.setattr(
-        agg,
-        "_load_v3_snapshot",
-        lambda _indicator_id: {
-            "value": 42.045,
-            "previous_value": 62.0,
-            "change_pct": (42.045 - 62.0) / 62.0,
-            "source_as_of": "2026-09-24",
-            "cadence": "daily",
-            "scraped_at": "2026-09-25T00:00:00+00:00",
-            "_provenance": "deterministic",
-        },
-    )
-
-    _, _, _, alerts = agg._build_v3_blocks(datetime(2026, 9, 25, tzinfo=timezone.utc))
-
-    anomaly = next(alert for alert in alerts if alert.indicator_id == "food_onion_local")
-    assert anomaly.type == "anomaly"
-    assert anomaly.severity == "warn"
-    assert anomaly.previous == 62.0
-    assert anomaly.value == 42.045
-
     def test_ratio_band_violation_skips_both_writes_and_warns(self, monkeypatch, caplog):
         """2026-08-05 review H2/M1: a same-direction magnitude corruption
         (bpm6 < gross but wildly out of ratio) signals corruption, not
@@ -919,6 +889,36 @@ def test_dam_onion_anomaly_threshold_still_emits_review_alert(monkeypatch):
         captured_rows, _ = self._patch_monthly_writers(monkeypatch)
         agg._write_reserves_monthly_split(_reserves_with_bpm6(reserves_date=date(2024, 2, 1)))
         assert captured_rows[0]["as_of"] == "2024-02-29"  # 2024 is a leap year
+
+
+def test_dam_onion_anomaly_threshold_still_emits_review_alert(monkeypatch):
+    """The newly dated DAM onion row keeps the existing 30% warning intact."""
+    indicator = next(
+        item for item in agg._load_v3_registry() if item["id"] == "food_onion_local"
+    )
+    assert indicator["anomaly_threshold"] == 0.3
+    monkeypatch.setattr(agg, "_load_v3_registry", lambda: [indicator])
+    monkeypatch.setattr(
+        agg,
+        "_load_v3_snapshot",
+        lambda _indicator_id: {
+            "value": 42.045,
+            "previous_value": 62.0,
+            "change_pct": (42.045 - 62.0) / 62.0,
+            "source_as_of": "2026-09-24",
+            "cadence": "daily",
+            "scraped_at": "2026-09-25T00:00:00+00:00",
+            "_provenance": "deterministic",
+        },
+    )
+
+    _, _, _, alerts = agg._build_v3_blocks(datetime(2026, 9, 25, tzinfo=timezone.utc))
+
+    anomaly = next(alert for alert in alerts if alert.indicator_id == "food_onion_local")
+    assert anomaly.type == "anomaly"
+    assert anomaly.severity == "warn"
+    assert anomaly.previous == 62.0
+    assert anomaly.value == 42.045
 
 
 def test_main_writes_reserves_monthly_split_when_bb_forex_fresh(

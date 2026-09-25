@@ -234,6 +234,31 @@ def parse_market_stats(html: str) -> DseMarket:
     )
 
 
+def _finite_number(value: object, field: str) -> float:
+    """Parse a finite source number without allowing booleans as numbers."""
+    if isinstance(value, bool):
+        raise ValueError(f"{field} must be a finite number, not a boolean")
+    parsed = float(value)
+    if not math.isfinite(parsed):
+        raise ValueError(f"{field} must be finite")
+    return parsed
+
+
+def _nonnegative_count(value: object, field: str) -> int:
+    """Parse an integer count; reject negatives, fractions and booleans."""
+    if isinstance(value, bool):
+        raise ValueError(f"{field} must be a non-negative integer")
+    if isinstance(value, int):
+        count = value
+    elif isinstance(value, str) and re.fullmatch(r"\s*\d+\s*", value):
+        count = int(value)
+    else:
+        raise ValueError(f"{field} must be a non-negative integer")
+    if count < 0:
+        raise ValueError(f"{field} must be a non-negative integer")
+    return count
+
+
 def parse_live_market_payload(payload: dict) -> tuple[date, DseIndices, DseMarket]:
     """Extract one completed DSE session from the official live-market API.
 
@@ -243,30 +268,41 @@ def parse_live_market_payload(payload: dict) -> tuple[date, DseIndices, DseMarke
     API turnover is in million BDT; one crore is ten million BDT.
     """
     try:
+        if not isinstance(payload, dict):
+            raise ValueError("response must be an object")
         raw_date = payload["session"]["sessionDate"]
+        if not isinstance(raw_date, str):
+            raise ValueError("sessionDate must be a string")
         trading_date = date.fromisoformat(raw_date)
-        rows = {row["key"].upper(): row for row in payload["indices"]}
+        index_rows = payload["indices"]
+        if not isinstance(index_rows, list):
+            raise ValueError("indices must be a list")
+        rows: dict[str, dict] = {}
+        for row in index_rows:
+            if not isinstance(row, dict) or not isinstance(row.get("key"), str):
+                raise ValueError("each index row must have a string key")
+            rows[row["key"].upper()] = row
         dsex = rows["DSEX"]
         ds30 = rows["DS30"]
         dses = rows["DSES"]
         indices = DseIndices(
-            dsex=float(dsex["value"]),
-            dsex_change=float(dsex["change"]),
-            dsex_change_pct=float(dsex["percent"]),
-            ds30=float(ds30["value"]),
-            dses=float(dses["value"]),
+            dsex=_finite_number(dsex["value"], "DSEX value"),
+            dsex_change=_finite_number(dsex["change"], "DSEX change"),
+            dsex_change_pct=_finite_number(dsex["percent"], "DSEX percent"),
+            ds30=_finite_number(ds30["value"], "DS30 value"),
+            dses=_finite_number(dses["value"], "DSES value"),
         )
         totals = payload["totals"]
         breadth = payload["breadth"]
-        turnover_million = float(totals["turnover"])
-        if not math.isfinite(turnover_million) or turnover_million <= 0:
+        turnover_million = _finite_number(totals["turnover"], "turnover")
+        if turnover_million <= 0:
             raise ValueError("turnover must be a positive finite number")
         market = DseMarket(
             turnover_crore=round(turnover_million / _DSE_API_TURNOVER_MILLION_TO_CRORE, 4),
-            total_trades=int(totals["trades"]),
-            advancing=int(breadth["advanced"]),
-            declining=int(breadth["declined"]),
-            unchanged=int(breadth["unchanged"]),
+            total_trades=_nonnegative_count(totals["trades"], "trades"),
+            advancing=_nonnegative_count(breadth["advanced"], "advanced"),
+            declining=_nonnegative_count(breadth["declined"], "declined"),
+            unchanged=_nonnegative_count(breadth["unchanged"], "unchanged"),
         )
         if any(not math.isfinite(value) or value <= 0 for value in (indices.dsex, indices.ds30, indices.dses)):
             raise ValueError("DSE index levels must be positive and finite")
@@ -342,7 +378,7 @@ def main() -> int:
             market.declining,
             market.unchanged,
         )
-    except (FetchError, ParseError) as e:
+    except (FetchError, ParseError, json.JSONDecodeError) as e:
         logger.exception("fetch/parse failed")
         notify("error", "dse_market fetch failed", f"{type(e).__name__}: {e}")
         return 1

@@ -136,6 +136,13 @@ class TestObservationQuarantine:
         _, _, hard_reject = quarantine_observations(current, ["unknown"], [], breadth_count=1)
         assert hard_reject is True
 
+        # A known indicator reaches the broad-rejection guard; an unknown ID
+        # would be rejected earlier and would not exercise breadth_count.
+        _, _, hard_reject = quarantine_observations(
+            current, ["general_inflation"], [], breadth_count=6
+        )
+        assert hard_reject is True
+
     def test_explicit_onion_rejection_holds_dated_value_and_rebuilds_alias(self):
         """A source review can reject the 24 Sep move; E2 restores the last
         dated onion observation and derives the Brief alias from that row."""
@@ -170,10 +177,6 @@ class TestObservationQuarantine:
         assert accepted["food_onion_local_bdt"].value == 62.0
         assert accepted["food_onion_local_bdt"].as_of == date(2026, 9, 23)
         assert accepted["food_onion_local_bdt"].quality == "held"
-        _, _, hard_reject = quarantine_observations(
-            current, ["general_inflation"], [], breadth_count=6
-        )
-        assert hard_reject is True
 
 
 @pytest.mark.parametrize("dated_predecessor", [True, False])
