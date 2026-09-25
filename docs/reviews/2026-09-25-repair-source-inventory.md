@@ -179,7 +179,7 @@ The six status families are **advancing**, **legitimate release lag**, **broken 
 | nbr_fytd_collected_tbs | historic daily table; current reader pending check | nbr_fytd_collected_tbs | https://www.tbsnews.net/nbr | pending source-row verification | 2026-05-25 | pending definition check | monthly; 45d catalog grace | last stored row / alias inherits canonical | legitimate release lag (unverified source period) | E0/E6 source check |
 | nbr_it_bn | The Brief (alias feed; reader check pending) | nbr_it_collected_cr | https://www.tbsnews.net/nbr | pending source-row verification | no row in read-only query | amount_bdt_crore; alias of nbr_it_collected_cr ×0.01 | monthly; source schedule to verify | none verified | unsupported (no observed row) | E5/E6 |
 | nbr_it_collected_cr | EconDelta PWA, EconDelta aggregate/weekly briefing | nbr_it_collected_cr | https://www.tbsnews.net/nbr | pending source-row verification | no row in read-only query | amount_bdt_crore | monthly; 45d catalog grace | none verified | unsupported (no observed row) | E5/E6 |
-| nbr_revenue_monthly_cr | The Brief | nbr_revenue_monthly_cr | — (direct or derived writer; verify source link) | pending source-row verification | no row in read-only query | pending definition check | daily/direct or legacy; source schedule to verify | none verified | unsupported (no observed row) | E5/E6 |
+| nbr_revenue_monthly_cr | The Brief | nbr_revenue_monthly_cr | MoF MFR historical backfill | latest source row requires reconciliation | 2025-10-31 (full backup correction) | BDT crore | monthly | 28 historical rows; no recurring writer | unsupported recurring writer / frozen archive | E6/R1 |
 | nbr_vat_bn | historic daily table; current reader pending check | nbr_vat_collected_cr | https://www.tbsnews.net/nbr | pending source-row verification | 2026-09-24 | amount_bdt_crore; alias of nbr_vat_collected_cr ×0.01 | monthly; source schedule to verify | last stored row / alias inherits canonical | advancing (unverified source period) | E0 source check |
 | nbr_vat_collected_cr | EconDelta PWA, EconDelta aggregate/weekly briefing | nbr_vat_collected_cr | https://www.tbsnews.net/nbr | pending source-row verification | 2026-09-24 | amount_bdt_crore | monthly; 45d catalog grace | last good ≤60d; alert ≥7d on bad parse | advancing (unverified source period) | E0 source check |
 | net_reserves_bpm6_usd_bn_monthly | The Brief | net_reserves_bpm6_usd_bn_monthly | https://www.bb.org.bd/en/index.php/econdata/intreserve | 2026-08-31 (stored source date; source-row check pending) | 2026-08-31 | USD bn | monthly; 45d catalog grace | append-only monthly history; source/checkpoint-specific | advancing (unverified source period) | E0 source check |
@@ -347,3 +347,86 @@ This dated update supersedes the E5 summary-source and six DAM retail-feed statu
 | DAM rice, packaged atta, red farm eggs, farm-raised hen, local onion, local sugar | Official public dated national-retail feed; `price_date=2026-09-24`; product and unit IDs cross-checked against official public definitions | Six exact source identities configured. Onion keeps its 30% anomaly warning for the 62.00→42.045 move; a reviewer rejection uses E2's dated held-observation path. |
 | DAM soybean oil and moong lentil | Portal has a dated national ticker, but the old IDs do not define oil packaging or lentil origin/grade | Not promoted; old undated banner is rejected, and no product variant is inferred. |
 | Brent | Yahoo `BZ=F` 106.95 for 24 Sep; Reuters settlement 106.60 is not exact instrument/contract/time corroboration | Existing 8% hard hold remains active; source recovery is incomplete. |
+
+## E6 monthly-reader audit — 26 September 2026 BDT
+
+This update audits **actual archive reads** in The Brief `brief/chart_series_fetcher.py`
+(the six monthly chart tuples) and `brief/builders/macro.py` (`archive_id`), plus
+`official_monthly_bn` callers. There are **19 distinct monthly-table IDs**.
+`real_policy_rate_monthly`, `private_credit_growth_yoy_monthly` and
+`import_cover_months_monthly` are display IDs for derived/daily reads; they are not
+additional monthly archive consumers. Non-NBR/non-tax are active EconDelta
+aggregate/weekly-briefing sources, not Brief monthly archive reads.
+
+Stored values below come from the complete read-only initial backup, captured
+25 September. Code recovery is not production recovery. No production row changed.
+The dispositions distinguish supported sources, proven publication lag, unsupported
+recurring writers, and owner-blocked identity/history decisions.
+
+| Actual consumed monthly ID | Last stored key (value) | Verified evidence / disposition |
+|---|---|---|
+| `cpi_12m_avg_monthly` | 2026-08-01 (8.66%) | **Supported.** August 12-month average 8.66 confirmed by 20 Sep WSEI; genuine stored source period 31 Aug. |
+| `cpi_p2p_food_monthly` | 2026-07-01 (7.16%) | **Owner-blocked historical row; supported source with release lag.** July row is `derived_implied_weight_bb_inflation`, not a verified official release. July MEI carries June 8.60; existing official June remains. No automatic rewrite. |
+| `cpi_p2p_nonfood_monthly` | 2026-07-01 (9.28%) | **Owner-blocked historical row; supported source with release lag.** Brief already excludes this specific July row. July MEI carries June 9.61; do not bless the newer stored key as source proof. |
+| `exports_usd_mn_monthly` | 2026-06-01 (4202.69 USD mn) | **Supported; frozen-writer defect repaired in code.** Official EPB Summary Sheet July 4727.45/August 4429.45, goods total A+B, million US dollars, same EPB goods basis as accepted EPB-via-BSS Apr–Jun backfill. Append-only new months; differing old values become revision proposals. |
+| `imports_usd_mn_monthly` | 2026-06-01 (7512.52 USD mn) | **Supported source / release lag, subject to existing splice gate.** July MEI customs C&F table is June data. 20 Sep WSEI has July C&F 6.78bn, but rounded WSEI is not the recurring precise MEI chart source. The MEI appender and 2% overlap gate remain; no alternate-basis splice. |
+| `remittance_usd_mn_monthly` | 2026-07-01 (2858.68 USD mn) | **Supported writer; latest final-source advancement unverified.** July is stored from BB wage-remittance table. WSEI August 2.97bn proves an August rounded flash, not a full-precision final table value. No claim that July is the latest official final globally; runtime poll receipt distinguishes lag from failed polling. |
+| `m2_growth_yoy_monthly` | 2026-07-01 (11.76%) | **Supported / release lag in captured official evidence.** 20 Sep WSEI explicitly prints July-over-July 11.76, matching the archive; observation ends 31 July, not 20 Sep. Existing 165-day monitoring grace unchanged. |
+| `gross_reserves_usd_bn_monthly` | 2026-08-31 (37.3523) | **Supported.** E5 verifies BB August gross/BPM6 source; existing month-end split writer retained. |
+| `net_reserves_bpm6_usd_bn_monthly` | 2026-08-31 (32.4423) | **Supported.** E5 verifies BPM6 column, distinct from gross; unchanged split invariants. |
+| `tbill_91d_yield_monthly` | 2026-09-01 (8.3198%) | **Supported.** Stored evidence 21 Sep; E6 refreshes equal-value/newer-evidence pairs. |
+| `tbill_182d_yield_monthly` | 2026-09-01 (8.4498%) | **Supported.** Stored evidence 21 Sep. |
+| `tbill_364d_yield_monthly` | 2026-09-01 (8.47%) | **Supported.** Stored evidence 21 Sep. |
+| `yield_2y_monthly` | 2026-09-01 (8.8685%) | **Supported.** Stored evidence 2 Sep. |
+| `yield_5y_monthly` | 2026-09-01 (8.645%) | **Supported.** Stored evidence 9 Sep. |
+| `yield_10y_monthly` | 2026-09-01 (8.54%) | **Supported.** Stored evidence 16 Sep. |
+| `yield_15y_monthly` | 2026-09-01 (9.338%) | **Supported.** Stored evidence 23 Sep. |
+| `yield_20y_monthly` | 2026-09-01 (9.348%) | **Supported.** Stored evidence 23 Sep. |
+| `nbr_revenue_monthly_cr` | 2025-10-31 (28027 BDT crore) | **Unsupported recurring writer; frozen manual archive.** IMPORTANT E0 correction: full backup has **28 rows, July 2023–October 2025**, source `mof_mfr_backfill`/static. The earlier “no row” sample omitted this ID because its name ends `_cr`. July MEI and 20 Sep WSEI publish June 2026 NBR 54523 crore, so the gap cannot honestly be called merely current-source lag. No automatic MoF-to-BB splice or fiscal writer was approved here; source/period reconciliation and reviewed backfill remain required. |
+| `reer_monthly` | 2026-03-01 (102.78 index) | **Unsupported.** Dead `macro_observer_seed` writer; no verified replacement index definition/base/period. Never relabel old value current. |
+
+Additional consumed parked IDs: `non_nbr_tax_revenue` and `non_tax_revenue`
+are **owner-blocked** source contracts, no rows in the initial daily backup.
+The former's config still contains `TODO_VPS_FILL_FY26_NON_NBR_BUDGET_CRORE`;
+the latter lacks a precise monthly/FYTD row instruction. July MEI has a non-NBR
+June single-month 852.10 / FY26 6728.01 row and notes a definition change from FY26.
+It is evidence to review, not permission to substitute that series for the MoF
+contract. Non-tax is a separate concept, not an alias of non-NBR tax. Keep both
+out of any “all sources recovered” claim until their exact definitions are approved.
+
+### Period, revision and monitoring contract
+
+- EPB evidence is committed intact in `tests/fixtures/epb/`. The summary workbook
+  SHA256 is `464937f3bf06f1bc0b12b801cb2585f0a4ef0411dbea87b51038aff4c26423d7`;
+  A4 states Million US$, A7 All Products(A+B), F5/F7 August 4429.45,
+  G5/G7 July 4727.45. C7 9156.9 is cumulative and is never appended as a month.
+  The companion region-wise workbook is rejected. Discovery uses current index
+  fiscal-year/month labels, which are not in chronological order, and validates
+  each selected workbook's own content; there is no edition URL pin.
+- `as_of` remains the existing grouping key. EPB `source_as_of` is month-end.
+  The sentinel now requests monthly `source_as_of` and judges genuine available
+  evidence dates; `ingested_at` never makes an old observation fresh. Legacy
+  month-first evidence is not silently repaired by inventing a new day.
+- `data/monthly_evidence/<id>.json` records last successful source check, latest
+  source period, pre-write stored key and numeric revision proposals. It does
+  **not** claim persistence succeeded. Sentinel logs source status and poll
+  liveness separately; source receipts older than the existing 26h job window
+  say “not recently checked”, not “source released nothing”. Catch-up fetch
+  skips retain older receipt time. Independent service run logs remain the
+  liveness source for ladder/reserves writers.
+- Macro CPI/M2/remittance/imports appenders preserve accepted existing pairs.
+  They now expose numeric source revisions in local receipts/logs. Imports
+  comparator revisions are review evidence only and never written. The
+  deterministic range/period/splice gates, fiscal reset guards, production AI
+  review, six-month auction carry floor and complete-curve guard are unchanged.
+- BB `auction_results.auction_date` follows its source **Issue date** (settlement),
+  not an independently recovered auction-held date. The live writer advances
+  equal yields only with changed evidence and never moves evidence backwards;
+  closed-month refresh still requires a strictly newer known source date.
+- **R1 owns historical corrections:** 24 May–July ladder dates (June/July still
+  backup-derived candidates pending authoritative verification), disputed July
+  CPI rows, genuine May LC revisions from July MEI, any EPB/imports revisions,
+  and the fiscal archive gap. The legacy yield backfill `--write` now refuses
+  before any network/write call; read-only inspection remains. No history
+  repair is authorized by an appender or receipt. Both legacy future-debt
+  sentinel exceptions remain until reviewed R1 cleanup.

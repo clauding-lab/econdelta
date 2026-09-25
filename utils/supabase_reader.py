@@ -160,6 +160,8 @@ def fetch_all_freshness_rows(
     while True:
         path = (
             f"{table}?select=metric_id,as_of,ingested_at"
+            + (",source_as_of" if table == "metric_history_monthly" else "")
+            +
             f"&order=metric_id.asc,as_of.asc&limit={page_size}&offset={offset}"
         )
         page = _get(path, url=url, key=key, session=sess)

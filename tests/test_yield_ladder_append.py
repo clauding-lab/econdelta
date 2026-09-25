@@ -483,7 +483,7 @@ class TestWriteYieldLadderMonthlyAppend:
             return [
                 {"metric_id": metric_id, "as_of": july.isoformat(), "value": 10.0},
                 {"metric_id": metric_id, "as_of": august.isoformat(),
-                 "value": stored_august[metric_id]},
+                 "value": stored_august[metric_id], "source_as_of": "2026-07-10"},
             ]
 
         monkeypatch.setattr(reader, "get_metric_history_monthly", get_metric_history_monthly_dispatch)
@@ -955,3 +955,41 @@ class TestCompletedMonthRefresh:
 
         agg._write_yield_ladder_monthly_append(today=TODAY)
         assert not any(r["as_of"] == "2026-06-01" for r in captured)
+
+
+@pytest.mark.parametrize("today", [date(2026, 9, 25), date(2026, 10, 1)])
+def test_equal_yield_new_auction_advances_open_and_just_closed_month(monkeypatch, today):
+    """A September 21 auction at 9.0 supersedes September 7 at 9.0."""
+    import utils.supabase_reader as reader
+    import utils.supabase_writer as writer
+
+    def existing(mid):
+        return [{"as_of": "2026-09-01", "value": 9.0,
+                 "source_as_of": "2026-09-07", "metric_id": mid}]
+
+    monkeypatch.setattr(reader, "get_metric_history_monthly", existing)
+    monkeypatch.setattr(reader, "get_auction_results_through", lambda day: [
+        _auction_row(t, date(2026, 9, 21), 9.0) for t in agg._YIELD_TENOR_TO_MONTHLY_ID
+    ])
+    written = []
+    monkeypatch.setattr(writer, "upsert_metric_history_monthly", lambda rows: written.extend(rows) or len(rows))
+    monkeypatch.setattr(agg, "notify", lambda *args: None)
+    assert agg._write_yield_ladder_monthly_append(today) == 8
+    assert {r["as_of"] for r in written} == {"2026-09-01"}
+    assert {r["source_as_of"] for r in written} == {"2026-09-21"}
+    assert {r["value"] for r in written} == {9.0}
+
+
+@pytest.mark.parametrize("closed", [False, True])
+def test_refresh_never_moves_evidence_backwards_even_when_value_is_equal(closed):
+    month = date(2026, 9, 1)
+    ids = list(agg._YIELD_TENOR_TO_MONTHLY_ID.values())
+    rows, reasons = agg._yield_ladder_rows_for_month(
+        [_auction_row(t, date(2026, 9, 7), 9.0) for t in agg._YIELD_TENOR_TO_MONTHLY_ID],
+        month_start=month, month_end=date(2026, 9, 25),
+        existing_pairs={(mid, month) for mid in ids},
+        existing_values={(mid, month): 9.0 for mid in ids},
+        existing_source_as_of={(mid, month): date(2026, 9, 21) for mid in ids},
+        refresh=True, require_newer_source=closed)
+    assert rows == []
+    assert reasons == []

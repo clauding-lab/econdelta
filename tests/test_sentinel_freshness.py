@@ -417,21 +417,14 @@ def test_imports_usd_mn_monthly_uses_quarterly_cadence_for_its_real_lag():
     assert "imports_usd_mn_monthly" in {b.metric_id for b in stale_report.breaches}
 
 
-def test_exports_usd_mn_monthly_routes_to_accepted_stale():
-    """Backfilled to Jun 2026 from EPB press; the EPB portal itself is
-    JS-rendered/unscrapeable — no live writer, accepted-stale pending
-    ongoing source research."""
-    from sentinel.freshness import ACCEPTED_STALE_METRIC_IDS
-
-    assert "exports_usd_mn_monthly" in ACCEPTED_STALE_METRIC_IDS
-
-    m = load_cadence_map()
+def test_exports_usd_mn_monthly_with_dead_writer_breaches():
+    """The recovered official EPB writer has no permanent stale exemption."""
     report = assess(
         rows_daily=[], rows_monthly=[_row("exports_usd_mn_monthly", "2026-06-01")],
-        cadence_map=m, today=date(2026, 8, 8),
+        cadence_map=load_cadence_map(), today=date(2026, 8, 8),
     )
-    assert "exports_usd_mn_monthly" in {s.metric_id for s in report.accepted_stale}
-    assert "exports_usd_mn_monthly" not in {b.metric_id for b in report.breaches}
+    assert "exports_usd_mn_monthly" in {b.metric_id for b in report.breaches}
+    assert "exports_usd_mn_monthly" not in {s.metric_id for s in report.accepted_stale}
 
 
 def test_chart_feeding_metric_ids_has_exactly_17_ids():

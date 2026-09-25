@@ -228,7 +228,10 @@ def test_main_quarantines_rejected_value_from_latest_domains_and_observations(
     )
 
     archive_dir.mkdir()
-    archived_day = (date.today() - timedelta(days=1)).isoformat()
+    # Archive filenames follow the UTC storage clock. A local BDT date minus
+    # one can equal today's UTC filename just after midnight, replacing the
+    # predecessor rather than producing a new archive.
+    archived_day = (datetime.now(timezone.utc).date() - timedelta(days=1)).isoformat()
     archive_observations = {}
     archive_data = {"general_inflation": 8.0, "macro_cpi_headline": 8.0}
     archive_domains = {

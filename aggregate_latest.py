@@ -2585,6 +2585,7 @@ def _write_macro_monthly_append(today: date | None = None) -> int:
     # No SupabaseReadError import here on purpose (review R1, 2026-08-08
     # re-review): both sub-path try/excepts below catch a broad `Exception`
     # rather than that one type, so nothing in this function names it.
+    from utils.monthly_evidence import audit_candidates
     from utils.supabase_reader import get_metric_history, get_metric_history_monthly
     from utils.supabase_writer import upsert_metric_history_monthly
 
@@ -2598,16 +2599,21 @@ def _write_macro_monthly_append(today: date | None = None) -> int:
         nonfood = _latest_value_as_of(get_metric_history("non_food_inflation", days=1))
         p2p = _latest_value_as_of(get_metric_history("point_to_point_inflation", days=1))
         existing_cpi: set[tuple[str, date]] = set()
+        existing_cpi_rows: list[dict] = []
         for monthly_id in _CPI_DAILY_TO_MONTHLY.values():
             for row in get_metric_history_monthly(monthly_id):
+                existing_cpi_rows.append({**row, "metric_id": monthly_id})
                 as_of = _parse_monthly_row_date(row.get("as_of"))
                 if as_of is not None:
                     existing_cpi.add((monthly_id, as_of))
         cpi_rows, cpi_reasons = _cpi_monthly_append_rows(
             general_row=general, food_row=food, nonfood_row=nonfood, p2p_row=p2p,
-            existing_pairs=existing_cpi, today=today,
+            existing_pairs=set(), today=today,
         )
-        rows_to_write.extend(cpi_rows)
+        audit_candidates(cpi_rows, existing_cpi_rows, today=today,
+                         source_url="daily metric_history CPI observations")
+        rows_to_write.extend(row for row in cpi_rows
+                             if (row["metric_id"], date.fromisoformat(row["as_of"])) not in existing_cpi)
         skip_reasons.extend(cpi_reasons)
     except Exception as e:  # noqa: BLE001 -- 2026-08-08 review M1: requests'
         # JSONDecodeError (a 200-with-HTML-body PostgREST/CDN incident)
@@ -2691,6 +2697,10 @@ def _write_macro_monthly_append(today: date | None = None) -> int:
                     f"this run. {type(e).__name__}: {e}",
                 )
             else:
+                remit_candidates, _ = _select_new_remittance_rows(
+                    parsed, existing_as_of=set(), today=today)
+                audit_candidates(remit_candidates, existing_remit_rows, today=today,
+                                 source_url=_REMITTANCE_URL)
                 remit_rows, remit_reasons = _select_new_remittance_rows(
                     parsed, existing_as_of=existing_remit, today=today,
                 )
@@ -2775,6 +2785,13 @@ def _write_macro_monthly_append(today: date | None = None) -> int:
                     f"imports chart-feeding series skipped this run. {type(e).__name__}: {e}",
                 )
             else:
+                # Preserve both genuine source revisions and accepted history.
+                # Revised comparator columns are review evidence only, never writes.
+                import_candidates, _ = _select_new_imports_rows(
+                    sorted({**revised_imports, **dict(parsed_imports)}.items()),
+                    existing_as_of=set(), today=today)
+                audit_candidates(import_candidates, existing_import_rows, today=today,
+                                 source_url=str(pdf_path))
                 pdf_imports = dict(parsed_imports)
                 # HIGH-1 (Opus review round 2): pass the revised (R) column
                 # too, as the splice check's fallback anchor source for the
@@ -2799,14 +2816,18 @@ def _write_macro_monthly_append(today: date | None = None) -> int:
     try:
         m2 = _latest_value_as_of(get_metric_history(_M2_DAILY_ID, days=1))
         existing_m2: set[tuple[str, date]] = set()
-        for row in get_metric_history_monthly(_M2_MONTHLY_ID):
+        existing_m2_rows = get_metric_history_monthly(_M2_MONTHLY_ID)
+        for row in existing_m2_rows:
             as_of = _parse_monthly_row_date(row.get("as_of"))
             if as_of is not None:
                 existing_m2.add((_M2_MONTHLY_ID, as_of))
         m2_rows, m2_reasons = _m2_monthly_append_rows(
-            m2_row=m2, existing_pairs=existing_m2, today=today,
+            m2_row=m2, existing_pairs=set(), today=today,
         )
-        rows_to_write.extend(m2_rows)
+        audit_candidates(m2_rows, existing_m2_rows, today=today,
+                         source_url="daily metric_history M2 observations")
+        rows_to_write.extend(row for row in m2_rows
+                             if (row["metric_id"], date.fromisoformat(row["as_of"])) not in existing_m2)
         skip_reasons.extend(m2_reasons)
     except Exception as e:  # noqa: BLE001 -- same R1/M1 reasoning as the CPI trio sub-path above
         logger.warning("macro monthly append: M2 read failed: %s", e)
@@ -2994,8 +3015,8 @@ def _yield_ladder_rows_for_month(
     this exact month.
 
     ``refresh=True`` relaxes Stage 2: "already written" must not mean
-    "final". A pair is still dropped when its stored value already EQUALS
-    the freshly derived one (so an ordinary day writes nothing at all and
+    "final". A pair is still dropped when its stored value AND auction date equal
+    the freshly derived observation (so an ordinary day writes nothing at all and
     ``ingested_at`` doesn't churn), but a CHANGED value is re-emitted and
     the upsert updates it in place. ``existing_values`` supplies the stored
     numbers for that comparison; it is ignored entirely when ``refresh`` is
@@ -3102,8 +3123,11 @@ def _yield_ladder_rows_for_month(
             if not refresh:
                 continue  # append-only: already have this tenor for this month
             prior = stored.get((monthly_id, month_start))
-            if prior is not None and prior == values[tenor]:
-                continue  # unchanged since the last run -- no write
+            prior_source = stored_source.get((monthly_id, month_start))
+            if prior_source is not None and prior_source > auction_dates[tenor]:
+                continue  # degraded source history cannot move either leg backwards
+            if prior == values[tenor] and prior_source == auction_dates[tenor]:
+                continue  # identical reading AND evidence -- no write
             if require_newer_source:
                 # Closed month: only ever move a rung FORWARD onto a later
                 # auction. No stored date, or one that is not strictly older
@@ -3150,7 +3174,7 @@ def _write_yield_ladder_monthly_append(today: date | None = None) -> int:
     The open-month leg does mean the read now happens on EVERY run rather
     than only on the days a completed month was still unwritten (the L3
     note below). Writes stay rare regardless: the refresh path emits a row
-    only when a tenor's derived value actually DIFFERS from the stored one,
+    only when a tenor's derived value or auction date differs from the stored one,
     so a day with no new auction writes nothing.
 
     Pure DB reads only -- no Playwright, no live HTTP fetch (unlike the
@@ -3291,6 +3315,7 @@ def _write_yield_ladder_monthly_append(today: date | None = None) -> int:
             month_end=today,
             existing_pairs=existing,
             existing_values=existing_values,
+            existing_source_as_of=existing_source_as_of,
             refresh=True,
         )
         rows.extend(open_rows)
@@ -3885,6 +3910,18 @@ def _run_chart_feeding_monthly_appenders() -> None:
                 "failed; The Brief's yield-curve chart will serve stale data "
                 f"until the next successful run. {type(e).__name__}: {e}",
             )
+
+    # EPB is fetched independently of the reviewed aggregate bundle, just like
+    # the other monthly legs. This also executes before a hard-reject return.
+    if os.environ.get("ECONDELTA_SKIP_SUPABASE") != "1":
+        try:
+            from utils.epb_monthly import write_exports_monthly
+
+            write_exports_monthly()
+        except Exception as exc:
+            logger.warning("EPB monthly append failed: %s", exc)
+            notify("warning", "aggregate — EPB monthly append failed",
+                   f"Official goods exports held; existing history preserved. {type(exc).__name__}: {exc}")
 
 
 def main() -> int:

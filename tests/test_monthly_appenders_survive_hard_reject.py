@@ -26,10 +26,12 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
-def _no_notify(monkeypatch):
+def _no_notify(monkeypatch, request):
     """Swallow Discord notifies and record them for assertions."""
     import aggregate_latest as a
 
+    if request.node.name != "test_export_leg_runs_even_if_other_independent_appenders_fail":
+        monkeypatch.setattr("utils.epb_monthly.write_exports_monthly", lambda: 0)
     sent: list[tuple] = []
     monkeypatch.setattr(a, "notify", lambda *args, **kw: sent.append(args))
     monkeypatch.setenv("ECONDELTA_SKIP_SUPABASE", "0")
@@ -248,3 +250,24 @@ class TestHardRejectPathOrdering:
             f"latest_{yesterday}.json"
         ]
         assert appender_calls == ["ran"]
+
+
+def test_export_leg_runs_even_if_other_independent_appenders_fail(monkeypatch, tmp_path):
+    import aggregate_latest as a
+    import utils.epb_monthly as epb
+    import utils.monthly_evidence as evidence
+    import utils.supabase_reader as reader
+    import utils.supabase_writer as writer
+
+    def fail():
+        raise RuntimeError("unrelated monthly source unavailable")
+
+    monkeypatch.setattr(a, "_write_macro_monthly_append", fail)
+    monkeypatch.setattr(a, "_write_yield_ladder_monthly_append", fail)
+    monkeypatch.setattr(epb, "fetch_exports", lambda: ([(date(2026, 8, 1), 4429.45)], "official.xlsx"))
+    monkeypatch.setattr(reader, "get_metric_history_monthly", lambda mid: [])
+    monkeypatch.setattr(evidence, "DEFAULT_DIRECTORY", tmp_path)
+    written = []
+    monkeypatch.setattr(writer, "upsert_metric_history_monthly", lambda rows: written.extend(rows) or len(rows))
+    a._run_chart_feeding_monthly_appenders()
+    assert [(r["metric_id"], r["value"]) for r in written] == [("exports_usd_mn_monthly", 4429.45)]

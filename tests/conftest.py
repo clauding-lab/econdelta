@@ -36,3 +36,9 @@ def sample_html(fixtures_dir: Path):
         return path.read_text(encoding="utf-8")
 
     return _load
+
+
+@pytest.fixture(autouse=True)
+def isolated_monthly_evidence(tmp_path, monkeypatch):
+    """Tests must never leave synthetic source-check receipts in real data/."""
+    monkeypatch.setattr("utils.monthly_evidence.DEFAULT_DIRECTORY", tmp_path / "monthly_evidence")
