@@ -167,3 +167,20 @@ class TestLatestBundle:
             data={"nested": {"deeply": [1, 2, 3]}, "flag": True},
         )
         assert bundle.data["flag"] is True
+
+
+def test_old_and_observation_enriched_bundles_keep_the_same_legacy_data():
+    """An additive metadata block must not change the schema version or flat values."""
+    payload = {"updated_at": "2026-09-25T00:00:00+00:00", "sources_status": {},
+               "data": {"monthly_remittance": 2.97, "context": "source pending"}}
+    old = LatestBundle.model_validate(payload)
+    enriched = LatestBundle.model_validate({**payload, "observations": {
+        "monthly_remittance": {"metric_id": "monthly_remittance", "value": 2.97,
+            "as_of": "2026-08-31", "quality": "verified", "date_basis": "observation",
+            "unit": "USD billion", "source": "BB", "source_url": None,
+            "captured_at": payload["updated_at"], "evidence": "August row",
+            "dependencies": [], "release_status": "provisional"}}})
+    assert old.data == enriched.data
+    assert old.schema_version == enriched.schema_version == "3.0"
+    assert old.observations == {}
+    assert '"release_status":"provisional"' in enriched.model_dump_json()

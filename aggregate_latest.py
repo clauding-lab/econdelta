@@ -9,6 +9,7 @@ import os
 import re
 import sys
 from calendar import monthrange
+from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -20,6 +21,18 @@ from utils.alert_dedup import should_alert_today
 from utils.anomaly import check_corridor_coherence
 from utils.calendar import last_trading_close, load_holidays
 from utils.notifier import notify
+from utils.observations import (
+    BRIEF_ALIASES,
+    BRIEF_CONVERSIONS,
+    RESERVE_UTIL_DERIVED,
+    Observation,
+    eligible,
+    expand_aliases,
+    finite_number,
+    from_snapshot,
+    select_observation,
+    serialize_observations,
+)
 from utils.opus_review import archive_latest, load_history, review_data
 from utils.schema import (
     Alert,
@@ -161,20 +174,6 @@ DATE_FORM_STALE_GRACE_DAYS = 4
 STALE_FALLBACK_ALERT_STATE_PATH = REPO_ROOT / "data" / "stale_fallback_alert_state.json"
 
 logger = logging.getLogger("aggregate_latest")
-
-# Derived reserve-utilisation ratios (S2). Computed at runtime from the
-# already-scraped BB MEI scalars below — EconDelta has NO scraped maintenance-%
-# cell, so these are minted in `_build_v3_blocks` and land in metric_history
-# under their own ids. The exact statutory CRR/SLR bases are policy constants
-# that shift, so each ratio is labelled by what it ACTUALLY divides (no
-# hardcoded statutory rate): the held/excess balance expressed as a % of total
-# system deposits, NOT the regulated maintenance ratio.
-RESERVE_UTIL_DERIVED: dict[str, tuple[str, str]] = {
-    # derived_id -> (numerator_id, denominator_id)
-    "crr_utilisation_pct": ("deposits_held_with_bb_crr", "deposits_of_the_system"),
-    "slr_utilisation_pct": ("excess_liquid_asset_total_minimum", "deposits_of_the_system"),
-}
-
 
 SCRAPER_SPEC = {
     # key -> (subdir, schema_class, sources.json key for URL lookup)
@@ -954,10 +953,7 @@ def _build_v3_blocks(
                 )
             )
 
-    # Derived reserve-utilisation ratios (S2): minted from the level scalars
-    # loaded above, BEFORE the writer's scalar-only filter, so they persist to
-    # metric_history under their own ids. Null/zero-denominator safe.
-    _compute_reserve_utilisation(data_additions)
+    # Ratios are derived later, after complete dated observations are selected.
 
     freshness = FreshnessSummary(
         indicators_total=indicators_total,
@@ -974,6 +970,118 @@ def _build_v3_blocks(
         },
     )
     return data_additions, domains, freshness, alerts
+
+
+def _build_observations(
+    snapshots: dict, domains: dict, sources_status: dict, *, now: datetime,
+    holidays: set[date], yield_values: dict, yield_dates: dict,
+) -> dict[str, Observation]:
+    """Adapt each source independently, then select records before deriving children.
+
+    Sentinel vintage rules determine preference, not scraper capture age. The latter
+    still independently marks a dead source held. No new staleness policy is added.
+    """
+    from sentinel.freshness import is_breach
+
+    candidates: dict[str, list[Observation]] = {}
+
+    def add(obs: Observation, cadence: str, *, source_stale: bool = False) -> None:
+        if obs.quality == "verified" and obs.as_of is not None:
+            if source_stale or is_breach(obs.as_of, cadence, now.date(), holidays):
+                obs = replace(obs, quality="held")
+        candidates.setdefault(obs.metric_id, []).append(obs)
+
+    for source, snapshot in snapshots.items():
+        if snapshot is None:
+            continue
+        # Values and dates come from this ONE snapshot, never a merged scalar map.
+        values = flatten_data({source: snapshot})
+        dates = _build_tier1_source_as_of_map({source: snapshot}, bb_forex_ok=True)
+        stale = sources_status.get(source) is None or sources_status[source].status != "ok"
+        for mid, value in values.items():
+            if not finite_number(value):
+                continue
+            unit, url, cadence = "unknown", None, "daily"
+            if source == "bb_forex":
+                reserve = mid in {"gross_reserves_usd_bn", "import_cover_months"}
+                unit = "USD billion" if mid == "gross_reserves_usd_bn" else "months" if reserve else "BDT"
+                block = snapshot.reserves if reserve else snapshot.rates
+                url = block.source_url
+                cadence = "monthly" if reserve else "daily"
+            elif source == "dse_market":
+                url = snapshot.source_url
+                unit = "%" if mid.endswith("pct") else "BDT crore" if mid == "turnover_crore" else "index" if mid in {"dsex", "ds30", "dses", "dsex_change"} else "count"
+            elif source == "commodity_prices":
+                for key, quote in snapshot.prices.items():
+                    if mid == f"{key}_{quote.currency.lower()}_{quote.unit.replace(' ', '_')}":
+                        unit, url = f"{quote.currency}/{quote.unit}", None
+                        # A sibling's maximum quote date is not this quote's date.
+                        dates[mid] = quote.quote_date
+            obs = Observation(mid, value, dates.get(mid), unit, source, url,
+                snapshot.scraped_at, "verified" if dates.get(mid) else "unavailable",
+                "observation" if dates.get(mid) else "unknown", f"{source} snapshot field {mid}")
+            add(obs, cadence, source_stale=stale)
+            alias = {"usd_bdt_mid": "usd_bdt_exchange_rate",
+                     "gross_reserves_usd_bn": "fx_reserve_gross_and_bpm6"}.get(mid)
+            if alias:
+                add(replace(obs, metric_id=alias, dependencies=(mid,)), cadence, source_stale=stale)
+
+    registry = {item["id"]: item for item in _load_v3_registry()}
+    for indicators in domains.values():
+        for mid, snapshot in indicators.items():
+            config = registry.get(mid, {})
+            adapted = {"value_type": config.get("parse", {}).get("value_type"), **snapshot}
+            # Fan out one source at a time; equal numbers in other sources never
+            # provide a period. Each child inherits this parent's evidence.
+            values = {mid: snapshot.get("value")}
+            _flatten_dict_indicators(values)
+            for child, value in values.items():
+                if isinstance(value, (dict, str, list)):
+                    continue
+                obs = from_snapshot(child, {**adapted, "value": value}, captured_at=now)
+                if child != mid:
+                    obs = replace(obs, dependencies=(mid,))
+                add(obs, snapshot.get("cadence") or config.get("cadence", "unknown"))
+
+    for mid, value in yield_values.items():
+        obs = Observation(mid, value, yield_dates.get(mid), "%", "auction_results", None,
+            now, "verified", "observation", "Latest accepted auction cutoff")
+        # Auction results are the canonical source for this set of retired ids.
+        candidates[mid] = []
+        add(obs, "monthly" if mid.startswith("tbond_") else "weekly")
+    selected = {}
+    for mid, options in candidates.items():
+        selected[mid] = select_observation(options, today=now.date()) or replace(
+            options[0], quality="unavailable"
+        )
+    return expand_aliases(selected)
+
+
+def _project_observations(data: dict, domains: dict, observations: dict[str, Observation]) -> None:
+    """Project values and metadata together; preserve unrelated legacy context."""
+    for mid in set(BRIEF_ALIASES) | set(BRIEF_CONVERSIONS) | set(RESERVE_UTIL_DERIVED):
+        data.pop(mid, None)
+    for mid, obs in observations.items():
+        data[mid] = obs.value
+    for indicators in domains.values():
+        for mid, snapshot in list(indicators.items()):
+            obs = observations.get(mid)
+            if obs is None:
+                continue
+            # Preserve domain context, but not evidence/deltas from the losing
+            # source or an undated quarantine substitution.
+            if (obs.source != snapshot.get("source", mid)
+                    or obs.value != snapshot.get("value") or obs.quality == "unavailable"):
+                snapshot = {key: value for key, value in snapshot.items() if key not in {
+                    "_artifact_sha256", "_parse_strategy", "_provenance", "sanity_note",
+                    "previous_value", "change_pct", "_stale_from",
+                }}
+            indicators[mid] = {**snapshot, "value": obs.value,
+                "source_as_of": obs.as_of.isoformat() if obs.as_of else None,
+                "source": obs.source, "source_url": obs.source_url,
+                "scraped_at": obs.captured_at.isoformat(), "quality": obs.quality,
+                "date_basis": obs.date_basis, "evidence": obs.evidence,
+                "release_status": obs.release_status}
 
 
 def _notify_long_stale_fallbacks(
@@ -3362,103 +3470,6 @@ def _derive_daily_yields_from_auctions(
 # specific naming convention per section (`macro_*`, `remit_*`, `fiscal_*`,
 # `banking_*`, `food_*`); EconDelta keeps its own indicator IDs authoritative.
 # Pure 1:1 aliases (no unit conversion) live here.
-BRIEF_ALIASES: dict[str, str] = {
-    # macro
-    "macro_cpi_food":      "food_inflation",
-    "macro_cpi_headline":  "general_inflation",
-    "macro_cpi_nonfood":   "non_food_inflation",
-    # YoY % credit growth — repointed PR-C (build-brief item 4) to BB's live
-    # econdata/monetarysurvey HTML page ("Claims on Private Sector (DMBs)"),
-    # not derived from the absolute private_sector_credit BDT-crore value.
-    #
-    # OWNER DECISION FLAG (2026-08-22, PR-C): June 2026 has a genuine
-    # conflict between BB's own machine-readable table and unanimous press
-    # coverage of the same concept. BB's econdata/monetarysurvey table
-    # ("Claims on Private Sector (DMBs)" YoY column) reads 4.53%; every
-    # press outlet quoted BB's own ADJUSTED headline figure of 4.47% for
-    # the same month. This PR ships 4.53% (the BB table -- machine-
-    # readable, matches the series' own prior-month trajectory: Mar 4.72,
-    # Apr 4.75, May 4.98) as the live value, per the source scout's
-    # recommendation. Do NOT average the two, and do NOT silently swap to
-    # 4.47% without a fresh sign-off -- this is a data-source judgment
-    # call on a number The Brief publishes as "private credit growth", not
-    # an engineering decision. See AGENT_LEARNINGS.md/AGENTS.md landmine 52
-    # for the fuller writeup.
-    "macro_credit_growth": "private_sector_credit_yoy_pct",
-    # remittance — bn→mn unit conversion is in BRIEF_CONVERSIONS below.
-    # fiscal — crore→trillion conversions are in BRIEF_CONVERSIONS below.
-    # NBR FYTD canonical: tax_revenue from the BB PDF (deterministic parse,
-    # 5% anomaly threshold). News corroborators (nbr_fytd_collected_tbs,
-    # nbr_fytd_collected_dailystar) retired 2026-05-25 — both tag-listing
-    # pages drifted onto articles covering different fiscal-year windows,
-    # so the cross-check flapped.
-    "nbr_fytd_collected_cr":    "tax_revenue",
-    # banking primitives
-    "banking_broad_money":      "broad_money",
-    "banking_reserve_money":    "reserve_money",
-    "banking_money_multiplier": "money_multiplier",
-    "banking_excess_liquid":    "excess_liquid_asset_total_minimum",
-    "banking_deposits":         "deposits_of_the_system",
-    "banking_call_money_rate":  "call_money_rate",
-    # banking ratios (FSAR — quarterly)
-    "banking_npl_pct":          "gross_npl_ratio",
-    "banking_car_pct":          "banking_sector_crar",
-    # money market — yield headline (daily)
-    "tbill_91d_yield_pct":      "bill_bond_rates",
-    "gsec_next_auction_cr":     "gsec_auction",
-    # money market — brief metric_id forms (the brief's tbond builder
-    # uses ``tbond_tbill_91d``; brief's nbr/dam builders use ``dam_*``)
-    "tbond_tbill_91d":          "bill_bond_rates",
-    # multi-tenor T-Bill / T-Bond yields — feed §07 yield curve chart
-    "tbond_tbill_182d":         "tbill_182d_yield",
-    "tbond_tbill_364d":         "tbill_364d_yield",
-    "tbond_bond_5y":            "tbond_5y_yield",
-    "tbond_bond_10y":           "tbond_10y_yield",
-    # DAM retail food prices (daily, BDT/kg or BDT/4-pcs for eggs)
-    "food_rice_coarse_bdt":     "food_rice_coarse",
-    "food_atta_packet_bdt":     "food_atta_packet",
-    "food_egg_red_bdt":         "food_egg_red",
-    "food_chicken_farm_bdt":    "food_chicken_farm",
-    "food_oil_soybean_bdt":     "food_oil_soybean",
-    "food_onion_local_bdt":     "food_onion_local",
-    "food_lentil_moong_bdt":    "food_lentil_moong",
-    "food_sugar_local_bdt":     "food_sugar_local",
-    # DAM retail food prices — brief metric_id forms (`dam_*`)
-    "dam_rice_coarse":          "food_rice_coarse",
-    "dam_lentil":               "food_lentil_moong",
-    "dam_oil":                  "food_oil_soybean",
-    "dam_sugar":                "food_sugar_local",
-    "dam_onion":                "food_onion_local",
-    "dam_egg":                  "food_egg_red",
-    "dam_chicken":              "food_chicken_farm",
-    "dam_flour":                "food_atta_packet",
-}
-
-# Aliases that need a unit conversion (source unit → brief unit).
-# Format: brief_key → (source_key, multiplier).
-BRIEF_CONVERSIONS: dict[str, tuple[str, float]] = {
-    # T-Bill / T-Bond outstanding: gsom reports BDT million; brief expects
-    # BDT crore (1 crore = 10 million → multiplier 0.1).
-    "tbill_outstanding_cr": ("treasury_bill_outstanding", 0.1),
-    "tbond_outstanding_cr": ("treasury_bond_outstanding", 0.1),
-    # Fiscal: EconDelta indicators are BDT crore, brief renders BDT trillion.
-    # 1 trillion BDT = 100,000 crore → multiplier 0.00001.
-    "fiscal_nbr_collected_trn":  ("tax_revenue", 0.00001),
-    "fiscal_govt_borrow_trn":    ("domestic_borrowing_for_budget_deficit", 0.00001),
-    "fiscal_foreign_borrow_trn": ("foreign_borrowing_for_budget_deficit", 0.00001),
-    "fiscal_bank_borrow_trn":    ("bank_borrowing_for_deficit_financing", 0.00001),
-    "fiscal_nsc_outstanding":    ("nsc_outstanding", 0.00001),
-    # Remittance: EconDelta source is USD billion, brief renders USD million.
-    # 1 billion = 1,000 million → multiplier 1000.
-    "remit_monthly_mn": ("monthly_remittance", 1000.0),
-    "remit_fy_mn":      ("fy_remittance", 1000.0),
-    # NBR component decomposition (Phase 3.2): articles report BDT crore,
-    # brief's §12 expects BDT bn. 1 bn = 100 crore → multiplier 0.01.
-    "nbr_vat_bn":       ("nbr_vat_collected_cr", 0.01),
-    "nbr_it_bn":        ("nbr_it_collected_cr", 0.01),
-    "nbr_customs_bn":   ("nbr_customs_collected_cr", 0.01),
-}
-
 # The four metric_history ids minted from the ``money_market_ref_rate``
 # indicator's dict value (DOMMR/BOFR Overnight + 1W). Must stay identical to
 # parsers/html_money_market_ref_rate._SERIES_KEYS — a drift-guard test
@@ -3932,31 +3943,9 @@ def main() -> int:
 
     _notify_long_stale_fallbacks(alerts)
 
-    # Forex-source aliases AFTER the v3 merge: the parse-stage versions of these
-    # indicators come from BB PDFs and frequently fail (Akamai TSPD challenge,
-    # PDF format drift) — leaving 0.0 in data_additions which would shadow the
-    # working bb_forex.py-direct scrape. Apply the alias here so it wins.
-    #
-    # Freshness-gated: only overwrite when bb_forex's OWN status is "ok". A
-    # stale direct scrape shouldn't clobber the v3 registry's own (possibly
-    # fresher) independent parse of the same concept just because the direct
-    # scrape is usually more reliable. When stale, whatever the v3 pipeline
-    # produced is left as-is — and the underlying usd_bdt_mid /
-    # gross_reserves_usd_bn keys (set unconditionally by flatten_data above)
-    # still flow regardless, now honestly dated via
-    # _build_tier1_source_as_of_map, which is the actual point of this guard.
-    #
-    # bb_forex_ok is reused below (Supabase write block) as the SAME gate for
-    # _build_tier1_source_as_of_map's alias dates — the date must follow the
-    # (gated) value, or a fresh v3 value can end up wearing bb_forex's stale
-    # date (review round 1, item 1).
     forex = snapshots.get("bb_forex")
     forex_status = sources_status.get("bb_forex")
     bb_forex_ok = forex_status is not None and forex_status.status == "ok"
-    if forex is not None and bb_forex_ok:
-        data["usd_bdt_exchange_rate"] = forex.rates.usd_bdt_mid
-        if forex.reserves is not None:
-            data["fx_reserve_gross_and_bpm6"] = forex.reserves.gross_reserves_usd_bn
 
     # Daily yield-curve DERIVATION from auction_results (landmine 49's two-
     # column trap, PR-C build-brief item 3) -- must run BEFORE
@@ -3967,6 +3956,7 @@ def main() -> int:
     # Supabase-touching enrichment in this module (tests/conftest.py
     # defaults that env var to "1", so the whole test suite never makes a
     # real auction_results read unless a test explicitly opts in).
+    yield_values = {}
     if os.environ.get("ECONDELTA_SKIP_SUPABASE") != "1":
         yield_values, yield_source_as_of = _derive_daily_yields_from_auctions(today=now.date())
         data.update(yield_values)
@@ -3975,23 +3965,11 @@ def main() -> int:
 
     _apply_brief_aliases(data)
 
-    # H3 (Opus review round 1, 2026-08-23): propagate the derived yields'
-    # real auction dates to their brief-facing alias/conversion keys too
-    # (tbond_bond_10y, tbond_tbill_182d, tbill_91d_yield_pct, ...) -- values
-    # already flow to these keys via _apply_brief_aliases above, but their
-    # DATES did not: neither key is a v3-registry id or a Tier-1 flatten
-    # key, so _build_source_as_of_map/_build_tier1_source_as_of_map below
-    # never see them, and upsert_metric_history's as_of=today fallback would
-    # forge a run-date stamp on top of an honestly-dated base id -- one
-    # alias hop away from the exact unbounded-carry-forward risk landmine
-    # 51 exists to prevent (an alias's as_of silently advancing to "today"
-    # every run regardless of how stale the real auction actually is).
-    for brief_key, econ_key in BRIEF_ALIASES.items():
-        if econ_key in yield_source_as_of:
-            yield_source_as_of[brief_key] = yield_source_as_of[econ_key]
-    for brief_key, (src_key, _mult) in BRIEF_CONVERSIONS.items():
-        if src_key in yield_source_as_of:
-            yield_source_as_of[brief_key] = yield_source_as_of[src_key]
+    observations = _build_observations(
+        snapshots, domains, sources_status, now=now, holidays=holidays,
+        yield_values=yield_values, yield_dates=yield_source_as_of,
+    )
+    _project_observations(data, domains, observations)
 
     # Cross-metric health check (E1.4): the BB policy corridor's three legs
     # (SDF floor / repo / SLF ceiling) are each parsed independently, so no
@@ -4008,9 +3986,8 @@ def main() -> int:
     # value-only stillness alarm below has never needed this; the watchlist
     # check below it does, since predicates (a)/(b) are as_of-aware).
     source_as_of_map = {
-        **_build_tier1_source_as_of_map(snapshots, bb_forex_ok=bb_forex_ok),
-        **_build_source_as_of_map(domains),
-        **yield_source_as_of,
+        mid: obs.as_of for mid, obs in observations.items()
+        if eligible(obs, today=now.date())
     }
 
     # Stillness alarm: the threshold checks above all ask "did this value move
@@ -4055,6 +4032,7 @@ def main() -> int:
             updated_at=now,
             sources_status=sources_status,
             data=data,
+            observations=serialize_observations(observations),
             domains=domains,
             freshness=freshness,
             alerts=alerts,
@@ -4200,12 +4178,31 @@ def main() -> int:
                         f"reason: {reason}\nquarantined: {quarantined}\n"
                         f"these fields use last-good values; the rest published fresh.",
                     )
+                # E2 will recover dated predecessors and rebuild complete families.
+                # Until then a scalar substitution has no verified replacement date.
+                invalidated = set(quarantined)
+                while True:
+                    children = {mid for mid, obs in observations.items()
+                                if invalidated.intersection(obs.dependencies)}
+                    if children <= invalidated:
+                        break
+                    invalidated |= children
+                for mid in invalidated:
+                    if mid in observations:
+                        observations[mid] = replace(observations[mid],
+                            value=cleaned.get(mid) if finite_number(cleaned.get(mid)) else None,
+                            as_of=None, quality="unavailable", date_basis="unknown",
+                            evidence="Scalar quarantine replacement lacks dated evidence")
                 data = cleaned
+                _project_observations(data, domains, observations)
+                source_as_of_map = {mid: obs.as_of for mid, obs in observations.items()
+                                    if eligible(obs, today=now.date())}
                 bundle = LatestBundle(
                     schema_version="3.0",
                     updated_at=now,
                     sources_status=sources_status,
                     data=data,
+                    observations=serialize_observations(observations),
                     domains=domains,
                     freshness=freshness,
                     alerts=alerts,
@@ -4239,20 +4236,8 @@ def main() -> int:
                 upsert_metric_history,
                 verify_landed_count,
             )
-            # source_as_of_map is built earlier in main() now (immediately
-            # before the stillness/watchlist staleness checks, which need it
-            # too) — reused here unchanged. Slow-cadence metrics (quarterly
-            # FSAR, monthly news) carry source_as_of from the parser so
-            # metric_history.as_of reflects the true publication date rather
-            # than today's run date — fixing the freshness-pill lie. Merged
-            # from the Tier-1 map (bb_forex/dse_market/commodity_prices —
-            # SCRAPER_SPEC, which never enters the v3 `domains` dict and so
-            # could never get an override here otherwise) and the v3 map;
-            # Tier-1 keys and v3 registry keys should never collide (the two
-            # pipelines cover disjoint indicator ids), but if sources-v3.json
-            # ever grows an entry that shadows a Tier-1 flatten_data key, the
-            # v3-recovered date (parsed from the source document's own text)
-            # wins — it was merged LAST when this map was built.
+            # Both values and per-metric dates are projections of the selected
+            # complete observations. The writer independently enforces eligibility.
             # Explicit write timestamp so the E2.2 landed-count read-back counts
             # exactly this upsert's rows.
             write_ts = datetime.now(timezone.utc)
@@ -4267,7 +4252,7 @@ def main() -> int:
             # analogous to source_as_of_map above), not something to fake now.
             n_rows = upsert_metric_history(
                 data=data, as_of=now.date(), source_as_of_map=source_as_of_map,
-                ingested_at=write_ts,
+                ingested_at=write_ts, observations=observations,
             )
             logger.info(
                 "upserted %d rows to Supabase metric_history (as_of=%s, overrides=%d)",

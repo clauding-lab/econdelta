@@ -432,3 +432,82 @@ def test_tier1_upsert_rows_carry_source_dates_not_todays_run_date(
 
     for mid in ("gross_reserves_usd_bn", "usd_bdt_mid"):
         assert by_id[mid] != today_iso, f"{mid} must not be stamped with today's run date"
+
+
+@pytest.mark.parametrize("stale_direct", [False, True])
+def test_selected_value_and_period_remain_bound_through_main(tmp_path, monkeypatch, stale_direct):
+    """The selected direct reading must never wear the competing PDF's July date."""
+    import utils.supabase_writer as sw
+    from utils.schema import FreshnessSummary
+
+    now = datetime(2026, 9, 25, 0, tzinfo=timezone.utc)
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return now
+    monkeypatch.setattr(agg, "datetime", Clock)
+    forex = _forex_snapshot(scraped_at=now, snapshot_date=date(2026, 7, 31) if stale_direct else date(2026, 9, 24), reserves_date=date(2026, 7, 1) if stale_direct else date(2026, 8, 1), gross_reserves_usd_bn=35.5 if stale_direct else 37.3523)
+    forex = forex.model_copy(update={"rates": forex.rates.model_copy(update={"usd_bdt_mid": 121 if stale_direct else 123.22})})
+    data_dir = tmp_path / "data"
+    _write_snapshot(data_dir / "bb_forex" / "2026-09-25.json", forex)
+    cfg = tmp_path / "sources.json"
+    cfg.write_text('{"sources": {}}')
+    domains = {"forex": {
+        "usd_bdt_exchange_rate": {"value": 123.3 if stale_direct else 121, "source_as_of": "2026-09-24" if stale_direct else "2026-07-31", "scraped_at": now.isoformat(), "cadence": "daily", "_provenance": "deterministic"},
+        "fx_reserve_gross_and_bpm6": {"value": 37.4 if stale_direct else 35.5, "source_as_of": "2026-08-31" if stale_direct else "2026-07-31", "scraped_at": now.isoformat(), "cadence": "monthly", "_provenance": "deterministic"},
+        "monthly_remittance": {"value": 2.97, "scraped_at": now.isoformat(), "cadence": "monthly", "_provenance": "deterministic"},
+    }}
+    additions = {k: v["value"] for k, v in domains["forex"].items()}
+    monkeypatch.setattr(agg, "_build_v3_blocks", lambda _: (additions, domains, FreshnessSummary(), []))
+    for key, path in (("DATA_DIR", data_dir), ("LATEST_PATH", data_dir / "latest.json"), ("ARCHIVE_DIR", data_dir / "archive"), ("CONFIG_PATH", cfg), ("STALENESS_STATE_PATH", tmp_path / "still.json"), ("WATCHLIST_STALENESS_STATE_PATH", tmp_path / "watch.json")):
+        monkeypatch.setattr(agg, key, path)
+    monkeypatch.setenv("ECONDELTA_SKIP_SUPABASE", "0")
+    monkeypatch.setattr(agg, "_derive_daily_yields_from_auctions", lambda **kw: ({}, {}))
+    monkeypatch.setattr(agg, "_run_chart_feeding_monthly_appenders", lambda: None)
+    monkeypatch.setattr(agg, "_write_reserves_monthly_split", lambda *a: 0)
+    monkeypatch.setattr(agg, "_apply_media_overrides", lambda *a: None)
+    monkeypatch.setattr(agg, "notify", lambda *a, **kw: None)
+    monkeypatch.setattr(sw, "upsert_metric_definitions_seed", lambda *a: 0)
+    monkeypatch.setattr(sw, "verify_landed_count", lambda *a, **kw: None)
+    rows = []
+    def writer(**kw):
+        rows.extend(sw._rows_from_data(kw["data"], kw["as_of"], "EconDelta", kw.get("source_as_of_map"), **({"observations": kw["observations"]} if "observations" in kw else {})))
+        return len(rows)
+    monkeypatch.setattr(sw, "upsert_metric_history", writer)
+    assert agg.main() == 0
+    by_id = {r["metric_id"]: r for r in rows}
+    assert (by_id["usd_bdt_exchange_rate"]["value"], by_id["usd_bdt_exchange_rate"]["as_of"]) == (123.3 if stale_direct else 123.22, "2026-09-24")
+    assert (by_id["fx_reserve_gross_and_bpm6"]["value"], by_id["fx_reserve_gross_and_bpm6"]["as_of"]) == (37.4 if stale_direct else 37.3523, "2026-08-31")
+    assert "monthly_remittance" not in by_id
+    assert "remit_monthly_mn" not in by_id
+    bundle = json.loads((data_dir / "latest.json").read_text())
+    obs = bundle["observations"]["usd_bdt_exchange_rate"]
+    assert obs["as_of"] == by_id["usd_bdt_exchange_rate"]["as_of"]
+    assert bundle["domains"]["forex"]["usd_bdt_exchange_rate"]["value"] == by_id["usd_bdt_exchange_rate"]["value"]
+    assert bundle["observations"]["monthly_remittance"]["quality"] == "unavailable"
+
+
+def test_fresh_direct_preference_survives_weekend_vintage_grace():
+    from utils.schema import SourceStatus
+    now = datetime(2026, 9, 26, tzinfo=timezone.utc)  # Saturday
+    direct = _forex_snapshot(scraped_at=now, snapshot_date=date(2026, 9, 23))
+    domains = {"forex": {"usd_bdt_exchange_rate": {
+        "value": 123.3, "source_as_of": "2026-09-24", "scraped_at": now.isoformat(),
+        "cadence": "daily", "_provenance": "deterministic"}}}
+    obs = agg._build_observations({"bb_forex": direct}, domains,
+        {"bb_forex": SourceStatus(status="ok")}, now=now, holidays=set(),
+        yield_values={}, yield_dates={})
+    assert obs["usd_bdt_exchange_rate"].value == 122.7
+    assert obs["usd_bdt_exchange_rate"].as_of == date(2026, 9, 23)
+
+
+def test_commodity_without_own_quote_date_cannot_inherit_a_siblings_date():
+    from utils.schema import SourceStatus
+    from utils.supabase_writer import _rows_from_data
+    now = datetime(2026, 9, 25, tzinfo=timezone.utc)
+    commodity = _commodity_snapshot(scraped_at=now)
+    obs = agg._build_observations({"commodity_prices": commodity}, {},
+        {"commodity_prices": SourceStatus(status="ok")}, now=now, holidays=set(),
+        yield_values={}, yield_dates={})
+    assert all(item.quality == "unavailable" for item in obs.values())
+    assert not _rows_from_data(agg.flatten_data({"commodity_prices": commodity}), now.date(), "EconDelta", observations=obs)

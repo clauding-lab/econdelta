@@ -416,6 +416,7 @@ def _setup_v3_with_usd_bdt_exchange_rate_indicator(
         "cadence": "daily",
         "scraped_at": datetime.now(timezone.utc).isoformat(),
         "value": v3_value,
+        "source_as_of": datetime.now(timezone.utc).date().isoformat(),
         "_provenance": "deterministic",
         "_parse_strategy": "html_footer_ticker",
     }))
@@ -508,11 +509,8 @@ def test_alias_date_follows_gated_value_not_stale_bb_forex_date(
     # The value is the fresh v3 one (999.9), confirmed by the sibling test above.
     assert captured["data"]["usd_bdt_exchange_rate"] == 999.9
     source_as_of_map = captured.get("source_as_of_map") or {}
-    assert "usd_bdt_exchange_rate" not in source_as_of_map, (
-        f"usd_bdt_exchange_rate must get NO Tier-1 date when bb_forex is stale "
-        f"-- found {source_as_of_map.get('usd_bdt_exchange_rate')!r} instead. "
-        f"The date must follow the (gated) value, not bb_forex unconditionally."
-    )
+    assert source_as_of_map["usd_bdt_exchange_rate"] == datetime.now(timezone.utc).date()
+    assert captured["observations"]["usd_bdt_exchange_rate"].value == 999.9
 
 
 def test_main_fires_warning_on_stale_source(

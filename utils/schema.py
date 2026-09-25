@@ -196,6 +196,7 @@ class LatestBundle(BaseModel):
     updated_at: datetime
     sources_status: dict[str, SourceStatus]
     data: dict[str, Any]
+    observations: dict[str, dict[str, Any]] = {}
     domains: dict[str, dict[str, Any]] = {}
     freshness: FreshnessSummary | None = None
     alerts: list[Alert] = []
