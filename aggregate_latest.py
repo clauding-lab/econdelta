@@ -339,7 +339,9 @@ def _is_bad_snapshot(snapshot: dict) -> bool:
     return False
 
 
-def _load_last_good_snapshot(indicator_id: str, *, max_days_back: int = 60) -> dict | None:
+def _load_last_good_snapshot(
+    indicator_id: str, *, max_days_back: int = 60, today: date | None = None
+) -> dict | None:
     """Walk back through this indicator's per-day snapshots for the most recent good one.
 
     A 'good' snapshot is one where _is_bad_snapshot() is False — i.e. real
@@ -352,7 +354,7 @@ def _load_last_good_snapshot(indicator_id: str, *, max_days_back: int = 60) -> d
         return None
     candidates = sorted(d.glob("*.json"), reverse=True)
     cutoff_age_days = max_days_back
-    today = datetime.now(timezone.utc).date()
+    today = today if today is not None else datetime.now(timezone.utc).date()
     for path in candidates:
         try:
             blob = json.loads(path.read_text())
@@ -775,7 +777,7 @@ def _build_v3_blocks(
         # — better the brief shows a missing key than a misleading 0.0.
         if _is_bad_snapshot(snapshot):
             indicators_failed += 1
-            historical = _load_last_good_snapshot(indicator_id)
+            historical = _load_last_good_snapshot(indicator_id, today=now.date())
             if historical is None:
                 logger.info(
                     "skipping %s — today bad and no good historical snapshot in last 60 days",
