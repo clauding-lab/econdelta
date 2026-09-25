@@ -1,4 +1,5 @@
 """E2.4 — off-box export of irreplaceable history."""
+
 from __future__ import annotations
 
 import json
@@ -24,14 +25,21 @@ _DAILY_TABLE = [
 
 
 def _fetcher(table):
-    return {"metric_history_monthly": _MONTHLY, "metric_history": _DAILY_TABLE}[table]
+    return {"metric_history_monthly": _MONTHLY, "metric_history": _DAILY_TABLE}.get(table, [])
 
 
 def test_export_writes_both_tables_with_manifest(tmp_path):
     out = export_history(tmp_path, fetcher=_fetcher)
     assert out.exists()
     payload = json.loads(out.read_text())
-    assert payload["manifest"] == {"metric_history_monthly": 2, "metric_history": 3}
+    assert payload["manifest"] == {
+        "metric_history_monthly": 2,
+        "metric_history": 3,
+        "metric_definitions": 0,
+        "metric_definitions_monthly": 0,
+        "auction_results": 0,
+        "media_review": 0,
+    }
     assert payload["tier"] == "all"
     assert len(payload["tables"]["metric_history"]) == 3
     assert out.name.startswith("econdelta_history_export_")
@@ -41,7 +49,7 @@ def test_irreplaceable_only_drops_rescrapable_daily(tmp_path):
     out = export_history(tmp_path, fetcher=_fetcher, irreplaceable_only=True)
     payload = json.loads(out.read_text())
     kept = {r["metric_id"] for r in payload["tables"]["metric_history"]}
-    assert kept == {"money_multiplier"}       # dsex + dse_close_GP dropped
+    assert kept == {"money_multiplier"}  # dsex + dse_close_GP dropped
     assert payload["manifest"]["metric_history_monthly"] == 2  # monthly untouched
     assert payload["tier"] == "irreplaceable_only"
 
@@ -73,6 +81,7 @@ def test_mid_write_crash_preserves_prior_good_backup(tmp_path, monkeypatch):
     # is partially/never written; out_path must not be touched).
     def _boom(*a, **k):
         raise RuntimeError("simulated mid-write crash")
+
     monkeypatch.setattr(eh.json, "dumps", _boom)
 
     with pytest.raises(RuntimeError):
@@ -85,7 +94,41 @@ def test_mid_write_crash_preserves_prior_good_backup(tmp_path, monkeypatch):
 
 
 def test_paginate_raises_without_credentials(monkeypatch):
-    for var in ("SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY", "SUPABASE_SERVICE_KEY", "SUPABASE_ANON_KEY"):
+    for var in (
+        "SUPABASE_URL",
+        "SUPABASE_SERVICE_ROLE_KEY",
+        "SUPABASE_SERVICE_KEY",
+        "SUPABASE_ANON_KEY",
+    ):
         monkeypatch.delenv(var, raising=False)
     with pytest.raises(ExportError):
         paginate_table("metric_history_monthly")
+
+
+def test_server_cap_does_not_truncate_and_actual_page_length_advances():
+    from urllib.parse import parse_qs, urlparse
+
+    class Session:
+        offsets = []
+
+        def get(self, url, **kwargs):
+            offset = int(parse_qs(urlparse(url).query)["offset"][0])
+            self.offsets.append(offset)
+            page = _DAILY_TABLE[offset : offset + 1]
+            return type("Response", (), {"status_code": 200, "json": lambda _: page})()
+
+    session = Session()
+    assert (
+        paginate_table("metric_history", url="https://test.supabase.co", key="k", session=session)
+        == _DAILY_TABLE
+    )
+    assert session.offsets == [0, 1, 2, 3]
+
+
+def test_repeated_page_refused():
+    class Session:
+        def get(self, url, **kwargs):
+            return type("Response", (), {"status_code": 200, "json": lambda _: _DAILY_TABLE[:1]})()
+
+    with pytest.raises(ExportError, match="duplicate|progress"):
+        paginate_table("metric_history", url="https://test.supabase.co", key="k", session=Session())

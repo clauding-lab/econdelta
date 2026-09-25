@@ -42,7 +42,15 @@ _TIMEOUT = 60
 
 # Tables to export. metric_history_monthly is the fiscal backfill; metric_history
 # is the daily backend (its slow-cadence rows are the LLM/static tier).
-_TABLES = ("metric_history_monthly", "metric_history")
+_TABLE_KEYS = {
+    "metric_history_monthly": ("metric_id", "as_of"),
+    "metric_history": ("metric_id", "as_of"),
+    "metric_definitions": ("metric_id",),
+    "metric_definitions_monthly": ("metric_id",),
+    "auction_results": ("auction_date", "tenor"),
+    "media_review": ("id",),
+}
+_TABLES = tuple(_TABLE_KEYS)
 
 # Scraper-produced daily-market ids with no sources-v3.json cadence — re-scrapable
 # (the source republishes them every trading day), so --irreplaceable-only drops
@@ -80,15 +88,19 @@ def paginate_table(
     session: requests.Session | None = None, page_size: int = _PAGE_SIZE,
 ) -> list[dict]:
     """Return every row of ``table`` (all columns), paging past PostgREST's cap."""
+    if table not in _TABLE_KEYS or page_size < 1:
+        raise ExportError("unsupported table or invalid page size")
     base_url, resolved_key = _resolve_credentials(url, key)
     headers = {"apikey": resolved_key, "Authorization": f"Bearer {resolved_key}"}
     sess = session or requests.Session()
     rows: list[dict] = []
     offset = 0
+    seen: set[tuple] = set()
+    order = ",".join(f"{column}.asc" for column in _TABLE_KEYS[table])
     while True:
         endpoint = (
             f"{base_url}/rest/v1/{table}"
-            f"?select=*&order=metric_id.asc,as_of.asc&limit={page_size}&offset={offset}"
+            f"?select=*&order={order}&limit={page_size}&offset={offset}"
         )
         try:
             resp = sess.get(endpoint, headers=headers, timeout=_TIMEOUT)
@@ -97,10 +109,21 @@ def paginate_table(
         if resp.status_code not in (200, 206):
             raise ExportError(f"read {table} HTTP {resp.status_code}: {resp.text[:200]}")
         page = resp.json()
-        rows.extend(page)
-        if len(page) < page_size:
+        if not isinstance(page, list):
+            raise ExportError(f"read {table}: expected a row list")
+        if not page:
             break
-        offset += page_size
+        for row in page:
+            if not isinstance(row, dict) or any(row.get(k) is None for k in _TABLE_KEYS[table]):
+                raise ExportError(f"read {table}: missing row key")
+            identity = tuple(row[k] for k in _TABLE_KEYS[table])
+            if identity in seen:
+                raise ExportError(f"read {table}: duplicate key / pagination made no progress")
+            seen.add(identity)
+        rows.extend(page)
+        # The server's row cap can be lower than the requested page size.
+        # Only an EMPTY page proves completion; advance by rows actually returned.
+        offset += len(page)
     return rows
 
 
@@ -129,7 +152,7 @@ def export_history(
     now: datetime | None = None,
     config_path: Path = SOURCES_V3_PATH,
 ) -> Path:
-    """Fetch both history tables and write one timestamped JSON export.
+    """Fetch history, definitions and supporting evidence into one JSON export.
 
     Args:
         out_dir: directory to write into (created if missing).
