@@ -30,3 +30,22 @@ def test_source_periods_values_and_aligned_ratios():
 def test_missing_or_changed_primary_source_refuses_plan(tmp_path):
     with pytest.raises(RepairConflict):
         source_observations(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "metric_id",
+    [
+        "broad_money",
+        "reserve_money",
+        "banking_broad_money",
+        "banking_reserve_money",
+        "monthly_import_lc_opening",
+        "monthly_import_lc_settlement",
+    ],
+)
+def test_unmarked_wsei_july_observations_have_unknown_status(metric_id):
+    facts = source_observations(ROOT)
+    assert facts[metric_id]["2026-07-31"]["release_status"] == "unknown"
+    assert facts["broad_money"]["2026-06-30"]["release_status"] == "provisional"
+    assert facts["gdp_growth_fy_pct"]["2025-06-30"]["release_status"] == "revised"
+    assert facts["gdp_growth_fy_pct"]["2026-06-30"]["release_status"] == "provisional"

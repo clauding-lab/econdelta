@@ -19,7 +19,72 @@ from contextlib import contextmanager
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import Any, Iterator, Protocol
+from typing import Any, Iterator, Literal, NotRequired, Protocol, TypeAlias, TypedDict
+
+JSONValue: TypeAlias = None | bool | int | float | str | list["JSONValue"] | dict[str, "JSONValue"]
+Row: TypeAlias = dict[str, JSONValue]
+
+
+class RowKey(TypedDict):
+    metric_id: str
+    as_of: NotRequired[str]
+
+
+class Evidence(TypedDict):
+    path: str
+    sha256: str
+    locator: str
+
+
+class Backup(TypedDict):
+    table: str
+    path: str
+    sha256: str
+    rows: int
+
+
+class CodeCommits(TypedDict):
+    econdelta: str
+    brief: str
+
+
+class Operation(TypedDict):
+    operation_id: str
+    table: str
+    key: RowKey
+    before: Row | None
+    after: Row | None
+    reason: str
+    evidence: list[Evidence]
+    requires: list[str]
+
+
+class Manifest(TypedDict):
+    version: int
+    target_project: str
+    target: str
+    code_commits: CodeCommits
+    generated_at: str
+    backup_manifest_sha256: str
+    backups: list[Backup]
+    operations: list[Operation]
+    unresolved: list[str]
+
+
+States: TypeAlias = dict[str, Literal["intent", "confirmed"]]
+
+
+class ApplyReceipt(TypedDict):
+    manifest: Manifest
+    manifest_sha256: str
+    states: States
+
+
+class RestoreReceipt(TypedDict):
+    receipt_sha256: str
+    operations: list[Operation]
+    states: States
+
 
 KEYS = {
     "metric_history": ("metric_id", "as_of"),
@@ -36,8 +101,8 @@ class RepairConflict(RuntimeError):
 class Store(Protocol):
     target: str
 
-    def get(self, table: str, key: dict) -> dict | None: ...
-    def change(self, op: dict) -> None: ...
+    def get(self, table: str, key: RowKey) -> Row | None: ...
+    def change(self, op: Operation) -> None: ...
 
 
 def file_hash(path: Path) -> str:
@@ -106,7 +171,7 @@ def _read_checked(path: Path, expected: str) -> Any:
         raise RepairConflict(f"missing or invalid file: {path.name}") from exc
 
 
-def load_manifest(path: Path, *, expected_sha256: str, target: str) -> dict:
+def load_manifest(path: Path, *, expected_sha256: str, target: str) -> Manifest:
     """Validate all evidence and exact backup images before any target access."""
     manifest = _read_checked(path, expected_sha256)
     if manifest.get("version") != 1 or manifest.get("target") != target:
@@ -180,7 +245,9 @@ def _lock(path: Path) -> Iterator[None]:
         os.close(fd)
 
 
-def _execute(operations: list[dict], store: Store, receipt: dict, path: Path) -> dict:
+def _execute(
+    operations: list[Operation], store: Store, receipt: ApplyReceipt | RestoreReceipt, path: Path
+) -> None:
     # Check the whole batch first. On resume, only OUR durable intent can explain
     # an after-image. Otherwise a coincidentally identical row is still a conflict.
     for op in operations:
@@ -209,12 +276,11 @@ def _execute(operations: list[dict], store: Store, receipt: dict, path: Path) ->
             raise RepairConflict(f"after-image read-back mismatch: {op_id}")
         receipt["states"][op_id] = "confirmed"
         write_json(path, receipt)
-    return receipt
 
 
 def apply_manifest(
     path: Path, *, expected_sha256: str, target: str, store: Store, receipts_path: Path
-) -> dict:
+) -> ApplyReceipt:
     """Apply/resume one reviewed manifest; no network credentials accepted here."""
     manifest = load_manifest(path, expected_sha256=expected_sha256, target=target)
     if store.target != target:
@@ -222,7 +288,11 @@ def apply_manifest(
     with _lock(receipts_path):
         if receipts_path.with_suffix(".restore.json").exists():
             raise RepairConflict("restore has started; cannot resume apply")
-        receipt = {"manifest": manifest, "manifest_sha256": expected_sha256, "states": {}}
+        receipt: ApplyReceipt = {
+            "manifest": manifest,
+            "manifest_sha256": expected_sha256,
+            "states": {},
+        }
         if receipts_path.exists():
             receipt = json.loads(receipts_path.read_text())
             if (
@@ -230,10 +300,13 @@ def apply_manifest(
                 or receipt.get("manifest") != manifest
             ):
                 raise RepairConflict("receipts belong to another manifest")
-        return _execute(manifest["operations"], store, receipt, receipts_path)
+        _execute(manifest["operations"], store, receipt, receipts_path)
+        return receipt
 
 
-def restore_receipts(path: Path, *, expected_sha256: str, target: str, store: Store) -> dict:
+def restore_receipts(
+    path: Path, *, expected_sha256: str, target: str, store: Store
+) -> RestoreReceipt:
     """Restore only intent/confirmed operations, refusing intervening updates."""
     with _lock(path):
         receipt = _read_checked(path, expected_sha256)
@@ -263,7 +336,8 @@ def restore_receipts(path: Path, *, expected_sha256: str, target: str, store: St
             # live rows after an interrupted rollback would lose recovered intents.
             reverse = {"receipt_sha256": expected_sha256, "operations": operations, "states": {}}
             write_json(output, reverse)
-        return _execute(reverse["operations"], store, reverse, output)
+        _execute(reverse["operations"], store, reverse, output)
+        return reverse
 
 
 def main(argv: list[str] | None = None) -> int:

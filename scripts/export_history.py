@@ -19,6 +19,7 @@ Usage:
 Reads with the Supabase key in the environment (SUPABASE_SERVICE_ROLE_KEY on the
 box; the anon key also works for the anon-readable tables). See docs/backup-export.md.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -55,13 +56,29 @@ _TABLES = tuple(_TABLE_KEYS)
 # Scraper-produced daily-market ids with no sources-v3.json cadence — re-scrapable
 # (the source republishes them every trading day), so --irreplaceable-only drops
 # them alongside config daily ids and the dse_close_/dse_sector_heat_ prefixes.
-_SCRAPER_DAILY_IDS = frozenset({
-    "dsex", "ds30", "dses", "dsex_change", "dsex_change_pct",
-    "turnover_crore", "total_trades", "advancing", "declining", "unchanged",
-    "usd_bdt_mid", "usd_bdt_buy", "usd_bdt_sell", "eur_bdt", "gbp_bdt",
-    "gross_reserves_usd_bn", "import_cover_months",
-    "usd_bdt_exchange_rate", "fx_reserve_gross_and_bpm6",
-})
+_SCRAPER_DAILY_IDS = frozenset(
+    {
+        "dsex",
+        "ds30",
+        "dses",
+        "dsex_change",
+        "dsex_change_pct",
+        "turnover_crore",
+        "total_trades",
+        "advancing",
+        "declining",
+        "unchanged",
+        "usd_bdt_mid",
+        "usd_bdt_buy",
+        "usd_bdt_sell",
+        "eur_bdt",
+        "gbp_bdt",
+        "gross_reserves_usd_bn",
+        "import_cover_months",
+        "usd_bdt_exchange_rate",
+        "fx_reserve_gross_and_bpm6",
+    }
+)
 
 
 class ExportError(RuntimeError):
@@ -84,10 +101,19 @@ def _resolve_credentials(url: str | None, key: str | None) -> tuple[str, str]:
 
 
 def paginate_table(
-    table: str, *, url: str | None = None, key: str | None = None,
-    session: requests.Session | None = None, page_size: int = _PAGE_SIZE,
+    table: str,
+    *,
+    url: str | None = None,
+    key: str | None = None,
+    session: requests.Session | None = None,
+    page_size: int = _PAGE_SIZE,
 ) -> list[dict]:
-    """Return every row of ``table`` (all columns), paging past PostgREST's cap."""
+    """Read a stable table past PostgREST's cap; this is not a snapshot.
+
+    Pause every overlapping writer through final repair read-back. Concurrent
+    deletes can shift offsets and omit rows. A routine concurrent backup needs
+    a transactionally consistent snapshot; validate final counts and keys.
+    """
     if table not in _TABLE_KEYS or page_size < 1:
         raise ExportError("unsupported table or invalid page size")
     base_url, resolved_key = _resolve_credentials(url, key)
@@ -99,8 +125,7 @@ def paginate_table(
     order = ",".join(f"{column}.asc" for column in _TABLE_KEYS[table])
     while True:
         endpoint = (
-            f"{base_url}/rest/v1/{table}"
-            f"?select=*&order={order}&limit={page_size}&offset={offset}"
+            f"{base_url}/rest/v1/{table}?select=*&order={order}&limit={page_size}&offset={offset}"
         )
         try:
             resp = sess.get(endpoint, headers=headers, timeout=_TIMEOUT)
@@ -122,7 +147,7 @@ def paginate_table(
             seen.add(identity)
         rows.extend(page)
         # The server's row cap can be lower than the requested page size.
-        # Only an EMPTY page proves completion; advance by rows actually returned.
+        # For a stable table, stop on EMPTY; advance by rows actually returned.
         offset += len(page)
     return rows
 
@@ -146,7 +171,10 @@ def is_rescrapable_daily(metric_id: str, daily_config_ids: frozenset[str]) -> bo
 
 
 def export_history(
-    out_dir: Path, *, url: str | None = None, key: str | None = None,
+    out_dir: Path,
+    *,
+    url: str | None = None,
+    key: str | None = None,
     irreplaceable_only: bool = False,
     fetcher: Callable[[str], list[dict]] | None = None,
     now: datetime | None = None,
@@ -162,7 +190,7 @@ def export_history(
     Returns the written file path. Raises ExportError on a read/credential failure.
     """
     fetch = fetcher or (lambda table: paginate_table(table, url=url, key=key))
-    stamp = (now or datetime.now(timezone.utc))
+    stamp = now or datetime.now(timezone.utc)
     daily_ids = _daily_config_ids(config_path) if irreplaceable_only else frozenset()
 
     tables: dict[str, list[dict]] = {}
@@ -200,17 +228,26 @@ def export_history(
 
 
 def main(argv: list[str] | None = None) -> int:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-    p = argparse.ArgumentParser(description="Off-box export of irreplaceable EconDelta history (E2.4)")
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
+    )
+    p = argparse.ArgumentParser(
+        description="Off-box export of irreplaceable EconDelta history (E2.4)"
+    )
     p.add_argument("--out-dir", type=Path, default=Path("exports"))
-    p.add_argument("--irreplaceable-only", action="store_true",
-                   help="drop re-scrapable daily market series (lean, committable snapshot)")
+    p.add_argument(
+        "--irreplaceable-only",
+        action="store_true",
+        help="drop re-scrapable daily market series (lean, committable snapshot)",
+    )
     p.add_argument("--url", type=str, default=None)
     p.add_argument("--key", type=str, default=None)
     args = p.parse_args(argv)
     try:
         export_history(
-            args.out_dir, url=args.url, key=args.key,
+            args.out_dir,
+            url=args.url,
+            key=args.key,
             irreplaceable_only=args.irreplaceable_only,
         )
     except ExportError as e:

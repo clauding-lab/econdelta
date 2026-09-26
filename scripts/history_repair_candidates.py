@@ -12,8 +12,21 @@ import argparse
 import json
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Literal, TypedDict
 
-from scripts.repair_observation_history import KEYS, RepairConflict, file_hash, write_json
+from scripts.repair_observation_history import (
+    KEYS,
+    Backup,
+    CodeCommits,
+    Evidence,
+    Manifest,
+    Operation,
+    RepairConflict,
+    Row,
+    RowKey,
+    file_hash,
+    write_json,
+)
 from utils.observations import BRIEF_ALIASES, BRIEF_CONVERSIONS
 
 SOURCES = {
@@ -36,7 +49,15 @@ SOURCES = {
 }
 
 
-def evidence(root: Path, source: str, locator: str) -> dict:
+class SourceFact(TypedDict):
+    value: int | float
+    unit: str
+    release_status: Literal["unknown", "provisional", "revised"]
+    evidence: list[Evidence]
+    parents: list[str]
+
+
+def evidence(root: Path, source: str, locator: str) -> Evidence:
     """Bind each source fact to a preserved, hash-pinned primary document."""
     relative, digest = SOURCES[source]
     path = root / relative
@@ -45,11 +66,19 @@ def evidence(root: Path, source: str, locator: str) -> dict:
     return {"path": str(path.resolve()), "sha256": digest, "locator": locator}
 
 
-def source_observations(root: Path) -> dict:
+def source_observations(root: Path) -> dict[str, dict[str, SourceFact]]:
     """Explicit period/value facts and aliases rebuilt only from aligned parents."""
-    facts: dict[str, dict] = {}
+    facts: dict[str, dict[str, SourceFact]] = {}
 
-    def add(mid, period, value, source, locator, unit="BDT crore", status="provisional"):
+    def add(
+        mid: str,
+        period: str,
+        value: int | float,
+        source: str,
+        locator: str,
+        unit: str = "BDT crore",
+        status: Literal["unknown", "provisional", "revised"] = "provisional",
+    ) -> None:
         facts.setdefault(mid, {})[period] = {
             "value": value,
             "unit": unit,
@@ -147,6 +176,7 @@ def source_observations(root: Path) -> dict:
             "wsei",
             f"physical page 2; LC {label}; July FY27; USD billion multiplied by 1000",
             "USD million",
+            status="unknown",
         )
     add(
         "broad_money",
@@ -154,9 +184,15 @@ def source_observations(root: Path) -> dict:
         2422923.9,
         "wsei",
         "physical page 1; Broad Money (M2); July 2026",
+        status="unknown",
     )
     add(
-        "reserve_money", "2026-07-31", 463461.4, "wsei", "physical page 1; Reserve Money; July 2026"
+        "reserve_money",
+        "2026-07-31",
+        463461.4,
+        "wsei",
+        "physical page 1; Reserve Money; July 2026",
+        status="unknown",
     )
     add(
         "gdp_growth_fy_pct",
@@ -199,8 +235,8 @@ def source_observations(root: Path) -> dict:
 
 
 def build_candidate(
-    backup_dir: Path, root: Path, *, target: str, commits: dict, generated_at: str
-) -> dict:
+    backup_dir: Path, root: Path, *, target: str, commits: CodeCommits, generated_at: str
+) -> Manifest:
     """Generate exact images from the verified export, with unsupported dispositions."""
     backup_manifest = json.loads((backup_dir / "manifest.json").read_text())
     if (
@@ -208,7 +244,8 @@ def build_candidate(
         or len(backup_manifest["tables"]) != 12
     ):
         raise RepairConflict("expected verified twelve-table project backup")
-    tables, backups = {}, []
+    tables: dict[str, list[Row]] = {}
+    backups: list[Backup] = []
     for table, ref in backup_manifest["tables"].items():
         path = backup_dir / f"{table}.json"
         if file_hash(path) != ref["sha256"]:
@@ -227,14 +264,21 @@ def build_candidate(
                 "rows": len(rows),
             }
         )
-    operations = []
+    operations: list[Operation] = []
     indexes = {
         table: {tuple(r[k] for k in KEYS[table]): r for r in rows}
         for table, rows in tables.items()
         if table in KEYS
     }
 
-    def operation(table, key, after, reason, refs, requires=()):
+    def operation(
+        table: str,
+        key: RowKey,
+        after: Row | None,
+        reason: str,
+        refs: list[Evidence],
+        requires: list[str] | tuple[str, ...] = (),
+    ) -> str:
         before = indexes[table].get(tuple(key[k] for k in KEYS[table]))
         op_id = f"{table}:" + ":".join(str(key[k]) for k in KEYS[table])
         operations.append(

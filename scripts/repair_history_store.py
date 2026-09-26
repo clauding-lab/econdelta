@@ -14,10 +14,10 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from scripts.repair_observation_history import KEYS, RepairConflict, same
+from scripts.repair_observation_history import KEYS, Operation, RepairConflict, Row, RowKey, same
 
 
-def _identity(table: str, key: dict) -> None:
+def _identity(table: str, key: RowKey) -> None:
     if table not in KEYS or set(key) != set(KEYS[table]):
         raise RepairConflict("unsupported table/key")
 
@@ -30,7 +30,7 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 class RestStore:
     """Supabase project pinned by exact HTTPS hostname; keys only from env."""
 
-    def __init__(self, target: str):
+    def __init__(self, target: str) -> None:
         self.target = target
         project = target.removeprefix("supabase:")
         if not re.fullmatch(r"[a-z]{20}", project):
@@ -45,7 +45,7 @@ class RestStore:
             raise RepairConflict("approved service key must come from environment")
         self.opener = urllib.request.build_opener(_NoRedirect())
 
-    def _request(self, method: str, table: str, key: dict, body: dict | None = None) -> list:
+    def _request(self, method: str, table: str, key: RowKey, body: Row | None = None) -> list[Row]:
         _identity(table, key)
         params = [(k, f"eq.{v}") for k, v in key.items()] if method != "POST" else []
         params.append(("select", "*"))
@@ -76,11 +76,11 @@ class RestStore:
             raise RepairConflict("exact-key response is not zero/one rows")
         return rows
 
-    def get(self, table: str, key: dict) -> dict | None:
+    def get(self, table: str, key: RowKey) -> Row | None:
         rows = self._request("GET", table, key)
         return rows[0] if rows else None
 
-    def change(self, op: dict) -> None:
+    def change(self, op: Operation) -> None:
         if not same(self.get(op["table"], op["key"]), op["before"]):
             raise RepairConflict("row changed immediately before REST mutation")
         method = "DELETE" if op["after"] is None else ("POST" if op["before"] is None else "PATCH")
@@ -93,7 +93,7 @@ class RestStore:
 class DockerStore:
     """Existing isolated PostgreSQL only; local docker exec through Unix socket."""
 
-    def __init__(self, target: str):
+    def __init__(self, target: str) -> None:
         self.target = target
         match = re.fullmatch(r"docker:([a-zA-Z0-9_-]+)/([a-zA-Z0-9_]+)", target)
         if not match:
@@ -138,16 +138,16 @@ class DockerStore:
         return result.stdout
 
     @staticmethod
-    def _json(value: dict) -> str:
+    def _json(value: Row | RowKey) -> str:
         encoded = json.dumps(value, allow_nan=False).encode().hex()
         return f"convert_from(decode('{encoded}', 'hex'), 'UTF8')::jsonb"
 
-    def _where(self, table: str, key: dict) -> str:
+    def _where(self, table: str, key: RowKey) -> str:
         _identity(table, key)
         record = f"jsonb_populate_record(NULL::public.{table}, {self._json(key)})"
         return " AND ".join(f"t.{k} = ({record}).{k}" for k in KEYS[table])
 
-    def get(self, table: str, key: dict) -> dict | None:
+    def get(self, table: str, key: RowKey) -> Row | None:
         where = self._where(table, key)
         rows = json.loads(
             self._sql(
@@ -158,7 +158,7 @@ class DockerStore:
             raise RepairConflict("nonunique exact key")
         return rows[0] if rows else None
 
-    def change(self, op: dict) -> None:
+    def change(self, op: Operation) -> None:
         table, key = op["table"], op["key"]
         where = self._where(table, key)
         before, after = op["before"], op["after"]
