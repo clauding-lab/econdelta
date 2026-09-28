@@ -180,9 +180,102 @@ def source_monitor(*, directory: Path | None = None, now: datetime | None = None
                         row["database_check_status"] = (
                             "checked" if 0 <= age <= 26 * 3600 else "not-recently-checked"
                         )
-            except (OSError, ValueError, KeyError, TypeError):
-                pass  # explicit unknown, never "all current"
+            except (OSError, ValueError, KeyError, TypeError, AttributeError):
+                pass  # explicit unknown, never "all current" (and never a crashed aggregate)
         result[mid] = row
+    return result
+
+
+# latest.json sources_status key -> the family's monthly metric ids. Shared with The Brief
+# (tests/fixtures/contracts/brief-observations-v1.json, upstream_liveness_contract).
+UPSTREAM_FAMILIES: dict[str, tuple[str, ...]] = {
+    "cpi_upstream_poll": ("cpi_12m_avg_monthly", "cpi_p2p_food_monthly", "cpi_p2p_nonfood_monthly"),
+    "m2_upstream_poll": ("m2_growth_yoy_monthly",),
+}
+_FAMILY_LABELS = {"cpi_upstream_poll": "CPI", "m2_upstream_poll": "M2"}
+# Why a source_monitor row is not liveness -> (SourceStatus status, the reason printed).
+_POLL_GAPS = {
+    "not-recently-checked": ("stale", "last upstream poll older than the 26-hour job-check window"),
+    "database-observations": ("missing", "database reread only, not an upstream source poll"),
+    "untyped": ("missing", "untyped receipt, not proof of an upstream poll"),
+    "not-checked": ("missing", "no readable source-poll receipt"),
+}
+
+
+def _poll_gap(row: dict) -> tuple[str, str] | None:
+    """None only for a typed upstream-source receipt checked within the job window."""
+    job = row.get("job_status")
+    if job == "checked":
+        return None
+    if job == "unknown":
+        kind = row.get("evidence_kind")
+        return _POLL_GAPS["database-observations" if kind == "database-observations" else "untyped"]
+    return _POLL_GAPS["not-recently-checked" if job == "not-recently-checked" else "not-checked"]
+
+
+def _behind_source(vintage: date | None, row: dict) -> tuple[str, str] | None:
+    """A live poll is healthy lag only if our own table already holds the period the page
+    states (R2 fix H3 review; controller ruling (2)). `row` is the metric's E6 row, which
+    carries the monthly leg's database-reread period; months are compared, not days."""
+    try:
+        recorded = date.fromisoformat(row["latest_database_period"])
+    except (KeyError, TypeError, ValueError):
+        recorded = None
+    if vintage is None or recorded is None:
+        return ("missing", "no recorded month to compare the source's period with")
+    if (vintage.year, vintage.month) > (recorded.year, recorded.month):
+        return (
+            "stale",
+            "source states a newer period than we have recorded "
+            f"(page {vintage.isoformat()}, recorded {recorded.isoformat()})",
+        )
+    return None
+
+
+def upstream_poll_status(
+    monitor: dict[str, dict],
+    polls: dict[str, dict] | None = None,
+    now: datetime | None = None,
+) -> dict[str, dict]:
+    """source_monitor rows -> one SourceStatus-shaped entry per CPI/M2 family.
+
+    `polls` (R2 fix H3, utils.upstream_poll.read_polls) holds the fetch stage's own
+    upstream-poll receipts by monthly id; where one exists it decides, otherwise the E6 row
+    does. A database reread, an untyped or an unreadable receipt is never "ok"; nor is a live
+    poll whose page states a newer month than our own table holds, or one we cannot compare.
+    A failed poll outranks missing evidence, which outranks an old poll or a pipeline behind
+    its source; every gap names its metric ids.
+    `last_success`/`age_hours` are the family's oldest successful poll, known only when every
+    member has one.
+    """
+    polls = polls or {}
+    result = {}
+    for key, metric_ids in UPSTREAM_FAMILIES.items():
+        gaps: dict[tuple[str, str], list[str]] = {}
+        for mid in metric_ids:
+            if mid in polls:
+                gap = polls[mid]["gap"] or _behind_source(
+                    polls[mid].get("vintage"), monitor.get(mid, {})
+                )
+            else:
+                gap = _poll_gap(monitor.get(mid, {}))
+            if gap is not None:
+                gaps.setdefault(gap, []).append(mid)
+        states = {state for state, _ in gaps}
+        status = next((s for s in ("failed", "missing", "stale") if s in states), "ok")
+        detail = "; ".join(f"{phrase} ({', '.join(ids)})" for (_, phrase), ids in gaps.items())
+        label = _FAMILY_LABELS[key]
+        error = f"{label} upstream source-poll liveness not established: {detail}" if gaps else None
+        successes = [polls.get(mid, {}).get("last_success") for mid in metric_ids]
+        last = min(successes) if all(successes) else None
+        age = round((now - last).total_seconds() / 3600, 2) if last and now else None
+        result[key] = {
+            "status": status,
+            "last_success": last,
+            "age_hours": age,
+            "url": None,
+            "error": error,
+        }
     return result
 
 

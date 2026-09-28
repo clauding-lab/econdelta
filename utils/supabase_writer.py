@@ -44,7 +44,7 @@ from typing import Optional as _Optional
 import requests
 
 from utils.alert_dedup import should_alert_today
-from utils.observations import Observation, eligible, finite_number
+from utils.observations import Observation, eligible, finite_number, latest_permitted_date
 from utils.run_log_capture import RingBufferHandler, scrub_secrets
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -202,12 +202,15 @@ def _rows_from_data(
             if not finite_number(value):
                 continue
             effective_as_of = overrides.get(metric_id, as_of)
+            write_day = (ingested_at or datetime.now(timezone.utc)).date()
             if observations is not None:
                 obs = observations.get(metric_id)
                 if obs is None or not eligible(obs, today=as_of) or obs.value != value:
                     continue
                 effective_as_of = obs.as_of
-            if effective_as_of > (ingested_at or datetime.now(timezone.utc)).date():
+                # A Bangladesh-dated record may carry the Dhaka day of its capture.
+                write_day = latest_permitted_date(obs, today=write_day)
+            if effective_as_of > write_day:
                 continue
             row = {
                 "metric_id": metric_id,
@@ -1150,10 +1153,19 @@ def upsert_metric_history_monthly(
     Raises:
         SupabaseWriteError: on missing creds, network failure, or non-2xx.
     """
-    return _upsert_monthly_table(
-        _MONTHLY_HISTORY_TABLE, rows, "metric_id,as_of",
-        url=url, service_key=service_key, timeout=timeout, session=session,
-    )
+    from utils.write_receipts import confirm_monthly, record_write_failure
+
+    try:
+        count = _upsert_monthly_table(
+            _MONTHLY_HISTORY_TABLE, rows, "metric_id,as_of",
+            url=url, service_key=service_key, timeout=timeout, session=session,
+        )
+    except Exception as exc:
+        record_write_failure(rows, exc)  # charged to each leg in the batch; still raised
+        raise
+
+    confirm_monthly(rows)
+    return count
 
 
 def upsert_metric_definitions_monthly(

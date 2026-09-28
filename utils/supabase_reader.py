@@ -16,6 +16,8 @@ keeping the read error contract clean for callers that catch it.
 from __future__ import annotations
 
 import os
+import re
+from collections.abc import Iterable
 from datetime import date, datetime, timezone
 from typing import Any
 
@@ -88,6 +90,49 @@ def get_metric_history_monthly(metric_id: str, *, limit: int = 36, url: str | No
     """
     path = f"metric_history_monthly?metric_id=eq.{metric_id}&order=as_of.desc&limit={limit}"
     return _get(path, url=url, key=key, session=session)
+
+
+def get_metric_history_monthly_at(metric_id: str, as_ofs: list[str], *, url: str | None = None,
+                                  key: str | None = None,
+                                  session: requests.Session | None = None) -> list[dict[str, Any]]:
+    """The exact ``(metric_id, as_of)`` rows of ``metric_history_monthly`` -- no recency window.
+
+    Write receipts read back precisely the keys they wrote, however old (an official
+    backfill month can sit behind more than ``get_metric_history_monthly``'s newest 36).
+    Each ``as_of`` must be an ISO date; anything else raises ``ValueError`` before any request.
+    """
+    days = sorted({date.fromisoformat(str(d)).isoformat() for d in as_ofs})
+    if not days:
+        return []
+    path = f"metric_history_monthly?metric_id=eq.{metric_id}&as_of=in.({','.join(days)})"
+    return _get(path, url=url, key=key, session=session)
+
+
+_METRIC_ID = re.compile(r"[A-Za-z0-9_-]+")
+
+
+def get_metric_history_at(keys: Iterable[tuple[str, str]], *, url: str | None = None,
+                          key: str | None = None,
+                          session: requests.Session | None = None) -> list[dict[str, Any]]:
+    """The exact ``(metric_id, as_of)`` rows of the DAILY ``metric_history`` -- one request, any age.
+
+    Daily sibling of ``get_metric_history_monthly_at`` for receipts that read back the keys
+    they wrote across several metrics at once (R2 fix H2: approved press overrides). The
+    ``in.()`` x ``in.()`` filter can return pairs nobody asked for; only requested pairs are
+    returned. An id PostgREST cannot list verbatim, or a non-ISO date, raises ``ValueError``
+    before any request.
+    """
+    wanted = {(str(mid), date.fromisoformat(str(day)).isoformat()) for mid, day in keys}
+    if not wanted:
+        return []
+    ids, days = sorted({mid for mid, _ in wanted}), sorted({day for _, day in wanted})
+    unsafe = [mid for mid in ids if not _METRIC_ID.fullmatch(mid)]
+    if unsafe:
+        raise ValueError(f"metric id(s) cannot be read back by exact key: {len(unsafe)}")
+    path = (f"metric_history?select=metric_id,as_of,value,source"
+            f"&metric_id=in.({','.join(ids)})&as_of=in.({','.join(days)})")
+    rows = _get(path, url=url, key=key, session=session)
+    return [r for r in rows if (r.get("metric_id"), str(r.get("as_of"))[:10]) in wanted]
 
 
 def get_recent_run_ok(source: str, *, within_hours: int, url: str | None = None,

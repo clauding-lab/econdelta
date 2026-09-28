@@ -733,6 +733,28 @@ class TestM2MonthlyAppendRows:
 
 
 class TestM2SubPath:
+    @pytest.fixture(autouse=True)
+    def _no_outbound_network(self, monkeypatch):
+        """These tests are offline (the CI workflow calls the suite hermetic). The imports leg
+        catches every fetch error, so a refusal alone would pass silently: each DNS lookup or
+        socket connect is recorded, and any attempt fails the test at teardown."""
+        import socket
+
+        attempts: list[str] = []
+
+        def _refuse(kind: str):
+            def _blocked(*args, **kwargs):
+                attempts.append(kind)
+                raise OSError(f"outbound network blocked in tests ({kind})")
+            return _blocked
+
+        monkeypatch.setattr(socket, "getaddrinfo", _refuse("getaddrinfo"))
+        monkeypatch.setattr(socket, "create_connection", _refuse("create_connection"))
+        monkeypatch.setattr(socket.socket, "connect", _refuse("connect"))
+        monkeypatch.setattr(socket.socket, "connect_ex", _refuse("connect_ex"))
+        yield
+        assert attempts == [], f"test tried to reach the network: {attempts}"
+
     def test_m2_writes_alongside_cpi(self, monkeypatch):
         import utils.supabase_reader as reader
         import utils.supabase_writer as writer
@@ -746,6 +768,7 @@ class TestM2SubPath:
         monkeypatch.setattr(reader, "get_metric_history", fake_get_metric_history)
         monkeypatch.setattr(reader, "get_metric_history_monthly", lambda *a, **k: [])
         monkeypatch.setattr(agg, "_fetch_remittance_html", lambda: (_ for _ in ()).throw(FetchError("x")))
+        monkeypatch.setattr(agg, "_fetch_imports_mei_pdf", lambda: (_ for _ in ()).throw(FetchError("x")))
 
         captured = []
         monkeypatch.setattr(
@@ -771,6 +794,7 @@ class TestM2SubPath:
         monkeypatch.setattr(reader, "get_metric_history", fake_get_metric_history)
         monkeypatch.setattr(reader, "get_metric_history_monthly", lambda *a, **k: [])
         monkeypatch.setattr(agg, "_fetch_remittance_html", lambda: (_ for _ in ()).throw(FetchError("x")))
+        monkeypatch.setattr(agg, "_fetch_imports_mei_pdf", lambda: (_ for _ in ()).throw(FetchError("x")))
         monkeypatch.setattr(writer, "upsert_metric_history_monthly", lambda *a, **k: 0)
 
         notify_calls = []

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import asdict, dataclass, replace
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 from typing import Iterable, Literal, Mapping
 
 
@@ -32,16 +32,43 @@ class Observation:
 WRITER_CONFIRMATION_IDS = frozenset({"policy_rate_repo", "policy_rate_sdf", "policy_rate_slf"})
 MAX_QUARANTINE_FIELDS = 5
 
+# Producer sources whose record dates are Bangladesh calendar days: bb_forex (the
+# scraper's date.today() on the Dhaka box; reserves use BB's month end), dse_market
+# (the DSE page's trading date) and auction_results (BB auction dates). Other
+# families keep the UTC comparison: commodity quote dates come from exchange price
+# history, and a v3 record names only its indicator id, not its publisher. The Brief
+# pins the same set via bangladesh_calendar_contract in the shared contract fixture.
+BANGLADESH_CALENDAR_SOURCES = frozenset({"auction_results", "bb_forex", "dse_market"})
+BANGLADESH_TZ = timezone(timedelta(hours=6))  # Asia/Dhaka: fixed UTC+6, no DST
+
 
 def finite_number(value: object) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+
+def latest_permitted_date(observation: Observation, *, today: date) -> date:
+    """The latest record date that is not in the future, given the pipeline's UTC ``today``.
+
+    A Bangladesh-dated record is in the future when it is dated after the Dhaka calendar
+    date of its own capture; the 02:56 BDT aggregate is still the previous UTC day, so
+    that date may be one day past ``today``. A capture on a later UTC day than ``today``
+    is not trusted to move the bound. Every other record keeps ``today``.
+    """
+    captured = observation.captured_at
+    if (
+        observation.source not in BANGLADESH_CALENDAR_SOURCES
+        or captured.utcoffset() is None
+        or captured.astimezone(timezone.utc).date() > today
+    ):
+        return today
+    return captured.astimezone(BANGLADESH_TZ).date()
 
 
 def eligible(observation: Observation, *, today: date) -> bool:
     return (
         finite_number(observation.value)
         and observation.as_of is not None
-        and observation.as_of <= today
+        and observation.as_of <= latest_permitted_date(observation, today=today)
         and observation.quality in {"verified", "held"}
         and (
             observation.date_basis == "observation"
@@ -387,7 +414,7 @@ def _history_observation(value: object, metric_id: str) -> Observation | None:
         obs.metric_id != metric_id
         or not finite_number(obs.value)
         or obs.as_of is None
-        or obs.as_of > obs.captured_at.date()
+        or obs.as_of > latest_permitted_date(obs, today=obs.captured_at.date())
         or not isinstance(obs.quality, str)
         or obs.quality not in {"verified", "held"}
         or not isinstance(obs.date_basis, str)
@@ -459,7 +486,7 @@ def quarantine_observations(
             records = archived.get("observations") if isinstance(archived, Mapping) else None
             if isinstance(records, Mapping):
                 obs = _history_observation(records.get(root), root)
-                if obs is not None and obs.as_of <= today:
+                if obs is not None and obs.as_of <= latest_permitted_date(obs, today=today):
                     candidates.append(obs)
                 continue
             # Compatibility with a historical caller that already carries

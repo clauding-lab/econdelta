@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Literal, TypedDict
 
@@ -47,6 +47,104 @@ SOURCES = {
         "d9cc004c34629f628368c21c76683d6564691472781daab7bc1bdae056e3efc0",
     ),
 }
+
+
+# Owner decision (d), 26 Sep 2026 BDT. EconDelta re-stamped the standing fiscal-year
+# cumulative NBR collection (BRIEF_CONVERSIONS child of tax_revenue, x0.00001) with each
+# capture date (E landmine 47), so these as_of dates are capture days, not periods.
+# Exactly the reviewed backup keys, each with its exact reviewed value, are excluded; any
+# other shape (e.g. a later recapture with more restamps, or a value that differs on any
+# reviewed day) is refused and needs a new owner decision. Owner decision (l) extends this
+# to the parent tax_revenue and its alias (NBR_PARENT_RESTAMP_RUNS below).
+NBR_RESTAMP_ID = "fiscal_nbr_collected_trn"
+NBR_RESTAMP_WINDOW = (date(2026, 5, 2), date(2026, 9, 24))
+NBR_RESTAMP_MISSING_DAYS = frozenset(
+    {"2026-06-14", "2026-06-15", "2026-08-30", "2026-08-31", "2026-09-01", "2026-09-09"}
+)
+# (reviewed value, first as_of, last as_of), inclusive, exactly as in the hashed 25 Sep
+# backup export (controller ruling, R2 fix H1: bind every reviewed day to its value).
+NBR_RESTAMP_RUNS: tuple[tuple[float, str, str], ...] = (
+    (1.19, "2026-05-02", "2026-05-02"),
+    (2.88, "2026-05-03", "2026-06-01"),
+    (3.27, "2026-06-02", "2026-06-28"),
+    (3.61, "2026-06-29", "2026-09-05"),
+    (4.15, "2026-09-06", "2026-09-24"),
+)
+NBR_RESTAMP_REASON = (
+    "Owner decision (d): archive/exclude a daily restamp of the fiscal-year cumulative NBR "
+    "collection (tax_revenue x0.00001); as_of is the capture date, not the collection "
+    "period. Original complete row remains in hashed backup. Parent tax_revenue and alias "
+    "nbr_fytd_collected_cr unchanged pending a separate owner decision."
+)
+# Owner decision (l), 28 Sep 2026 BDT, extends (d): the parent tax_revenue (BDT crore) and its
+# plain alias nbr_fytd_collected_cr carry the same restamp on the same 140 reviewed dates.
+# Each id is bound to its own reviewed (value, first as_of, last as_of) runs, inclusive,
+# exactly as in the hashed 25 Sep backup export (the alias's first run differs from the
+# parent's). The retired news corroborators nbr_fytd_collected_dailystar/_tbs (deprecated,
+# alias_of tax_revenue) are in neither decision and are never touched here.
+NBR_PARENT_RESTAMP_RUNS: dict[str, tuple[tuple[float, str, str], ...]] = {
+    "tax_revenue": (
+        (119478.0, "2026-05-02", "2026-05-02"),
+        (287862.59, "2026-05-03", "2026-06-01"),
+        (326928.16, "2026-06-02", "2026-06-28"),
+        (360642.0, "2026-06-29", "2026-09-05"),
+        (415473.0, "2026-09-06", "2026-09-24"),
+    ),
+    "nbr_fytd_collected_cr": (
+        (287431.0, "2026-05-02", "2026-05-24"),
+        (287862.59, "2026-05-25", "2026-06-01"),
+        (326928.16, "2026-06-02", "2026-06-28"),
+        (360642.0, "2026-06-29", "2026-09-05"),
+        (415473.0, "2026-09-06", "2026-09-24"),
+    ),
+}
+NBR_PARENT_RESTAMP_REASON = (
+    "Owner decision (l), extending (d): archive/exclude a daily restamp of the fiscal-year "
+    "cumulative NBR collection in BDT crore (tax_revenue or its alias nbr_fytd_collected_cr); "
+    "as_of is the capture date, not the collection period. Original complete row remains in "
+    "hashed backup. Retired corroborators nbr_fytd_collected_dailystar/_tbs unchanged."
+)
+
+
+def reviewed_nbr_restamp_dates() -> list[str]:
+    """The 140 as_of dates the owner reviewed under decisions (d) and (l)."""
+    first, last = NBR_RESTAMP_WINDOW
+    days = (first + timedelta(days=n) for n in range((last - first).days + 1))
+    return [d.isoformat() for d in days if d.isoformat() not in NBR_RESTAMP_MISSING_DAYS]
+
+
+def reviewed_nbr_restamp_values(
+    runs: tuple[tuple[float, str, str], ...] = NBR_RESTAMP_RUNS,
+) -> list[float]:
+    """The reviewed value of each reviewed_nbr_restamp_dates() day, in the same order."""
+    return [_reviewed_nbr_restamp_value(day, runs) for day in reviewed_nbr_restamp_dates()]
+
+
+def _reviewed_nbr_restamp_value(as_of: str, runs: tuple[tuple[float, str, str], ...]) -> float:
+    (value,) = (v for v, first, last in runs if first <= as_of <= last)
+    return value
+
+
+def nbr_restamp_rows(
+    history: list[Row],
+    metric_id: str = NBR_RESTAMP_ID,
+    runs: tuple[tuple[float, str, str], ...] = NBR_RESTAMP_RUNS,
+    decision: str = "(d)",
+) -> list[Row]:
+    """Backup rows for decision (d) or (l); refuse unless they are exactly the reviewed restamps."""
+    family = sorted(
+        (r for r in history if r["metric_id"] == metric_id), key=lambda r: str(r["as_of"])
+    )
+    if (
+        [r["as_of"] for r in family] != reviewed_nbr_restamp_dates()
+        or [r["value"] for r in family] != reviewed_nbr_restamp_values(runs)
+        or any(r["source"] != "EconDelta" or r["provenance"] is not None for r in family)
+    ):
+        raise RepairConflict(
+            f"{metric_id} backup differs from the 140 reviewed restamp keys and values of "
+            f"owner decision {decision}; a recaptured snapshot needs a new owner decision"
+        )
+    return family
 
 
 class SourceFact(TypedDict):
@@ -406,6 +504,17 @@ def build_candidate(
             operation(
                 "metric_history", {"metric_id": mid, "as_of": period}, None, reason, refs, deps
             )
+    # No prerequisite: the parent tax_revenue has no verified fact here, so no conversion
+    # child is rebuilt and nothing in this manifest depends on these rows.
+    for row in nbr_restamp_rows(tables["metric_history"]):
+        key = {"metric_id": NBR_RESTAMP_ID, "as_of": str(row["as_of"])}
+        operation("metric_history", key, None, NBR_RESTAMP_REASON, [backup_ref])
+    # Decision (l): same rule for the parent and its alias. Neither has a verified fact here
+    # (nor rebuilds one as alias/conversion), so these exclusions have no prerequisite either.
+    for metric_id, runs in NBR_PARENT_RESTAMP_RUNS.items():
+        for row in nbr_restamp_rows(tables["metric_history"], metric_id, runs, "(l)"):
+            key = {"metric_id": metric_id, "as_of": str(row["as_of"])}
+            operation("metric_history", key, None, NBR_PARENT_RESTAMP_REASON, [backup_ref])
     dates = {
         "tbill_91d_yield_monthly": ("2026-05-24", 10.15),
         "tbill_182d_yield_monthly": ("2026-05-24", 10.4085),

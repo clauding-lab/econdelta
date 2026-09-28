@@ -10,12 +10,14 @@ import argparse
 import json
 import logging
 import sys
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from urllib.request import Request, urlopen
 
 import parsers.gsom_total_row  # noqa: F401 — registry side-effect
+import parsers.html_dated_table_row  # noqa: F401 — registry side-effect (upstream-poll vintage)
 import parsers.html_table_row  # noqa: F401 — registry side-effect
+import parsers.pdf_table_row  # noqa: F401 — registry side-effect (upstream-poll vintage)
 from fetchers.base import FetchError, FetchResult
 from fetchers.dated_form import fetch_dated_form
 from fetchers.html_fetcher import fetch_html
@@ -27,6 +29,8 @@ from fetchers.tls import ssl_context_for
 from parsers.registry import get_parser
 from utils.floor import assess_fetch_floor
 from utils.notifier import notify
+from utils.upstream_poll import DIRECTORY_NAME as UPSTREAM_POLL_DIRECTORY
+from utils.upstream_poll import POLLED_SOURCE_IDS, record_upstream_poll
 
 REPO_ROOT = Path(__file__).resolve().parent
 DEFAULT_CONFIG = REPO_ROOT / "config" / "sources-v3.json"
@@ -189,6 +193,58 @@ def _fetch_one(indicator: dict, data_root: Path) -> FetchResult | None:
     return None
 
 
+def _poll_clock() -> datetime:
+    """When a failed poll was attempted (a successful one carries its fetcher's own time)."""
+    return datetime.now(timezone.utc)
+
+
+def _read_vintage(indicator: dict, result: FetchResult) -> tuple[date | None, str]:
+    """The period the fetched page states, read without any model call: the configured
+    deterministic parser's `source_as_of`, else its `recover_source_as_of` -- the same date
+    the parse stage stamps on an LLM-extracted value (MEI PDF, landmine 29). Returns
+    (vintage, why none) and never raises."""
+    parser = get_parser(indicator["parse"]["deterministic"])
+    why = "the page states no vintage"
+    try:
+        vintage = parser.parse(result, indicator["fetch"].get("task", "")).source_as_of
+    except Exception as exc:  # noqa: BLE001 -- a page we cannot read is a poll outcome, not a crash
+        vintage, why = None, type(exc).__name__
+    recover = getattr(parser, "recover_source_as_of", None)
+    if vintage is None and recover is not None:
+        try:
+            vintage = recover(result)
+        except Exception as exc:  # noqa: BLE001
+            why = type(exc).__name__
+    return vintage, why
+
+
+def _record_upstream_poll(indicator: dict, data_root: Path, *, result: FetchResult | None = None,
+                          failure: Exception | None = None) -> None:
+    """R2 fix H3: this fetch IS the upstream CPI/M2 poll, so it leaves a typed receipt in its
+    own directory (never the monthly legs' database-reread receipts). Local file only; a
+    receipt problem is logged and never costs the fetch stage."""
+    if indicator["id"] not in POLLED_SOURCE_IDS:
+        return
+    status, vintage, reason = "failed", None, f"fetch failed ({type(failure).__name__})"
+    checked_at = _poll_clock()
+    try:
+        if result is not None:
+            vintage, why = _read_vintage(indicator, result)
+            status = "ok" if vintage is not None else "unknown"
+            reason = None if vintage is not None else (
+                f"fetched, but no source vintage could be read from the page ({why})")
+            checked_at = result.fetched_at
+        record_upstream_poll(
+            indicator["id"], status=status, checked_at=checked_at,
+            source_url=result.source_url if result is not None else indicator["fetch"]["url"],
+            latest_source_vintage=vintage, reason=reason,
+            directory=data_root / UPSTREAM_POLL_DIRECTORY,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("upstream poll receipt not written for %s: %s", indicator["id"],
+                       type(exc).__name__)
+
+
 def run(*, config_path: Path, data_root: Path, only: str | None = None, dry_run: bool = False) -> list[FetchResult]:
     cfg = json.loads(config_path.read_text())
     results: list[FetchResult] = []
@@ -202,8 +258,10 @@ def run(*, config_path: Path, data_root: Path, only: str | None = None, dry_run:
             r = _fetch_one(ind, data_root)
         except FetchError as e:
             logger.error("fetch_failed: %s — %s", ind["id"], e)
+            _record_upstream_poll(ind, data_root, failure=e)
             continue
         if r:
+            _record_upstream_poll(ind, data_root, result=r)
             results.append(r)
             logger.info("fetched %s sha=%s cache_hit=%s", r.indicator_id, r.sha256[:8], r.cache_hit)
     return results

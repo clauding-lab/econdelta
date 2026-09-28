@@ -16,7 +16,7 @@ import os
 import re
 import xml.etree.ElementTree as ET
 import zipfile
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import urlparse
@@ -24,6 +24,7 @@ from urllib.request import Request, urlopen
 
 from fetchers.tls import ssl_context_for
 from utils.monthly_evidence import record_source_check, revision_diff
+from utils.monthly_lag import note_source_leg
 
 logger = logging.getLogger(__name__)
 
@@ -266,4 +267,31 @@ def write_exports_monthly(today: date | None = None, *, evidence_dir: Path | Non
         )
     except OSError as exc:
         logger.warning("EPB source receipt failed; continuing validated append: %s", exc)
+    _note_exports_leg(parsed, existing, rows, today)
     return upsert_metric_history_monthly(rows) if rows else 0
+
+
+def _next_month(day: date) -> date:
+    return date(day.year + day.month // 12, day.month % 12 + 1, 1)
+
+
+def _stored_month(row: dict) -> date | None:
+    """A stored row's month; an unreadable one is left out, never allowed to block a write."""
+    try:
+        return date.fromisoformat(str(row["as_of"])[:10])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _note_exports_leg(parsed: list[tuple[date, float]], existing: list[dict],
+                      rows: list[dict], today: date) -> None:
+    """Why nothing was written (R2 fix H4): EPB lists no closed month after those recorded
+    (lag, with the accepted window), or its listing is behind a recorded month. Only closed
+    months count as listed, exactly the months plan_exports may write."""
+    open_month = today.replace(day=1)
+    recorded = {day for day in map(_stored_month, existing) if day is not None}
+    # The month awaited: the one after the newest recorded, else the newest closed month.
+    wanted = _next_month(max(recorded)) if recorded else (open_month - timedelta(days=1)).replace(day=1)
+    note_source_leg("exports", rows, [], source="EPB goods summary (closed months)", metric_id=METRIC_ID,
+                    listed=[day for day, _ in parsed if day < open_month], recorded=recorded,
+                    wanted=wanted)

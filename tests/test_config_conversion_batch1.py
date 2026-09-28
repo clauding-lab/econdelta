@@ -42,6 +42,9 @@ from pathlib import Path
 
 import pytest
 
+# Registers every parser exactly as the real parse stage does (parse_all imports them all), so
+# the parser config/sources-v3.json names (now mei_observation) resolves when this file runs alone.
+import parse_all  # noqa: F401 -- registers
 import parsers.pdf_component  # noqa: F401 -- registers
 import parsers.pdf_table_latest  # noqa: F401 -- registers
 import parsers.pdf_table_row  # noqa: F401 -- registers
