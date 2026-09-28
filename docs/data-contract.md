@@ -50,6 +50,90 @@ There is also a **cold local archive** at
 serialised once per successful aggregate. This is your fallback if
 Supabase ever goes away or needs to be rebuilt; see [§9 Backfill].
 
+**Held days leave an operations receipt, not a new snapshot.** When the
+Opus review hard-rejects a run, `data/latest.json` keeps the previous
+accepted snapshot byte-for-byte, so its `updated_at` still shows that
+older capture time and a reader sees its true age. The independent monthly
+appenders still run, and this attempt's outcome (daily `skipped`, plus the
+per-leg monthly `ok`/`failed`/`skipped` receipt) is written atomically to
+`data/latest.attempt.json`. That sidecar is for operators on ExonVPS only:
+it is not part of this contract, The Brief does not read it, and the
+five-minute Hetzner pull transfers `latest.json` only. If the sidecar
+cannot be written, the run still exits 1, `latest.json` is untouched, and
+the same outcome is logged at ERROR instead; an older sidecar, if present,
+is left as it was and is dated by its own `attempted_at`.
+
+**`write_status` is a validated contract (`utils/schema.py::WriteStatus`).**
+It is absent (or `null`) only in snapshots from pre-receipt producers; that
+means "unconfirmed", never "ok". When present it has `daily` and `monthly`
+receipts and, from R2 fix 10, `media_overrides`. Every receipt has `status`
+exactly `ok` (written and confirmed by readback), `failed` (a write, read or
+readback failed or went unconfirmed) or `skipped` (nothing needed writing), a
+timezone-aware `attempted_at`, and optionally `reason`, `confirmed_rows`,
+`failures`, `skips` and nested `legs`. A leg's failure always shows in its
+parent's status. `daily` describes the main `metric_history` write only; the
+approved-press override re-assertion that follows it has its own
+`media_overrides` receipt (no exact readback exists for override rows, so a
+sent override is `failed`/unconfirmed, never `ok`). The producer validates the
+receipt before writing and refuses to write one that breaks the contract.
+
+**NBR fiscal-year-to-date rows (R2 fix H5, owner decision m).** `tax_revenue`
+(BB WSEI "Tax Revenue (NBR)"), its alias `nbr_fytd_collected_cr` and its
+trillion child `fiscal_nbr_collected_trn` are dated by the period the source
+itself states (the child always carries the parent's date) and are sent to
+`metric_history` only when that exact `(metric_id, period)` does not already
+hold the same value written by the daily writer (source `EconDelta`); a row on
+file under another source, e.g. an approved press override BB has since
+superseded, is replaced by the producer's own. Each id is judged on its own row.
+The daily receipt then lists a `skips` entry per id left
+out: `period already recorded` (same value already on file for that period;
+nothing re-sent) or `no source period` (the source stated no period; nothing
+dated or written). Both leave the daily `status` unchanged. If the table cannot
+be read first, the dated rows are sent as before (same key, never a new date).
+
+**Upstream CPI/M2 source-poll liveness (R2 fix 5).** Besides the three scraper
+sources, `sources_status` carries `cpi_upstream_poll` (cpi_12m_avg_monthly,
+cpi_p2p_food_monthly, cpi_p2p_nonfood_monthly) and `m2_upstream_poll`
+(m2_growth_yoy_monthly), built from the local source-poll receipts
+(`utils/monthly_evidence.source_monitor`) after the monthly appenders run. A
+family is `ok` only when every metric has a typed `upstream-source` receipt
+checked within the existing 26-hour job-check window; an older poll is `stale`;
+a database-reread-only, untyped, missing or unreadable receipt is `missing`.
+`error` names the gap and the metric ids. The CPI/M2 monthly legs derive from
+our own daily table, so their successful database reread is never liveness.
+
+*Upstream-poll receipts (R2 fix H3).* The only job that polls BB's CPI/M2 pages
+is the daily fetch stage (`fetch_all`, 01:10 BDT): `general_inflation`,
+`food_inflation`, `non_food_inflation` and `m2_growth_yoy_pct`. Each of those
+fetches now writes `data/upstream_polls/<source id>.json` (`utils/upstream_poll.py`),
+a directory the monthly legs' `data/monthly_evidence/<metric_id>.json` rereads
+never write. A receipt holds `status` (`ok` = fetched and the page's own period
+read; `failed` = the fetch raised; `unknown` = fetched but no period could be
+read, e.g. a bot-challenge page), a timezone-aware `checked_at`, the
+`latest_source_vintage` the page states (read without a model call: the
+deterministic parser's date, or for the MEI PDF the same report date the parse
+stage stamps), `reason` (exception type only) and `last_success_at`. Where a
+metric has a poll receipt it decides that metric: `failed` makes the family
+`failed`; `unknown`, an unreadable or a future-dated receipt reads `missing`; a
+receipt older than the family's accepted poll cadence (26 hours: one daily
+fetch plus slack) reads `stale` ("stale poll"). A live, in-cadence poll is `ok`
+only when our own table already holds the month the page states: the aggregate
+compares `latest_source_vintage` with the monthly leg's database-reread period
+(`latest_database_period`) by month. A page ahead of it reads `stale` ("source
+states a newer period than we have recorded (page …, recorded …)"), because a
+CPI/M2 leg's "no newer database vintage" is then our pipeline lagging the
+source, not BB's publication lag; no recorded month to compare reads `missing`.
+A damaged receipt (not UTF-8, not JSON, nested too deep) reads `missing` and
+never crashes the aggregate. `last_success`/`age_hours` are
+the family's oldest successful poll, filled only when every member has one.
+A metric with no poll receipt falls back to the E6 row above (so a producer
+whose fetch has not yet run reads exactly as before). These two entries do not raise the
+aggregate's "sources not OK" alert; The Brief reports them as a degraded
+(log-only) reason. The Brief requires both keys: a snapshot that lacks one
+(an older producer during a deploy, or a regression that drops it) reads that
+family as `missing` (liveness not reported), never as polled. Pinned by the
+shared `upstream_liveness_contract` fixture.
+
 ## 2. Connecting
 
 ### Project URL

@@ -12,14 +12,17 @@
 /home/adnan/econdelta/data/latest.json
 ```
 
-On the VPS (Hetzner, `135.181.43.68`). This is the **canonical, most-recent-possible** snapshot of every metric EconDelta tracks.
+On Hetzner (`135.181.43.68`), where The Brief runs, this path is a **copy**. EconDelta itself runs on ExonVPS Dhaka (`103.187.23.22`): `aggregate_latest.py` writes `/home/adnan-local/econdelta/data/latest.json` there **atomically** (`.tmp` + `os.replace`). It is the most recent accepted snapshot of every metric EconDelta tracks.
 
-The file is **atomically written** (`.tmp` + `os.replace`) by `aggregate_latest.py`. A reader will never see a partial file. Concurrent reads are safe.
+**How the copy reaches Hetzner** (read-only check of both boxes, 28 Sep 2026): a Hetzner user-crontab line `*/5 * * * * /home/adnan/bin/pull-econdelta-latest.sh >> /home/adnan/econdelta/logs/pull-cron.log 2>&1` runs `rsync -t` over SSH with a dedicated pull key, from ExonVPS's file to this path. What that pull does and does not guarantee:
 
-Refresh cadence:
-- Full morning refresh by **00:25 UTC** (06:25 BDT) — commodity_prices scrape + bb_forex rsync-from-laptop + aggregate all complete
-- Full afternoon refresh by **10:40 UTC** (16:40 BDT) — dse_market rsync-from-laptop + aggregate
-- Plus any laptop-triggered refresh after a manual scrape
+- **Atomic replace.** rsync (no `--inplace`) writes a temporary file beside the destination and renames it into place, so a reader never sees a half-copied file from the pull. Concurrent reads are safe.
+- **Same bytes.** A healthy copy is byte-identical to ExonVPS's file (compare SHA-256 on both hosts); `-t` keeps the source mtime.
+- **No validation.** The pull does not parse the JSON and does not check that `updated_at` moved forward. A broken or older file on ExonVPS (for example after a restore) is copied as it is. Consumers must treat the file as untrusted. The Brief checks the envelope, the capture time (including a capture older than one it already used) and every observation itself.
+- **`latest.json` only.** The operator sidecar `latest.attempt.json` is not copied (see `docs/data-contract.md`).
+- **Up to about five minutes behind**, longer when SSH to ExonVPS times out; the next run retries. The log prints nothing on success and its lines carry no timestamps.
+
+Refresh cadence: the aggregate runs on ExonVPS at **02:55 BDT** (`econdelta-aggregate.timer`, 20:55 UTC) with a retry timer at **03:15 BDT** (21:15 UTC); the full chain is in AGENTS.md landmine 42. The Hetzner copy follows within about five minutes, and The Brief reads it at 08:00 BDT.
 
 ---
 
@@ -203,7 +206,7 @@ if bundle["sources_status"]["dse_market"]["status"] == "ok":
 
 ### What EconDelta guarantees
 
-1. `latest.json` is either fully valid Pydantic-round-tripped JSON matching `LatestBundle`, or **the write is aborted and the previous file is left untouched**. You will never see a half-written file.
+1. `latest.json` is either fully valid Pydantic-round-tripped JSON matching `LatestBundle`, or **the write is aborted and the previous file is left untouched**. You will never see a half-written file. This is a promise about EconDelta's own write on ExonVPS; the Hetzner pull keeps it only because rsync renames a complete temporary file into place. The pull itself validates nothing (see "How the copy reaches Hetzner" above).
 2. `schema_version` is always present.
 3. `sources_status` always has exactly the three keys: `bb_forex`, `dse_market`, `commodity_prices`.
 4. Missing/failed sources surface via `sources_status[*].status`, not by omitting the source.
@@ -217,7 +220,7 @@ if bundle["sources_status"]["dse_market"]["status"] == "ok":
 
 ### If EconDelta is unhealthy
 
-- `latest.json` missing entirely → EconDelta never ran. Consumer should halt with a clear error ("EconDelta pipeline offline") rather than fabricate data.
+- `latest.json` missing, unreadable, not valid JSON or the wrong shape on Hetzner → either EconDelta never produced it or the five-minute pull has not delivered it. A consumer must never fabricate data or invent a capture time. The Brief (owner decision, 26 Sep 2026) builds that morning's issue from its saved history, marks it degraded and sends ONE Discord alert naming the cause; it does not halt. An older snapshot (stale, from an earlier Bangladesh day, or older than one The Brief already used) is read with its own dates, marked degraded and alerted the same way. The operator runbook is The Brief's `deploy/README.md`.
 - All three sources `missing`/`failed` → infrastructure failure. Same handling.
 - `schema_version` mismatch → EconDelta upgraded; consumer needs to update its reader.
 
