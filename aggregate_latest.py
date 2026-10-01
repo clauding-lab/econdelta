@@ -339,7 +339,9 @@ def _is_bad_snapshot(snapshot: dict) -> bool:
     return False
 
 
-def _load_last_good_snapshot(indicator_id: str, *, max_days_back: int = 60) -> dict | None:
+def _load_last_good_snapshot(
+    indicator_id: str, *, max_days_back: int = 60, today: date | None = None
+) -> dict | None:
     """Walk back through this indicator's per-day snapshots for the most recent good one.
 
     A 'good' snapshot is one where _is_bad_snapshot() is False — i.e. real
@@ -352,7 +354,10 @@ def _load_last_good_snapshot(indicator_id: str, *, max_days_back: int = 60) -> d
         return None
     candidates = sorted(d.glob("*.json"), reverse=True)
     cutoff_age_days = max_days_back
-    today = datetime.now(timezone.utc).date()
+    # Judge age against the run's own `now` when given, so the lookback and
+    # the stale-fallback age both read the same clock.
+    if today is None:
+        today = datetime.now(timezone.utc).date()
     for path in candidates:
         try:
             blob = json.loads(path.read_text())
@@ -399,6 +404,23 @@ def _stale_fallback_age_days(snapshot: dict, today: date) -> int | None:
     snapshot's filename stem, e.g. "2026-04-29").
     """
     return _iso_age_days(snapshot.get("_stale_from"), today)
+
+
+def _alert_value(value: Any) -> float | int | str | None:
+    """An indicator value in the shape `Alert.value` accepts.
+
+    Most indicators are scalars, but some (e.g. `dse_sector_heat`, a
+    {sector: change} table) are dicts. `Alert` is strict, so passing one
+    through raised a ValidationError inside `_build_v3_blocks` and took down
+    the whole aggregate — every indicator froze because one alarm could not
+    describe its value. An alarm must never be able to crash the run it
+    reports on, so a non-scalar is summarised instead.
+    """
+    if value is None or isinstance(value, (float, int, str)):
+        return value
+    if isinstance(value, (dict, list, tuple)):
+        return f"<table of {len(value)} values>"
+    return f"<{type(value).__name__}>"
 
 
 def _prior_good_snapshot(indicator_id: str, today: date) -> dict | None:
@@ -775,7 +797,7 @@ def _build_v3_blocks(
         # — better the brief shows a missing key than a misleading 0.0.
         if _is_bad_snapshot(snapshot):
             indicators_failed += 1
-            historical = _load_last_good_snapshot(indicator_id)
+            historical = _load_last_good_snapshot(indicator_id, today=now.date())
             if historical is None:
                 logger.info(
                     "skipping %s — today bad and no good historical snapshot in last 60 days",
@@ -799,7 +821,7 @@ def _build_v3_blocks(
                         indicator_id=indicator_id,
                         type="stale_fallback",
                         severity="error",
-                        value=historical.get("value"),
+                        value=_alert_value(historical.get("value")),
                         age_days=age_days,
                     )
                 )
@@ -902,7 +924,7 @@ def _build_v3_blocks(
                         indicator_id=indicator_id,
                         type="undated_source",
                         severity="error",
-                        value=snapshot.get("value"),
+                        value=_alert_value(snapshot.get("value")),
                     )
                 )
             elif as_of_age >= stale_after:
@@ -916,7 +938,7 @@ def _build_v3_blocks(
                         indicator_id=indicator_id,
                         type="stale_fallback",
                         severity="error",
-                        value=snapshot.get("value"),
+                        value=_alert_value(snapshot.get("value")),
                         age_days=as_of_age,
                     )
                 )
@@ -946,8 +968,8 @@ def _build_v3_blocks(
                     indicator_id=indicator_id,
                     type="anomaly",
                     severity="warn",
-                    value=snapshot.get("value"),
-                    previous=snapshot.get("previous_value"),
+                    value=_alert_value(snapshot.get("value")),
+                    previous=_alert_value(snapshot.get("previous_value")),
                     change_pct=change_pct,
                 )
             )
