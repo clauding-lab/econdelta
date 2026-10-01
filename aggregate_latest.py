@@ -401,6 +401,23 @@ def _stale_fallback_age_days(snapshot: dict, today: date) -> int | None:
     return _iso_age_days(snapshot.get("_stale_from"), today)
 
 
+def _alert_value(value: Any) -> float | int | str | None:
+    """An indicator value in the shape `Alert.value` accepts.
+
+    Most indicators are scalars, but some (e.g. `dse_sector_heat`, a
+    {sector: change} table) are dicts. `Alert` is strict, so passing one
+    through raised a ValidationError inside `_build_v3_blocks` and took down
+    the whole aggregate — every indicator froze because one alarm could not
+    describe its value. An alarm must never be able to crash the run it
+    reports on, so a non-scalar is summarised instead.
+    """
+    if value is None or isinstance(value, (float, int, str)):
+        return value
+    if isinstance(value, (dict, list, tuple)):
+        return f"<table of {len(value)} values>"
+    return f"<{type(value).__name__}>"
+
+
 def _prior_good_snapshot(indicator_id: str, today: date) -> dict | None:
     """Most-recent good snapshot strictly BEFORE `today` (by scraped_at date).
 
@@ -799,7 +816,7 @@ def _build_v3_blocks(
                         indicator_id=indicator_id,
                         type="stale_fallback",
                         severity="error",
-                        value=historical.get("value"),
+                        value=_alert_value(historical.get("value")),
                         age_days=age_days,
                     )
                 )
@@ -902,7 +919,7 @@ def _build_v3_blocks(
                         indicator_id=indicator_id,
                         type="undated_source",
                         severity="error",
-                        value=snapshot.get("value"),
+                        value=_alert_value(snapshot.get("value")),
                     )
                 )
             elif as_of_age >= stale_after:
@@ -916,7 +933,7 @@ def _build_v3_blocks(
                         indicator_id=indicator_id,
                         type="stale_fallback",
                         severity="error",
-                        value=snapshot.get("value"),
+                        value=_alert_value(snapshot.get("value")),
                         age_days=as_of_age,
                     )
                 )
@@ -946,8 +963,8 @@ def _build_v3_blocks(
                     indicator_id=indicator_id,
                     type="anomaly",
                     severity="warn",
-                    value=snapshot.get("value"),
-                    previous=snapshot.get("previous_value"),
+                    value=_alert_value(snapshot.get("value")),
+                    previous=_alert_value(snapshot.get("previous_value")),
                     change_pct=change_pct,
                 )
             )
