@@ -1,7 +1,7 @@
 {
   "_doc": "Phase 3.1 V5 fidelity — DSE sector constituent taxonomy. Maps each of the 8 sectors the brief renders in §06 to its listed scrip codes. The dse_sector_heat scraper averages today's % change across each sector's constituents to produce dse_sector_heat: dict[sector, pct_avg] in latest.json. Simple-average aggregation per the plan.",
   "_status": "STARTER — populate from DSE's published sector listings before activating the scraper. Brief side renders gracefully when dse_sector_heat is absent; this file is a no-op until the EconDelta scraper consumes it.",
-  "_source_hint": "DSE publishes per-sector indices and constituent lists at dsebd.org. The 'Recent Market Information' page (recent_market_information.php) carries per-scrip daily % moves. One fetch can feed all sectors via this file's mapping — avoids 250+ per-scrip page hits.",
+  "_source_hint": "Since 2026-10-01 per-scrip daily % moves come from https://www.dse.com.bd/api/live/prices (one JSON fetch, all scrips; the old dsebd.org recent_market_information.php returns HTTP 410). Live codes differ from some entries here (e.g. PUBALIBANK not PUBALI; ONEBANKLTD, SQUARETXT, NOMANC, PAKIZAIT, RNSPIN, INCEPTAPHRM, GLAXOSMITH, BPDB, BSCCL, AGRICMARK, AMCL, IBN not in the 2026-10-01 feed) — unmatched codes are simply skipped.",
   "_aggregation": "simple-average of constituent moves per sector. Weighted-by-market-cap is a future refinement; not required for the V1 directional heatmap.",
   "_brief_sector_order": ["Banks", "NBFI", "Textile", "Pharma", "Fuel", "Telecom", "Food", "IT"],
   "sectors": {

@@ -1,15 +1,19 @@
 """Unit tests for the DSE DS30 day-end-close backfill.
 
 Two layers:
-  1. Synthetic-HTML tests that pin the parsing rules (column-by-header lookup,
-     '*' marker tolerance, date filtering, range guard).
-  2. Real-source fixture tests against captured dsebd.org HTML (2026-05-30) so
-     the parser is verified against the actual page shape, not just a mock.
+  1. Synthetic-JSON tests that pin the parsing rules (closep not other price
+     columns, window filtering, code filter, range guard, pagination).
+  2. Real-source fixture tests against captured www.dse.com.bd/api/live JSON
+     (2026-10-01) so the parser is verified against the actual response shape.
+     ``dse_api_day_end_bracbank.json`` deliberately covers the SAME window as
+     the retired 2026-05-30 dsebd.org HTML capture, so the known data point
+     (2026-05-24 close = 67.3) carries over and proves old/new parity.
 
 No network and no Supabase writes here — fixtures are static files.
 """
 from __future__ import annotations
 
+import json
 from datetime import date
 from pathlib import Path
 
@@ -19,6 +23,7 @@ import scripts.backfill_dse_dayend as bd
 from scripts.backfill_dse_dayend import (
     BackfillError,
     CloseRow,
+    fetch_scrip_closes,
     group_rows_by_date,
     parse_day_end_archive,
     parse_ds30_codes,
@@ -31,74 +36,136 @@ FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
 
 # --------------------------------------------------------------------------- #
-# Synthetic-HTML parsing rules
+# Synthetic-JSON parsing rules
 # --------------------------------------------------------------------------- #
 
-_MIN_ARCHIVE = """
-<html><body>
-<table><tr><td>unrelated header</td></tr></table>
-<table>
-  <tr><th>#</th><th>DATE</th><th>TRADING CODE</th><th>LTP*</th><th>HIGH</th>
-      <th>LOW</th><th>OPENP*</th><th>CLOSEP*</th><th>YCP</th><th>TRADE</th>
-      <th>VALUE (mn)</th><th>VOLUME</th></tr>
-  <tr><td>1</td><td>2026-05-24</td><td>BRACBANK</td><td>67.3</td><td>68.1</td>
-      <td>66.8</td><td>67</td><td>67.3</td><td>66.6</td><td>3,307</td>
-      <td>186.274</td><td>2,761,602</td></tr>
-  <tr><td>2</td><td>2026-05-23</td><td>BRACBANK</td><td>66.6</td><td>66.7</td>
-      <td>64</td><td>64.1</td><td>66.6</td><td>64</td><td>1,934</td>
-      <td>100.786</td><td>1,529,847</td></tr>
-  <tr><td>Total</td><td>--</td><td>--</td><td></td><td></td><td></td>
-      <td></td><td></td><td></td><td></td><td></td><td></td></tr>
-</table>
-</body></html>
-"""
+
+def _row(d: str, code: str = "BRACBANK", **over) -> dict:
+    base = {
+        "serial": 1, "date": d, "tradingCode": code, "ltp": 67.3, "high": 68.1,
+        "low": 66.8, "openp": 67, "closep": 67.3, "ycp": 66.6, "trade": 3307,
+        "value": 186.274, "volume": 2761602,
+    }
+    base.update(over)
+    return base
+
+
+def _page(rows: list[dict], total: int | None = None, page: int = 1) -> dict:
+    return {"rows": rows, "total": len(rows) if total is None else total,
+            "page": page, "pageSize": 500}
+
+
+_MIN_ARCHIVE = _page([
+    _row("2026-05-24"),
+    # CLOSEP=66.6 while LTP=66.5, OPENP=64.1, YCP=64 -> must keep 66.6
+    _row("2026-05-23", ltp=66.5, openp=64.1, closep=66.6, ycp=64),
+])
 
 
 def test_parse_day_end_archive_keeps_closep_not_other_price_columns():
-    """The stored value must be CLOSEP*, not LTP* / OPENP* / YCP."""
     rows = parse_day_end_archive(_MIN_ARCHIVE, expected_code="BRACBANK")
-
     by_date = {r.as_of: r.closep for r in rows}
-    # 2026-05-24 row: CLOSEP*=67.3 (LTP* is also 67.3, so use the OTHER day to prove it)
-    # 2026-05-23 row: CLOSEP*=66.6 while LTP*=66.6, OPENP*=64.1, YCP=64 -> must be 66.6
     assert by_date[date(2026, 5, 23)] == 66.6
     assert by_date[date(2026, 5, 24)] == 67.3
 
 
+def test_parse_day_end_archive_accepts_raw_json_text():
+    rows = parse_day_end_archive(json.dumps(_MIN_ARCHIVE), expected_code="BRACBANK")
+    assert len(rows) == 2
+
+
 def test_parse_day_end_archive_sorts_ascending_by_date():
+    """The endpoint returns newest-first; CloseRows come back ascending."""
     rows = parse_day_end_archive(_MIN_ARCHIVE, expected_code="BRACBANK")
     assert [r.as_of for r in rows] == [date(2026, 5, 23), date(2026, 5, 24)]
 
 
-def test_parse_day_end_archive_skips_non_date_total_rows():
-    """The trailing 'Total' / '--' summary row must not become a CloseRow."""
-    rows = parse_day_end_archive(_MIN_ARCHIVE, expected_code="BRACBANK")
-    assert len(rows) == 2  # the 'Total' row is dropped
-
-
 def test_parse_day_end_archive_filters_unexpected_code():
-    html = _MIN_ARCHIVE.replace("BRACBANK", "GP", 1)  # first data row becomes GP
-    rows = parse_day_end_archive(html, expected_code="BRACBANK")
-    # Only the still-BRACBANK row survives the expected_code filter.
-    assert all(r.code == "BRACBANK" for r in rows)
-    assert len(rows) == 1
+    payload = _page([_row("2026-05-24", code="GP"), _row("2026-05-23")])
+    rows = parse_day_end_archive(payload, expected_code="BRACBANK")
+    assert [r.code for r in rows] == ["BRACBANK"]
 
 
-def test_parse_day_end_archive_raises_when_no_data_table():
-    with pytest.raises(BackfillError):
-        parse_day_end_archive("<html><body><p>maintenance</p></body></html>")
-
-
-def test_clean_number_strips_thousands_separator():
-    # The 2026-05-23 row's CLOSEP* cell (value 66.6) is rewritten to a
-    # comma-formatted high-priced close to prove the thousands separator is
-    # stripped before float parsing.
-    html = _MIN_ARCHIVE.replace(
-        "<td>64.1</td><td>66.6</td><td>64</td>",
-        "<td>64.1</td><td>1,234.5</td><td>64</td>",
+def test_parse_day_end_archive_drops_rows_outside_window():
+    """Live quirk (2026-10-01): asking for 2024-09-01..2024-09-05 -- before the
+    archive's ~2-year horizon -- returns the 2024-10-02 row. A row outside the
+    caller's window must never be written under its date range."""
+    payload = _page([_row("2024-10-02", closep=341.1, code="GP")])
+    rows = parse_day_end_archive(
+        payload, expected_code="GP", start=date(2024, 9, 1), end=date(2024, 9, 5)
     )
-    rows = parse_day_end_archive(html, expected_code="BRACBANK")
-    assert any(r.closep == 1234.5 for r in rows)
+    assert rows == []
+
+
+def test_parse_day_end_archive_skips_bad_and_out_of_range_rows():
+    payload = _page([
+        _row("2026-05-24", closep=0),        # zero close (untraded/bad) -> skipped
+        _row("2026-05-23", closep=None),     # missing close -> skipped
+        _row("not-a-date"),                  # bad date -> skipped
+        _row("2026-05-22", closep=1234.5),   # valid high-priced close kept
+    ])
+    rows = parse_day_end_archive(payload, expected_code="BRACBANK")
+    assert [(r.as_of, r.closep) for r in rows] == [(date(2026, 5, 22), 1234.5)]
+
+
+@pytest.mark.parametrize("body", ["<html>Gone</html>", "[]", json.dumps({"error": "x"})])
+def test_parse_day_end_archive_raises_on_wrong_shape(body):
+    with pytest.raises(BackfillError):
+        parse_day_end_archive(body)
+
+
+def test_parse_day_end_archive_empty_rows_is_empty_not_error():
+    """Unknown/untraded code -> {"rows": [], "total": 0}: nothing, not a crash."""
+    assert parse_day_end_archive(_page([]), expected_code="NOPE") == []
+
+
+class _FakeClient:
+    """Serves canned archive pages keyed by the `page` query param."""
+
+    def __init__(self, pages: dict[int, dict]):
+        self.pages = pages
+        self.calls: list[dict] = []
+
+    def fetch_html(self, url, params=None, **kw):
+        self.calls.append({"url": url, **(params or {})})
+        return json.dumps(self.pages[params["page"]])
+
+
+def test_fetch_scrip_closes_follows_pagination_until_total():
+    p1 = _page([_row("2026-05-24"), _row("2026-05-23")], total=3, page=1)
+    p2 = _page([_row("2026-05-22")], total=3, page=2)
+    client = _FakeClient({1: p1, 2: p2})
+    rows = fetch_scrip_closes(client, "BRACBANK", date(2026, 5, 1), date(2026, 5, 31))
+    assert [r.as_of.day for r in rows] == [22, 23, 24]
+    assert [c["page"] for c in client.calls] == [1, 2]
+    assert client.calls[0] == {
+        "url": bd.ARCHIVE_URL, "from": "2026-05-01", "to": "2026-05-31",
+        "inst": "BRACBANK", "page": 1,
+    }
+
+
+def test_fetch_scrip_closes_single_page_makes_one_request():
+    client = _FakeClient({1: _MIN_ARCHIVE})
+    fetch_scrip_closes(client, "BRACBANK", date(2026, 5, 1), date(2026, 5, 31))
+    assert len(client.calls) == 1
+
+
+def test_fetch_scrip_closes_bounded_if_total_never_reached(monkeypatch):
+    monkeypatch.setattr(bd, "_MAX_ARCHIVE_PAGES", 3)
+    page = _page([_row("2026-05-24")], total=10_000)
+    client = _FakeClient({1: page, 2: page, 3: page})
+    with pytest.raises(BackfillError, match="still paging"):
+        fetch_scrip_closes(client, "BRACBANK", date(2026, 5, 1), date(2026, 5, 31))
+
+
+def test_parse_ds30_codes_dedupes_and_rejects_empty():
+    assert parse_ds30_codes({"rows": [{"code": "GP"}, {"code": "gp"}, {"code": "BSC"}]}) == [
+        "GP", "BSC",
+    ]
+    with pytest.raises(BackfillError):
+        parse_ds30_codes({"rows": []})
+    with pytest.raises(BackfillError):
+        parse_ds30_codes("<html>Gone</html>")
 
 
 def test_metric_id_uses_dse_close_prefix():
@@ -132,37 +199,40 @@ def test_group_rows_by_date_partitions_for_per_day_upsert():
 
 
 # --------------------------------------------------------------------------- #
-# Real-source fixture tests (captured live HTML, 2026-05-30)
+# Real-source fixture tests (captured live JSON, 2026-10-01)
 # --------------------------------------------------------------------------- #
 
 
-def test_parse_ds30_codes_returns_exactly_30_from_live_page():
-    html = (FIXTURES / "ds30_share.html").read_text(encoding="utf-8", errors="replace")
-    codes = parse_ds30_codes(html)
+def test_parse_ds30_codes_returns_exactly_30_from_live_response():
+    codes = parse_ds30_codes((FIXTURES / "dse_api_ds30_constituents.json").read_text())
     assert len(codes) == 30
     assert "BRACBANK" in codes
     assert "GP" in codes
-    # All codes are alnum trading symbols, no stray HTML.
     assert all(c.isalnum() and c.isupper() for c in codes)
 
 
-def test_parse_bracbank_archive_fixture_has_real_closes():
-    html = (FIXTURES / "archive_bracbank.html").read_text(encoding="utf-8", errors="replace")
-    rows = parse_day_end_archive(html, expected_code="BRACBANK")
-    assert len(rows) >= 20  # ~22 trading days over a 60-day window
+def test_parse_bracbank_archive_fixture_matches_old_site_capture():
+    """Same window as the retired dsebd.org capture of 2026-05-30."""
+    text = (FIXTURES / "dse_api_day_end_bracbank.json").read_text()
+    rows = parse_day_end_archive(text, expected_code="BRACBANK")
+    assert len(rows) == 39
     assert all(r.code == "BRACBANK" for r in rows)
-    assert all(0 < r.closep < 1000 for r in rows)  # BRACBANK trades ~60-70 taka
-    # Known data point captured on 2026-05-30: 2026-05-24 close = 67.3
+    assert all(0 < r.closep < 1000 for r in rows)
     by_date = {r.as_of: r.closep for r in rows}
+    # Known data point from the old-site capture: 2026-05-24 close = 67.3
     assert by_date[date(2026, 5, 24)] == 67.3
 
 
-def test_parse_gp_archive_fixture_distinct_from_bracbank():
-    html = (FIXTURES / "archive_gp.html").read_text(encoding="utf-8", errors="replace")
-    rows = parse_day_end_archive(html, expected_code="GP")
-    assert len(rows) >= 20
-    assert all(r.code == "GP" for r in rows)
+def test_parse_gp_archive_fixture_recent_window():
+    text = (FIXTURES / "dse_api_day_end_gp.json").read_text()
+    rows = parse_day_end_archive(text, expected_code="GP")
+    assert len(rows) == 10
     assert all(r.metric_id == "dse_close_GP" for r in rows)
+    assert rows[-1].as_of == date(2026, 10, 1)
+    assert rows[-1].closep == 241.1
+    # Spans the old->new site switchover (24-28 Sep) with no gap on trading days.
+    assert date(2026, 9, 24) in {r.as_of for r in rows}
+    assert date(2026, 9, 27) in {r.as_of for r in rows}
 
 
 # --------------------------------------------------------------------------- #
@@ -192,7 +262,7 @@ def test_all_fetch_fail_alerts_error_and_returns_1(monkeypatch, _no_sleep):
     monkeypatch.setattr(bd, "notify", lambda level, title, msg, *a, **k: calls.append((level, title)))
 
     def _boom(client, code, start, end):
-        raise HttpClient.FetchError("https://dsebd.org", None, "TLS chain broken")
+        raise HttpClient.FetchError(bd.ARCHIVE_URL, None, "TLS chain broken")
 
     monkeypatch.setattr(bd, "fetch_scrip_closes", _boom)
 
