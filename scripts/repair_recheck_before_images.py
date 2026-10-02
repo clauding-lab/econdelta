@@ -9,15 +9,23 @@ apply engine's own rule (``repair_observation_history.same``); an insert's key i
     python -m scripts.repair_recheck_before_images --manifest r1-candidate.json \\
         --backup-dir DIR --out receipt.json
 
-Exit 0 only for ``match``; 1 for ``mismatch`` (the receipt names every key, never a row value);
-2 when an input cannot be verified (no receipt is written). It never connects to a database.
-A mismatch needs a fresh proposal and review, never a force flag.
+Exit 0 only for ``match`` against a Night-1-eligible backup; 1 for ``mismatch`` (the receipt names
+every key, never a row value); 2 when an input cannot be verified (no receipt is written). It never
+connects to a database. A mismatch needs a fresh proposal and review, never a force flag.
+
+Night-1 eligibility: the recheck exists to catch drift SINCE the candidate was built, so a backup
+that is the candidate's own source (manifest sha256 equal to ``backup_manifest_sha256``), that did
+not start after the candidate's ``generated_at``, or whose manifest lacks ``key_role: service`` (the
+25 Sep backup has all three) is refused (exit 2). ``--reference-backup`` runs the comparison anyway
+for an evidence run: the receipt records ``night1_eligible: false`` and the reasons, and a match
+exits 3, never 0. An explicit non-service ``key_role`` is refused even then.
 """
 
 from __future__ import annotations
 
 import argparse
 import re
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +41,8 @@ from scripts.repair_observation_history import (
 )
 
 Identity = tuple[tuple[str, Any], ...]
+
+EXIT_REFERENCE_MATCH = 3  # a match against a --reference-backup: never a Night-1 pass
 
 
 def _identity(row: dict, columns: list[str]) -> Identity:
@@ -52,7 +62,7 @@ def _load_backup(backup_dir: Path) -> tuple[dict, str, list[Backup], dict[str, t
         raise RepairConflict("backup manifest.json lacks target_project or started_at")
     if manifest.get("non_transactional") is not True:
         raise RepairConflict("backup manifest.json does not record non_transactional: true")
-    if "key_role" in manifest and manifest["key_role"] != "service":
+    if manifest.get("key_role") not in (None, "service"):  # absent: a Night-1 eligibility reason
         raise RepairConflict(f"backup key_role is {manifest['key_role']!r}, not 'service'")
     backups: list[Backup] = []
     tables: dict[str, tuple[list[str], dict]] = {}
@@ -89,9 +99,36 @@ def _load_candidate(path: Path) -> tuple[dict, str]:
         raise RepairConflict("candidate/plan manifest is not version 1")
     if not candidate.get("target_project"):
         raise RepairConflict("candidate/plan manifest has no target project")
+    if not isinstance(candidate.get("generated_at"), str) or not candidate["generated_at"]:
+        raise RepairConflict("candidate/plan manifest has no generated_at")
+    if not re.fullmatch(r"[0-9a-f]{64}", str(candidate.get("backup_manifest_sha256"))):
+        raise RepairConflict("candidate/plan manifest has no backup_manifest_sha256")
     if not isinstance(candidate.get("operations"), list) or not candidate["operations"]:
         raise RepairConflict("candidate/plan manifest has no operations")
     return candidate, sha256
+
+
+def _instant(value: Any, what: str) -> datetime:
+    try:
+        moment = datetime.fromisoformat(value)
+    except (TypeError, ValueError):
+        raise RepairConflict(f"{what} {value!r} is not an ISO timestamp") from None
+    if moment.tzinfo is None:
+        raise RepairConflict(f"{what} {value!r} has no UTC offset")
+    return moment
+
+
+def _not_night1_reasons(candidate: dict, backup: dict, backup_sha256: str) -> list[str]:
+    """Why this backup cannot be the Night-1 final backup for this candidate (empty: it can)."""
+    reasons = []
+    if backup_sha256 == candidate["backup_manifest_sha256"]:
+        reasons.append("backup-is-candidate-source")
+    started = _instant(backup["started_at"], "backup started_at")
+    if started <= _instant(candidate["generated_at"], "candidate generated_at"):
+        reasons.append("backup-not-after-candidate")
+    if backup.get("key_role") != "service":
+        reasons.append("key-role-not-service")
+    return reasons
 
 
 def _compare(candidate: dict, tables: dict[str, tuple[list[str], dict]]) -> tuple[dict, list]:
@@ -125,8 +162,10 @@ def _compare(candidate: dict, tables: dict[str, tuple[list[str], dict]]) -> tupl
     return counts, mismatches
 
 
-def recheck(manifest_path: Path, backup_dir: Path, out: Path) -> dict:
-    """Write and return the receipt; raises RepairConflict when an input cannot be verified."""
+def recheck(manifest_path: Path, backup_dir: Path, out: Path, *,
+            reference_backup: bool = False) -> dict:
+    """Write and return the receipt; raises RepairConflict when an input cannot be verified, or
+    when the backup cannot be the Night-1 final backup and ``reference_backup`` is not set."""
     if out.exists():
         raise RepairConflict(f"{out} already exists; a recheck never overwrites a receipt")
     candidate, candidate_sha256 = _load_candidate(manifest_path)
@@ -138,6 +177,12 @@ def recheck(manifest_path: Path, backup_dir: Path, out: Path) -> dict:
         if ref.get("table") not in tables:
             raise RepairConflict(f"the manifest's backup table {ref.get('table')} is not in the "
                                  "new backup")
+    reasons = _not_night1_reasons(candidate, backup, backup_sha256)
+    if reasons and not reference_backup:
+        raise RepairConflict(
+            f"this backup cannot be the Night-1 final backup ({', '.join(reasons)}); take a NEW "
+            "writer-paused export, or pass --reference-backup for an evidence run (exit 3, "
+            "never a Night-1 pass)")
     counts, mismatches = _compare(candidate, tables)
     receipt = {
         "result": "mismatch" if mismatches else "match",
@@ -147,6 +192,11 @@ def recheck(manifest_path: Path, backup_dir: Path, out: Path) -> dict:
         "backup_manifest_sha256": backup_sha256,
         "backup_started_at": backup["started_at"],
         "backup_finished_at": backup.get("finished_at"),
+        "candidate_generated_at": candidate["generated_at"],
+        "backup_is_candidate_source": "backup-is-candidate-source" in reasons,
+        "reference_backup": reference_backup,
+        "night1_eligible": not reasons,
+        "not_night1_eligible_because": reasons,
         "target_project": candidate["target_project"],
         "backups": backups,
         "operations": len(candidate["operations"]),
@@ -167,9 +217,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--backup-dir", type=Path, required=True,
                         help="the new writer-paused twelve-table backup (with its manifest.json)")
     parser.add_argument("--out", type=Path, required=True, help="receipt path (must not exist)")
+    parser.add_argument("--reference-backup", action="store_true",
+                        help="evidence run only: compare against a backup that cannot be the "
+                             "Night-1 final backup (e.g. the candidate's own source); exit 3")
     args = parser.parse_args(argv)
     try:
-        receipt = recheck(args.manifest, args.backup_dir, args.out)
+        receipt = recheck(args.manifest, args.backup_dir, args.out,
+                          reference_backup=args.reference_backup)
     except (RepairConflict, OSError, ValueError, KeyError, TypeError) as exc:
         print(f"Recheck stopped: {exc}")
         return 2
@@ -177,7 +231,12 @@ def main(argv: list[str] | None = None) -> int:
           f"{len(receipt['mismatches'])} mismatching; receipt sha256={file_hash(args.out)}")
     for item in receipt["mismatches"]:
         print(f"  {item['kind']}: {item['table']} {' '.join(map(str, item['key'].values()))}")
-    return 0 if receipt["result"] == "match" else 1
+    if not receipt["night1_eligible"]:
+        print("REFERENCE BACKUP, NOT Night-1 eligible: "
+              + ", ".join(receipt["not_night1_eligible_because"]))
+    if receipt["result"] != "match":
+        return 1
+    return 0 if receipt["night1_eligible"] else EXIT_REFERENCE_MATCH
 
 
 if __name__ == "__main__":
