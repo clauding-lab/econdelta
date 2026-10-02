@@ -48,6 +48,10 @@ SOURCES = {
     ),
 }
 
+# metric_history.provenance is an extraction-method enum in production (CHECK
+# metric_history_provenance_check: 'deterministic', 'llm', 'hybrid', 'manual' or NULL).
+REPAIRED_ROW_PROVENANCE = "manual"
+
 
 # Owner decision (d), 26 Sep 2026 BDT. EconDelta re-stamped the standing fiscal-year
 # cumulative NBR collection (BRIEF_CONVERSIONS child of tax_revenue, x0.00001) with each
@@ -444,17 +448,11 @@ def build_candidate(
                     "value": fact["value"],
                     "source": "Bangladesh Bank (reviewed source repair)",
                     "ingested_at": generated_at,
-                    "provenance": json.dumps(
-                        {
-                            "repair": "2026-09-25",
-                            "source_period_end": period,
-                            "unit": fact["unit"],
-                            "release_status": fact["release_status"],
-                            "parents": fact["parents"],
-                            "source_sha256": [r["sha256"] for r in fact["evidence"]],
-                        },
-                        sort_keys=True,
-                    ),
+                    # Owner decision, 2 Oct 2026 ~20:58 BDT: production CHECK
+                    # metric_history_provenance_check allows only deterministic/llm/
+                    # hybrid/manual (or NULL). A reviewed hand transcription is 'manual';
+                    # the source detail stays in this manifest's evidence/receipts.
+                    "provenance": REPAIRED_ROW_PROVENANCE,
                 }
             )
             deps = [verified_ids[(parent, period)] for parent in fact["parents"]]
