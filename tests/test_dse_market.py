@@ -1,7 +1,14 @@
-"""Tests for scrapers/dse_market.py."""
+"""Tests for scrapers/dse_market.py.
+
+The fixture ``dse_api_live_market.json`` is a real, unmodified response from
+``https://www.dse.com.bd/api/live/market`` captured 2026-10-01 ~19:39 UTC
+(01:39 BDT 2 Oct), i.e. after the 1 Oct 2026 session closed -- the same
+situation the 19:21 UTC systemd timer runs in.
+"""
 
 from __future__ import annotations
 
+import copy
 import json
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -11,180 +18,167 @@ import pytest
 
 from scrapers.dse_market import (
     ParseError,
-    parse_homepage_indices,
+    load_live_market,
+    parse_indices,
+    parse_live_market,
     parse_live_market_payload,
-    parse_market_stats,
-    parse_trading_date,
+    parse_market,
+    parse_session_date,
 )
 from utils.schema import DseSnapshot
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
+FIXTURE_SESSION = date(2026, 10, 1)
+FIXTURE_PREV_SESSION = date(2026, 9, 30)
 
 
 # ---------------------------------------------------------------------------
-# Fixtures: load captured HTML
+# Fixtures
 # ---------------------------------------------------------------------------
 
 @pytest.fixture()
-def homepage_html() -> str:
-    return (FIXTURES_DIR / "dse_homepage.html").read_text(encoding="utf-8")
+def live_market_text() -> str:
+    return (FIXTURES_DIR / "dse_api_live_market.json").read_text(encoding="utf-8")
 
 
 @pytest.fixture()
-def market_stats_html() -> str:
-    return (FIXTURES_DIR / "dse_market_statistics.html").read_text(encoding="utf-8")
+def live_market(live_market_text: str) -> dict:
+    return json.loads(live_market_text)
 
 
 # ---------------------------------------------------------------------------
-# Unit tests: parse_homepage_indices
+# Unit tests: parse_indices
 # ---------------------------------------------------------------------------
 
-class TestParseHomepageIndices:
-    def test_parse_homepage_indices_returns_dsex_ds30_dses(self, homepage_html: str):
-        """All three index values should be positive floats."""
-        indices = parse_homepage_indices(homepage_html)
+class TestParseIndices:
+    def test_values_match_captured_response(self, live_market: dict):
+        indices = parse_indices(live_market)
+        assert indices.dsex == pytest.approx(5531.64623)
+        assert indices.dsex_change == pytest.approx(-18.79079)
+        assert indices.dsex_change_pct == pytest.approx(-0.33855)
+        assert indices.ds30 == pytest.approx(2103.54659)
+        assert indices.dses == pytest.approx(1100.25625)
 
-        assert isinstance(indices.dsex, float)
-        assert isinstance(indices.ds30, float)
-        assert isinstance(indices.dses, float)
+    def test_matched_by_key_not_position(self, live_market: dict):
+        live_market["indices"] = list(reversed(live_market["indices"]))
+        indices = parse_indices(live_market)
+        assert indices.dsex == pytest.approx(5531.64623)
+        assert indices.ds30 == pytest.approx(2103.54659)
 
-        assert indices.dsex > 0
-        assert indices.ds30 > 0
-        assert indices.dses > 0
+    def test_missing_dsex_raises(self, live_market: dict):
+        live_market["indices"] = [i for i in live_market["indices"] if i["key"] != "DSEX"]
+        with pytest.raises(ParseError, match="DSEX missing"):
+            parse_indices(live_market)
 
-    def test_dsex_is_in_expected_ballpark(self, homepage_html: str):
-        """DSEX should be near confirmed live value of 5232."""
-        indices = parse_homepage_indices(homepage_html)
-        assert 4000 < indices.dsex < 8000, f"DSEX {indices.dsex} outside expected range"
+    def test_non_numeric_value_raises(self, live_market: dict):
+        live_market["indices"][0]["value"] = None
+        with pytest.raises(ParseError, match="not numeric"):
+            parse_indices(live_market)
 
-    def test_indices_include_change_fields(self, homepage_html: str):
-        """dsex_change and dsex_change_pct must be present (can be negative)."""
-        indices = parse_homepage_indices(homepage_html)
-        assert isinstance(indices.dsex_change, float)
-        assert isinstance(indices.dsex_change_pct, float)
-
-    def test_raises_on_missing_left_col(self):
-        """HTML without LeftColHome div should raise ParseError."""
-        bad_html = "<html><body><div class='something_else'></div></body></html>"
-        with pytest.raises(ParseError, match="LeftColHome"):
-            parse_homepage_indices(bad_html)
-
-    def test_raises_on_too_few_midrows(self):
-        """Fewer than 3 midrow divs should raise ParseError."""
-        bad_html = (
-            "<html><body>"
-            "<div class='LeftColHome'>"
-            "<div class='midrow'><div class='m_col-1'>X</div><div class='m_col-2'>1</div>"
-            "<div class='m_col-3'>0</div><div class='m_col-4'>0%</div></div>"
-            "</div></body></html>"
-        )
-        with pytest.raises(ParseError, match="midrow"):
-            parse_homepage_indices(bad_html)
+    def test_missing_ds30_dses_are_none_not_fabricated(self, live_market: dict):
+        live_market["indices"] = [i for i in live_market["indices"] if i["key"] == "DSEX"]
+        indices = parse_indices(live_market)
+        assert indices.ds30 is None and indices.dses is None
 
 
 # ---------------------------------------------------------------------------
-# Unit tests: parse_market_stats
+# Unit tests: parse_market
 # ---------------------------------------------------------------------------
 
-class TestParseMarketStats:
-    def test_parse_market_stats_returns_expected_fields(self, market_stats_html: str):
-        """All breadth and turnover fields must be present and positive."""
-        market = parse_market_stats(market_stats_html)
+class TestParseMarket:
+    def test_values_match_captured_response(self, live_market: dict):
+        market = parse_market(live_market)
+        assert market.total_trades == 184_783
+        assert market.advancing == 85
+        assert market.declining == 242
+        assert market.unchanged == 58
 
-        assert market.total_trades > 0
-        assert market.turnover_crore > 0
-        assert market.advancing > 0
-        assert market.declining > 0
-        assert market.unchanged >= 0
+    def test_turnover_tk_mn_converted_to_crore(self, live_market: dict):
+        """totals.turnover is Tk MILLION (7231.11 mn = 723.111 crore)."""
+        market = parse_market(live_market)
+        assert market.turnover_crore == pytest.approx(723.111)
+        # Same order of magnitude the old Tk-based page produced (~824 crore).
+        assert 100 < market.turnover_crore < 5000
 
-    def test_parse_market_stats_turnover_in_crore_not_taka(self, market_stats_html: str):
-        """Turnover must be Taka divided by 10M (≈ 824 crore for confirmed live data)."""
-        market = parse_market_stats(market_stats_html)
-
-        # Confirmed live: 8247602308.40 Tk => ~824.76 crore
-        # Accept a band of 500–2000 crore as sanity range
-        assert 500 < market.turnover_crore < 2000, (
-            f"turnover_crore {market.turnover_crore} looks like raw Taka (not divided by 10M)"
-        )
-
-    def test_turnover_conversion_exact(self, market_stats_html: str):
-        """Verify the exact conversion: 8247602308.40 Tk => 824.7602 crore."""
-        market = parse_market_stats(market_stats_html)
-        expected_crore = 8_247_602_308.40 / 10_000_000
-        assert abs(market.turnover_crore - expected_crore) < 0.01
-
-    def test_advancing_declining_unchanged_match_confirmed_values(
-        self, market_stats_html: str
-    ):
-        """Advancing=120, Declining=207, Unchanged=62 (confirmed live 2026-04-20)."""
-        market = parse_market_stats(market_stats_html)
-        assert market.advancing == 120
-        assert market.declining == 207
-        assert market.unchanged == 62
-
-    def test_total_trades_matches_confirmed_value(self, market_stats_html: str):
-        """Total trades = 223903 (confirmed live 2026-04-20)."""
-        market = parse_market_stats(market_stats_html)
-        assert market.total_trades == 223_903
-
-    def test_parse_raises_on_missing_code_block(self):
-        """HTML without a <code> element should raise ParseError."""
-        bad_html = "<html><body><p>No code here</p></body></html>"
-        with pytest.raises(ParseError, match="no <code> block"):
-            parse_market_stats(bad_html)
-
-    def test_parse_raises_when_trades_missing_from_code(self):
-        """A <code> block missing the trades line should raise ParseError."""
-        html_no_trades = (
-            "<html><body><table><tr><td>"
-            "<code>ISSUES ADVANCED : 100\nVALUE(Tk) : 1000000000.00</code>"
-            "</td></tr></table></body></html>"
-        )
-        with pytest.raises(ParseError, match="NO. OF TRADES"):
-            parse_market_stats(html_no_trades)
+    def test_missing_breadth_raises(self, live_market: dict):
+        del live_market["breadth"]
+        with pytest.raises(ParseError, match="breadth"):
+            parse_market(live_market)
 
 
 # ---------------------------------------------------------------------------
-# Unit tests: parse_trading_date
+# Unit tests: parse_session_date
 # ---------------------------------------------------------------------------
 
-class TestParseTradingDate:
-    def test_extracts_iso_date_from_confirmed_fixture(self, market_stats_html: str):
-        """The real fixture's own session date is 2026-04-20, not date.today()."""
-        from scrapers.dse_market import _extract_code_block_text
+class TestParseSessionDate:
+    def test_uses_session_date_not_dhaka_today(self, live_market: dict):
+        """session.date (2026-10-02, 'today in Dhaka') must be ignored in
+        favour of session.sessionDate (2026-10-01, the session's own date)."""
+        assert live_market["session"]["date"] == "2026-10-02"
+        assert parse_session_date(live_market) == FIXTURE_SESSION
 
-        text = _extract_code_block_text(market_stats_html)
-        assert parse_trading_date(text) == date(2026, 4, 20)
-
-    def test_extracts_date_regardless_of_run_date(self, monkeypatch):
-        """Never derives the date from date.today() -- patching it must not
-        change the result at all."""
-        text = "                  TODAY'S SHARE MARKET : 2026-07-09\n"
-
+    def test_independent_of_run_date(self, live_market: dict, monkeypatch):
         class _FixedDate(date):
             @classmethod
             def today(cls):
                 return date(2099, 1, 1)
 
         monkeypatch.setattr("scrapers.dse_market.date", _FixedDate)
-        assert parse_trading_date(text) == date(2026, 7, 9)
+        assert parse_session_date(live_market) == FIXTURE_SESSION
 
-    def test_raises_on_missing_label(self):
-        """No 'TODAY'S SHARE MARKET' label at all -- must raise, never fall back."""
-        with pytest.raises(ParseError, match="TODAY'S SHARE MARKET"):
-            parse_trading_date("ISSUES ADVANCED : 100\nVALUE(Tk) : 1000000000.00")
+    @pytest.mark.parametrize(
+        "is_open,phase",
+        [(True, "open"), (False, "pre-open"), (False, "post-close"), (False, "halted")],
+    )
+    def test_refuses_non_closed_session(self, live_market: dict, is_open, phase):
+        live_market["session"]["isOpen"] = is_open
+        live_market["session"]["phase"] = phase
+        with pytest.raises(ParseError, match="not closed"):
+            parse_session_date(live_market)
 
-    def test_raises_on_malformed_date_value(self):
-        """A present-but-invalid ISO-shaped date (bad month/day) must raise,
-        not silently default."""
+    def test_missing_session_date_raises_never_falls_back(self, live_market: dict):
+        del live_market["session"]["sessionDate"]
+        with pytest.raises(ParseError, match="sessionDate"):
+            parse_session_date(live_market)
+
+    def test_malformed_session_date_raises(self, live_market: dict):
+        live_market["session"]["sessionDate"] = "2026-13-40"
         with pytest.raises(ParseError, match="not a valid ISO date"):
-            parse_trading_date("TODAY'S SHARE MARKET : 2026-13-40")
+            parse_session_date(live_market)
 
-    def test_accepts_curly_apostrophe_variant(self):
-        """DSE's page may render a curly apostrophe (’) instead of a straight one."""
-        text = "TODAY’S SHARE MARKET : 2026-04-20"
-        assert parse_trading_date(text) == date(2026, 4, 20)
+    def test_totals_disagreeing_with_daily_totals_raises(self, live_market: dict):
+        live_market["totals"]["trades"] = 1
+        with pytest.raises(ParseError, match="disagrees"):
+            parse_session_date(live_market)
 
+    def test_no_daily_totals_row_is_tolerated(self, live_market: dict):
+        live_market["dailyTotals"] = []
+        assert parse_session_date(live_market) == FIXTURE_SESSION
+
+
+class TestLoadLiveMarket:
+    def test_non_json_raises(self):
+        with pytest.raises(ParseError, match="did not return JSON"):
+            load_live_market("<html>Gone</html>")
+
+    def test_non_object_raises(self):
+        with pytest.raises(ParseError, match="not an object"):
+            load_live_market("[1, 2]")
+
+    def test_parse_live_market_roundtrip(self, live_market_text: str):
+        d, indices, market = parse_live_market(live_market_text)
+        assert d == FIXTURE_SESSION
+        assert indices.dsex == pytest.approx(5531.64623)
+        assert market.total_trades == 184_783
+
+
+# ---------------------------------------------------------------------------
+# Repair-branch payload validation (fix/data-reliability-20260925), run on the
+# 2026-09-24 capture. Kept alongside #139's tests: both sides moved this
+# scraper to /api/live/market independently; the merged parser carries #139's
+# closed-session gate and dailyTotals cross-check AND the repair branch's
+# finite-number / whole-count / string-key validation.
+# ---------------------------------------------------------------------------
 
 class TestParseLiveMarketPayload:
     def test_uses_source_session_date_and_converts_million_turnover(self):
@@ -227,6 +221,9 @@ class TestParseLiveMarketPayload:
     )
     def test_rejects_invalid_change_or_market_count_before_snapshot(self, mutate):
         payload = json.loads((FIXTURES_DIR / "dse_market_api_20260924.json").read_text())
+        # Merge with #139: drop the dailyTotals history so its trades
+        # cross-check cannot mask the field validator this test is about.
+        payload["dailyTotals"] = []
         mutate(payload)
         with pytest.raises(ParseError):
             parse_live_market_payload(payload)
@@ -241,11 +238,17 @@ class TestParseLiveMarketPayload:
         payload = json.loads((FIXTURES_DIR / "dse_market_api_20260924.json").read_text())
         payload["totals"]["trades"] = 0
         payload["breadth"].update(advanced=0, declined=0, unchanged=0)
+        # Merge with #139: the same-date dailyTotals row must agree with the
+        # headline totals, so move it to zero too.
+        next(row for row in payload["dailyTotals"] if row["date"] == "2026-09-24")["trades"] = 0
 
         _, _, market = parse_live_market_payload(payload)
 
         assert market.total_trades == 0
         assert market.advancing == market.declining == market.unchanged == 0
+
+
+# ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------
@@ -279,42 +282,39 @@ def _make_snapshot(trading_day: bool = True, dsex: float = 5000.0) -> dict:
     )
     snap = DseSnapshot(
         schema_version="1.0",
-        date=date(2026, 4, 19),
-        scraped_at=datetime(2026, 4, 19, 10, 0, 0, tzinfo=timezone.utc),
+        date=FIXTURE_PREV_SESSION,
+        scraped_at=datetime(2026, 9, 30, 19, 21, 0, tzinfo=timezone.utc),
         trading_day=trading_day,
         indices=indices,
         market=market,
-        source_url="https://www.dse.com.bd/market-statistics.php",
+        source_url="https://www.dse.com.bd/api/live/market",
     )
     return snap.model_dump(mode="json")
 
 
-def _live_api_payload(*, trading_date: str = "2026-04-20", dsex: float | None = None) -> dict:
-    payload = json.loads((FIXTURES_DIR / "dse_market_api_20260924.json").read_text())
-    payload["session"]["sessionDate"] = trading_date
-    if dsex is not None:
-        next(row for row in payload["indices"] if row["key"] == "DSEX")["value"] = dsex
-    return payload
+def _inflated(live_market: dict, factor: float) -> str:
+    """The real payload with every index level scaled by `factor`."""
+    payload = copy.deepcopy(live_market)
+    for row in payload["indices"]:
+        row["value"] = row["value"] * factor
+    return json.dumps(payload)
 
 
 class TestMainEntryPoint:
-    """main()'s gate now runs AFTER fetch+parse and evaluates the PARSED trading
-    date, never date.today() or a pre-fetch run-date check. The official API
-    fixture supplies the session date, index levels and market totals together."""
+    """main() fetches /api/live/market ONCE; every gate runs on the PARSED
+    session date (2026-10-01 in the fixture), never date.today()."""
 
-    def test_already_ingested_no_ops_without_second_fetch(self, tmp_path, monkeypatch):
-        """Parsed trading date already has a snapshot on disk -> no-op, exit 0,
-        and the homepage is never fetched (only the stats page, to learn the date)."""
+    def test_already_ingested_no_ops(self, tmp_path, monkeypatch, live_market_text):
         monkeypatch.setenv("ECONDELTA_DRY_RUN", "1")
         monkeypatch.setattr("scrapers.dse_market.DATA_DIR", tmp_path)
 
-        (tmp_path / "2026-04-20.json").write_text(json.dumps(_make_snapshot(dsex=5000.0)))
+        (tmp_path / "2026-10-01.json").write_text(json.dumps(_make_snapshot(dsex=5000.0)))
 
         with (
-            patch("scrapers.dse_market.DEFAULT_CLIENT.fetch_json") as mock_fetch,
+            patch("scrapers.dse_market.DEFAULT_CLIENT.fetch_html") as mock_fetch,
             patch("scrapers.dse_market.notify") as mock_notify,
         ):
-            mock_fetch.side_effect = [_live_api_payload()]
+            mock_fetch.side_effect = [live_market_text]
 
             from scrapers.dse_market import main
 
@@ -323,12 +323,25 @@ class TestMainEntryPoint:
         assert result == 0
         assert mock_fetch.call_count == 1
         mock_notify.assert_not_called()
-        # No new file written, existing one untouched
-        written_files = list(tmp_path.glob("*.json"))
-        assert len(written_files) == 1
+        assert len(list(tmp_path.glob("*.json"))) == 1
+
+    def test_fetches_the_configured_api_url(self, tmp_path, monkeypatch, live_market_text):
+        monkeypatch.setenv("ECONDELTA_DRY_RUN", "1")
+        monkeypatch.setattr("scrapers.dse_market.DATA_DIR", tmp_path)
+
+        with patch("scrapers.dse_market.DEFAULT_CLIENT.fetch_html") as mock_fetch:
+            mock_fetch.return_value = live_market_text
+
+            from scrapers.dse_market import main
+
+            assert main() == 0
+
+        mock_fetch.assert_called_once_with("https://www.dse.com.bd/api/live/market")
+        data = json.loads((tmp_path / "2026-10-01.json").read_text())
+        assert data["source_url"] == "https://www.dse.com.bd/api/live/market"
 
     def test_main_exit_1_on_fetch_failure(self, tmp_path, monkeypatch):
-        """FetchError during the stats fetch should return exit code 1."""
+        """FetchError (e.g. the 410 Gone the old URLs now return) -> exit 1."""
         monkeypatch.setenv("ECONDELTA_DRY_RUN", "1")
         monkeypatch.setattr("scrapers.dse_market.DATA_DIR", tmp_path)
 
@@ -336,9 +349,9 @@ class TestMainEntryPoint:
 
         with (
             patch(
-                "scrapers.dse_market.DEFAULT_CLIENT.fetch_json",
+                "scrapers.dse_market.DEFAULT_CLIENT.fetch_html",
                 side_effect=HttpClient.FetchError(
-                    "https://www.dse.com.bd/", 503, "Service Unavailable"
+                    "https://www.dse.com.bd/api/live/market", 410, "Gone"
                 ),
             ),
             patch("scrapers.dse_market.notify") as mock_notify,
@@ -349,40 +362,196 @@ class TestMainEntryPoint:
 
         assert result == 1
         mock_notify.assert_called_once()
-        call_args = mock_notify.call_args[0]
-        assert call_args[0] == "error"
+        assert mock_notify.call_args[0][0] == "error"
+        assert list(tmp_path.glob("*.json")) == []
 
-    def test_main_exit_1_on_missing_trading_date_never_falls_back(self, tmp_path, monkeypatch):
-        """market-statistics page with no 'TODAY'S SHARE MARKET' line must
-        raise/exit 1 -- and critically, must NOT write a snapshot dated
-        date.today() as a fallback."""
+    def test_main_exit_1_on_missing_session_date_never_falls_back(
+        self, tmp_path, monkeypatch, live_market
+    ):
         monkeypatch.setenv("ECONDELTA_DRY_RUN", "1")
         monkeypatch.setattr("scrapers.dse_market.DATA_DIR", tmp_path)
-
-        response_without_session_date = {"session": {"date": "2026-04-21"}}
+        del live_market["session"]["sessionDate"]
 
         with (
-            patch("scrapers.dse_market.DEFAULT_CLIENT.fetch_json") as mock_fetch,
+            patch("scrapers.dse_market.DEFAULT_CLIENT.fetch_html") as mock_fetch,
             patch("scrapers.dse_market.notify") as mock_notify,
         ):
-            mock_fetch.side_effect = [response_without_session_date]
+            mock_fetch.return_value = json.dumps(live_market)
 
             from scrapers.dse_market import main
 
             result = main()
 
         assert result == 1
-        mock_notify.assert_called_once()
-        call_args = mock_notify.call_args[0]
-        assert call_args[0] == "error"
+        assert mock_notify.call_args[0][0] == "error"
         assert list(tmp_path.glob("*.json")) == []
 
+    def test_main_exit_1_while_market_open_writes_nothing(
+        self, tmp_path, monkeypatch, live_market
+    ):
+        monkeypatch.setenv("ECONDELTA_DRY_RUN", "1")
+        monkeypatch.setattr("scrapers.dse_market.DATA_DIR", tmp_path)
+        live_market["session"].update({"isOpen": True, "phase": "open"})
+
+        with (
+            patch("scrapers.dse_market.DEFAULT_CLIENT.fetch_html") as mock_fetch,
+            patch("scrapers.dse_market.notify") as mock_notify,
+        ):
+            mock_fetch.return_value = json.dumps(live_market)
+
+            from scrapers.dse_market import main
+
+            result = main()
+
+        assert result == 1
+        assert mock_notify.call_args[0][0] == "error"
+        assert list(tmp_path.glob("*.json")) == []
+
+    def test_writes_snapshot_dated_by_parsed_date_not_run_date(
+        self, tmp_path, monkeypatch, live_market_text
+    ):
+        monkeypatch.setenv("ECONDELTA_DRY_RUN", "1")
+        monkeypatch.setattr("scrapers.dse_market.DATA_DIR", tmp_path)
+        monkeypatch.setattr("scrapers.dse_market.load_holidays", lambda _p: set())
+
+        class _FixedDate(date):
+            @classmethod
+            def today(cls):
+                return date(2099, 1, 1)
+
+        monkeypatch.setattr("scrapers.dse_market.date", _FixedDate)
+
+        with patch("scrapers.dse_market.DEFAULT_CLIENT.fetch_html") as mock_fetch:
+            mock_fetch.return_value = live_market_text
+
+            from scrapers.dse_market import main
+
+            result = main()
+
+        assert result == 0
+        written = tmp_path / "2026-10-01.json"
+        assert written.exists()
+        data = json.loads(written.read_text())
+        # Exact existing schema, unchanged.
+        DseSnapshot.model_validate(data)
+        assert data["date"] == "2026-10-01"
+        assert data["trading_day"] is True
+        assert data["indices"] == {
+            "dsex": 5531.64623,
+            "dsex_change": -18.79079,
+            "dsex_change_pct": -0.33855,
+            "ds30": 2103.54659,
+            "dses": 1100.25625,
+        }
+        assert data["market"] == {
+            "turnover_crore": 723.111,
+            "total_trades": 184783,
+            "advancing": 85,
+            "declining": 242,
+            "unchanged": 58,
+        }
+
+    def test_main_exit_2_on_dsex_anomaly(self, tmp_path, monkeypatch, live_market):
+        """A 12% DSEX jump over a 1-day baseline gap blocks the write (exit 2)."""
+        monkeypatch.setenv("ECONDELTA_DRY_RUN", "1")
+        monkeypatch.setattr("scrapers.dse_market.DATA_DIR", tmp_path)
+
+        prev = _make_snapshot(trading_day=True, dsex=5531.64623)
+        (tmp_path / "2026-09-30.json").write_text(json.dumps(prev))
+
+        with (
+            patch("scrapers.dse_market.load_holidays", return_value=set()),
+            patch("scrapers.dse_market.previous_trading_day", return_value=FIXTURE_PREV_SESSION),
+            patch("scrapers.dse_market.DEFAULT_CLIENT.fetch_html") as mock_fetch,
+            patch("scrapers.dse_market.notify") as mock_notify,
+        ):
+            mock_fetch.return_value = _inflated(live_market, 1.12)
+
+            from scrapers.dse_market import main
+
+            result = main()
+
+        assert result == 2
+        mock_notify.assert_called_once()
+        assert mock_notify.call_args[0][0] == "warning"
+        assert "dsex" in mock_notify.call_args[0][2].lower()
+        assert not (tmp_path / "2026-10-01.json").exists()
+
+    def test_anomaly_across_eid_window_gap_writes_with_warning_not_blocked(
+        self, tmp_path, monkeypatch, live_market
+    ):
+        """MEDIUM-2: the same 12% move over a 7-day baseline gap writes + warns."""
+        monkeypatch.setenv("ECONDELTA_DRY_RUN", "1")
+        monkeypatch.setattr("scrapers.dse_market.DATA_DIR", tmp_path)
+
+        prev = _make_snapshot(trading_day=True, dsex=5531.64623)
+        prev["date"] = "2026-09-24"
+        (tmp_path / "2026-09-24.json").write_text(json.dumps(prev))
+
+        with (
+            patch("scrapers.dse_market.load_holidays", return_value=set()),
+            patch("scrapers.dse_market.previous_trading_day", return_value=date(2026, 9, 24)),
+            patch("scrapers.dse_market.DEFAULT_CLIENT.fetch_html") as mock_fetch,
+            patch("scrapers.dse_market.notify") as mock_notify,
+        ):
+            mock_fetch.return_value = _inflated(live_market, 1.12)
+
+            from scrapers.dse_market import main
+
+            result = main()
+
+        assert result == 0
+        mock_notify.assert_called_once()
+        assert mock_notify.call_args[0][0] == "warning"
+        assert "baseline gap" in mock_notify.call_args[0][1].lower()
+        assert "dsex" in mock_notify.call_args[0][2].lower()
+        assert (tmp_path / "2026-10-01.json").exists()
+
+    def test_makeup_session_on_calendar_non_trading_day_still_writes(
+        self, tmp_path, monkeypatch, live_market_text
+    ):
+        """A session the calendar calls non-trading (makeup Saturday) is still
+        written -- see AGENT_LEARNINGS.md 2026-08-08."""
+        monkeypatch.setenv("ECONDELTA_DRY_RUN", "1")
+        monkeypatch.setattr("scrapers.dse_market.DATA_DIR", tmp_path)
+
+        with (
+            patch("scrapers.dse_market.is_bd_trading_day", return_value=False),
+            patch("scrapers.dse_market.load_holidays", return_value=set()),
+            patch("scrapers.dse_market.DEFAULT_CLIENT.fetch_html") as mock_fetch,
+        ):
+            mock_fetch.return_value = live_market_text
+
+            from scrapers.dse_market import main
+
+            result = main()
+
+        assert result == 0
+        assert (tmp_path / "2026-10-01.json").exists()
+
+
+# ---------------------------------------------------------------------------
+# Repair-branch main() validation paths, ported from fetch_json(dict) to the
+# fetch_html(text) path #139 uses: a malformed body, an invalid index shape and
+# an invalid-then-corrected session all take the handled error path and write
+# no snapshot; the corrected payload still ingests on the next run.
+# ---------------------------------------------------------------------------
+
+
+def _live_api_payload(*, trading_date: str = "2026-04-20", dsex: float | None = None) -> dict:
+    payload = json.loads((FIXTURES_DIR / "dse_market_api_20260924.json").read_text())
+    payload["session"]["sessionDate"] = trading_date
+    if dsex is not None:
+        next(row for row in payload["indices"] if row["key"] == "DSEX")["value"] = dsex
+    return payload
+
+
+class TestMainEntryPointPayloadValidation:
     def test_malformed_api_json_uses_handled_error_path_without_snapshot(self, tmp_path, monkeypatch):
         monkeypatch.setenv("ECONDELTA_DRY_RUN", "1")
         monkeypatch.setattr("scrapers.dse_market.DATA_DIR", tmp_path)
-        malformed = json.JSONDecodeError("invalid JSON", "<html>not json</html>", 0)
         with (
-            patch("scrapers.dse_market.DEFAULT_CLIENT.fetch_json", side_effect=malformed),
+            patch("scrapers.dse_market.DEFAULT_CLIENT.fetch_html", return_value="<html>not json</html>"),
             patch("scrapers.dse_market.notify") as mock_notify,
         ):
             from scrapers.dse_market import main
@@ -399,7 +568,7 @@ class TestMainEntryPoint:
         payload = _live_api_payload()
         payload["indices"][0]["key"] = 123
         with (
-            patch("scrapers.dse_market.DEFAULT_CLIENT.fetch_json", return_value=payload),
+            patch("scrapers.dse_market.DEFAULT_CLIENT.fetch_html", return_value=json.dumps(payload)),
             patch("scrapers.dse_market.notify") as mock_notify,
         ):
             from scrapers.dse_market import main
@@ -419,8 +588,8 @@ class TestMainEntryPoint:
         corrected = _live_api_payload()
         with (
             patch(
-                "scrapers.dse_market.DEFAULT_CLIENT.fetch_json",
-                side_effect=[invalid, corrected],
+                "scrapers.dse_market.DEFAULT_CLIENT.fetch_html",
+                side_effect=[json.dumps(invalid), json.dumps(corrected)],
             ),
             patch("scrapers.dse_market.notify") as mock_notify,
         ):
@@ -435,123 +604,3 @@ class TestMainEntryPoint:
         assert written.exists()
         snapshot = json.loads(written.read_text())
         assert snapshot["market"]["advancing"] >= 0
-
-    def test_writes_snapshot_dated_by_parsed_date_not_run_date(self, tmp_path, monkeypatch):
-        """The written snapshot's `date` field is the PARSED trading date
-        (2026-04-20, from the real fixture) even when date.today() is
-        patched to a completely different day -- proving there is no
-        run-date fallback anywhere in the write path."""
-        monkeypatch.setenv("ECONDELTA_DRY_RUN", "1")
-        monkeypatch.setattr("scrapers.dse_market.DATA_DIR", tmp_path)
-        monkeypatch.setattr("scrapers.dse_market.load_holidays", lambda _p: set())
-
-        class _FixedDate(date):
-            @classmethod
-            def today(cls):
-                return date(2099, 1, 1)
-
-        monkeypatch.setattr("scrapers.dse_market.date", _FixedDate)
-
-        with patch("scrapers.dse_market.DEFAULT_CLIENT.fetch_json", return_value=_live_api_payload()):
-
-            from scrapers.dse_market import main
-
-            result = main()
-
-        assert result == 0
-        written = tmp_path / "2026-04-20.json"
-        assert written.exists()
-        data = json.loads(written.read_text())
-        assert data["date"] == "2026-04-20"
-
-    def test_main_exit_2_on_dsex_anomaly(self, tmp_path, monkeypatch):
-        """DSEX 10% higher than previous snapshot should trigger anomaly exit 2."""
-        monkeypatch.setenv("ECONDELTA_DRY_RUN", "1")
-        monkeypatch.setattr("scrapers.dse_market.DATA_DIR", tmp_path)
-
-        # Write previous snapshot with DSEX = 5000, dated the trading day
-        # immediately before the fixture's own session date (2026-04-20).
-        prev_data = _make_snapshot(trading_day=True, dsex=5000.0)
-        prev_file = tmp_path / "2026-04-19.json"
-        prev_file.write_text(json.dumps(prev_data))
-
-        with (
-            patch("scrapers.dse_market.load_holidays", return_value=set()),
-            patch("scrapers.dse_market.previous_trading_day", return_value=date(2026, 4, 19)),
-            patch("scrapers.dse_market.DEFAULT_CLIENT.fetch_json", return_value=_live_api_payload(dsex=5600.0)),
-            patch("scrapers.dse_market.notify") as mock_notify,
-        ):
-            from scrapers.dse_market import main
-
-            result = main()
-
-        assert result == 2
-        mock_notify.assert_called_once()
-        call_args = mock_notify.call_args[0]
-        assert call_args[0] == "warning"
-        assert "dsex" in call_args[2].lower()
-
-        # No NEW snapshot written for the fixture's trading date
-        assert not (tmp_path / "2026-04-20.json").exists()
-
-    def test_anomaly_across_eid_window_gap_writes_with_warning_not_blocked(
-        self, tmp_path, monkeypatch
-    ):
-        """MEDIUM-2 (2026-08-22 round-1 review): the SAME 12% DSEX move that
-        hard-blocks the write on a normal 1-day gap must instead WRITE +
-        warn when the baseline is a week old -- the config/holidays_2026.json
-        completion in this PR means a 7-day Eid closure is now a real,
-        expected baseline gap, and a week's worth of accumulated movement
-        compressed into one comparison is not the anomaly this threshold
-        exists to catch."""
-        monkeypatch.setenv("ECONDELTA_DRY_RUN", "1")
-        monkeypatch.setattr("scrapers.dse_market.DATA_DIR", tmp_path)
-
-        # Previous session 7 calendar days before the fixture's own trading
-        # date (2026-04-20) -- e.g. the last pre-Eid session.
-        prev_data = _make_snapshot(trading_day=True, dsex=5000.0)
-        prev_data["date"] = "2026-04-13"
-        prev_file = tmp_path / "2026-04-13.json"
-        prev_file.write_text(json.dumps(prev_data))
-
-        with (
-            patch("scrapers.dse_market.load_holidays", return_value=set()),
-            patch("scrapers.dse_market.previous_trading_day", return_value=date(2026, 4, 13)),
-            patch("scrapers.dse_market.DEFAULT_CLIENT.fetch_json", return_value=_live_api_payload(dsex=5600.0)),
-            patch("scrapers.dse_market.notify") as mock_notify,
-        ):
-            from scrapers.dse_market import main
-
-            result = main()
-
-        assert result == 0
-        mock_notify.assert_called_once()
-        call_args = mock_notify.call_args[0]
-        assert call_args[0] == "warning"
-        assert "baseline gap" in call_args[1].lower()
-        assert "dsex" in call_args[2].lower()
-
-        # The snapshot for the new trading date WAS written this time.
-        assert (tmp_path / "2026-04-20.json").exists()
-
-    def test_makeup_session_on_calendar_non_trading_day_still_writes(self, tmp_path, monkeypatch):
-        """A parsed trading date the calendar treats as non-trading (e.g. a
-        DSE makeup Friday/Saturday session around Eid, or an uncalendared
-        moon-sighting holiday) must still be WRITTEN, never silently
-        dropped -- see AGENT_LEARNINGS.md 2026-08-08."""
-        monkeypatch.setenv("ECONDELTA_DRY_RUN", "1")
-        monkeypatch.setattr("scrapers.dse_market.DATA_DIR", tmp_path)
-
-        with (
-            patch("scrapers.dse_market.is_bd_trading_day", return_value=False),
-            patch("scrapers.dse_market.load_holidays", return_value=set()),
-            patch("scrapers.dse_market.DEFAULT_CLIENT.fetch_json", return_value=_live_api_payload()),
-        ):
-            from scrapers.dse_market import main
-
-            result = main()
-
-        assert result == 0
-        # Written anyway -- the calendar's "non-trading" verdict never blocks
-        # a genuinely new, parsed session.
-        assert (tmp_path / "2026-04-20.json").exists()

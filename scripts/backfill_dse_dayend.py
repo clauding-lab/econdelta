@@ -2,27 +2,34 @@
 
 Source
 ------
-DSE Day End Archive — one HTTP GET per scrip returns the full requested date
-range as an HTML table:
+DSE Day End Archive. DSE replaced its PHP site (dsebd.org/*.php, now HTTP 410
+Gone) with a Next.js app ~24-28 Sep 2026; the new site's archive page reads a
+public JSON endpoint, which we call directly:
 
-    https://www.dsebd.org/day_end_archive.php
-        ?startDate=YYYY-MM-DD&endDate=YYYY-MM-DD&inst=<CODE>&archive=data
+    https://www.dse.com.bd/api/live/data-archive/day-end
+        ?from=YYYY-MM-DD&to=YYYY-MM-DD&inst=<CODE>&page=N
 
-The data table header (verified 2026-05-30) is:
+    -> {"rows": [{"serial", "date", "tradingCode", "ltp", "high", "low",
+                  "openp", "closep", "ycp", "trade", "value", "volume"}, ...],
+        "total": <int>, "page": <int>, "pageSize": 500}
 
-    # | DATE | TRADING CODE | LTP* | HIGH | LOW | OPENP* | CLOSEP* | YCP
-      | TRADE | VALUE (mn) | VOLUME
+Rows come newest-first, 500 per page. The archive only reaches back ~2 years
+(earliest row 2024-10-02 as of 2026-10-01), and a window that starts before
+that is CLAMPED -- the endpoint can return rows OUTSIDE the requested window,
+so the parser filters every row to [start, end]. Values are identical to the
+old PHP archive (verified 2026-10-01: 78/78 BRACBANK+GP closes from the
+2026-05-30 HTML captures match exactly).
 
-We keep the closing price (``CLOSEP*``) per trading day and write one
+We keep the closing price (``closep``) per trading day and write one
 ``metric_history`` row per (scrip, date):
 
     metric_id = "dse_close_<CODE>"   e.g. dse_close_BRACBANK
-    as_of     = the trading DATE     (per-row, not the run date)
-    value     = CLOSEP*              (numeric, taka)
+    as_of     = the row's own ``date`` (per-row, not the run date)
+    value     = closep               (numeric, taka)
     source    = "DSE Day End Archive"
 
 The DS30 constituent list (30 trading codes) comes from
-``https://dsebd.org/dse30_share.php`` — the single 30-row table on the page.
+``https://www.dse.com.bd/api/live/index-constituents?code=DS30`` (``rows[].code``).
 
 This mirrors econdelta conventions:
   * ``utils.http_client.HttpClient`` for the polite retrying session.
@@ -55,14 +62,13 @@ Real backfill (writes to Supabase — requires SUPABASE_URL + service key):
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import re
 import sys
 import time
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
-
-from bs4 import BeautifulSoup
 
 from utils.http_client import HttpClient
 from utils.notifier import notify
@@ -73,14 +79,19 @@ logger = logging.getLogger("backfill_dse_dayend")
 # Constants
 # --------------------------------------------------------------------------- #
 
-DS30_URL = "https://dsebd.org/dse30_share.php"
-ARCHIVE_URL = "https://www.dsebd.org/day_end_archive.php"
+DS30_URL = "https://www.dse.com.bd/api/live/index-constituents?code=DS30"
+ARCHIVE_URL = "https://www.dse.com.bd/api/live/data-archive/day-end"
 SOURCE_LABEL = "DSE Day End Archive"
 METRIC_PREFIX = "dse_close_"
 
-# dsebd.org occasionally rejects the default econdelta UA on these PHP pages;
-# a browser UA is reliable from BD egress. Kept here, not in http_client, so we
-# don't perturb the shared client other scrapers depend on.
+# Hard cap on archive pages per scrip (500 rows/page; the archive holds ~2
+# years ~= 480 trading days, so 2 pages is the real maximum). Guards against a
+# pagination bug looping forever.
+_MAX_ARCHIVE_PAGES = 10
+
+# The old dsebd.org PHP pages occasionally rejected the default econdelta UA;
+# kept as a browser UA for the new site too. Kept here, not in http_client, so
+# we don't perturb the shared client other scrapers depend on.
 _BROWSER_UA = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
@@ -124,131 +135,96 @@ class CloseRow:
 # --------------------------------------------------------------------------- #
 
 
-def _clean_number(text: str) -> float:
-    """Strip thousands separators / stray chars and parse a float."""
-    cleaned = text.strip().replace(",", "").rstrip("%")
-    return float(cleaned)
+def _load_json_object(payload: str | dict, what: str) -> dict:
+    """Accept a raw response body or an already-decoded dict; must be an object."""
+    if isinstance(payload, dict):
+        return payload
+    try:
+        obj = json.loads(payload)
+    except ValueError as e:
+        raise BackfillError(f"{what}: response is not JSON: {e}") from e
+    if not isinstance(obj, dict):
+        raise BackfillError(f"{what}: expected a JSON object, got {type(obj).__name__}")
+    return obj
 
 
-def _find_data_table(soup: BeautifulSoup, *, required_headers: list[str]):
-    """Return the first <table> whose header row contains all required headers.
+def _rows(obj: dict, what: str) -> list:
+    rows = obj.get("rows")
+    if not isinstance(rows, list):
+        raise BackfillError(f"{what}: response has no `rows` list")
+    return rows
 
-    DSE wraps the real grid in many sibling tables; we identify the data table
-    by its header text rather than a brittle positional index.
+
+_CODE_RE = re.compile(r"[A-Z0-9]+")
+
+
+def parse_ds30_codes(payload: str | dict) -> list[str]:
+    """Extract the DS30 trading codes from /api/live/index-constituents?code=DS30.
+
+    The response is ``{"rows": [{"code": "BRACBANK", "closep": ..., ...}, ...]}``
+    -- one row per index member (30). Order is preserved, duplicates dropped.
+    A list that isn't exactly 30 is still returned (the index could be
+    mid-rebalance) but logged; an EMPTY list is a hard error.
     """
-    wanted = [h.upper() for h in required_headers]
-    for table in soup.find_all("table"):
-        rows = table.find_all("tr")
-        if not rows:
-            continue
-        header_text = rows[0].get_text(" ", strip=True).upper()
-        if all(w in header_text for w in wanted):
-            return table
-    return None
+    obj = _load_json_object(payload, "DS30 constituents")
+    codes: list[str] = []
+    for row in _rows(obj, "DS30 constituents"):
+        code = str(row.get("code", "")).strip().upper() if isinstance(row, dict) else ""
+        if _CODE_RE.fullmatch(code) and code not in codes:
+            codes.append(code)
+    if not codes:
+        raise BackfillError("DS30 constituents: no trading codes in response")
+    if len(codes) != 30:
+        logger.warning("DS30 constituents: expected 30 codes, got %d", len(codes))
+    return codes
 
 
-def _header_index(header_cells: list[str], *candidates: str) -> int:
-    """Return the column index whose stripped/upper header matches a candidate.
-
-    Matching is tolerant of trailing markers like the '*' DSE appends to
-    CLOSEP / LTP / OPENP / YCP column labels.
-    """
-    norm = [c.strip().upper().rstrip("*").strip() for c in header_cells]
-    for cand in candidates:
-        target = cand.strip().upper().rstrip("*").strip()
-        for i, h in enumerate(norm):
-            if h == target:
-                return i
-    raise BackfillError(
-        f"none of columns {candidates!r} found in header {header_cells!r}"
-    )
-
-
-def parse_ds30_codes(html: str) -> list[str]:
-    """Extract the 30 DS30 trading codes from dse30_share.php.
-
-    The page lists every DSE scrip in a dropdown plus one dedicated 30-row
-    table for the DS30 index members. We pick the table whose header carries
-    'TRADING CODE' and 'CLOSEP' and has exactly 30 ``displayCompany`` links.
-    """
-    soup = BeautifulSoup(html, "html.parser")
-
-    best: list[str] = []
-    for table in soup.find_all("table"):
-        rows = table.find_all("tr")
-        if not rows:
-            continue
-        header_text = rows[0].get_text(" ", strip=True).upper()
-        if "TRADING CODE" not in header_text or "CLOSEP" not in header_text:
-            continue
-        codes: list[str] = []
-        for a in table.find_all("a", href=True):
-            m = re.search(r"displayCompany\.php\?name=([A-Z0-9]+)", a["href"])
-            if m:
-                code = m.group(1)
-                if code not in codes:
-                    codes.append(code)
-        # The DS30 members table holds exactly 30 scrips; prefer it. Fall back
-        # to the largest matching table so a small layout drift still parses.
-        if len(codes) == 30:
-            return codes
-        if len(codes) > len(best):
-            best = codes
-
-    if not best:
-        raise BackfillError("DS30 page: no table with trading-code links found")
-    logger.warning(
-        "DS30 page: no exact 30-row table; using best match with %d codes",
-        len(best),
-    )
-    return best
-
-
-def parse_day_end_archive(html: str, *, expected_code: str | None = None) -> list[CloseRow]:
-    """Parse the Day End Archive grid into ``CloseRow`` records.
+def parse_day_end_archive(
+    payload: str | dict,
+    *,
+    expected_code: str | None = None,
+    start: date | None = None,
+    end: date | None = None,
+) -> list[CloseRow]:
+    """Parse one /api/live/data-archive/day-end page into ``CloseRow`` records.
 
     Args:
-        html: Raw HTML of one day_end_archive.php?...&archive=data response.
-        expected_code: If given, rows whose TRADING CODE differs are skipped
+        payload: Response body (str) or decoded dict of one archive page.
+        expected_code: If given, rows whose ``tradingCode`` differs are skipped
             (defensive — the endpoint already filters by ``inst``).
+        start, end: If given, rows dated outside [start, end] are dropped. The
+            endpoint CLAMPS a window that starts before its ~2-year horizon
+            and then returns rows outside the requested range, so the caller's
+            window must be enforced here.
 
     Returns:
-        One ``CloseRow`` per trading-day row, sorted ascending by date.
+        One ``CloseRow`` per trading-day row, sorted ascending by date. Each
+        row's ``as_of`` is that row's own ``date`` — never the run date.
 
     Raises:
-        BackfillError: If the data table or its DATE/CLOSEP columns are missing.
+        BackfillError: If the body is not a JSON object with a ``rows`` list.
     """
-    soup = BeautifulSoup(html, "html.parser")
-    table = _find_data_table(
-        soup, required_headers=["DATE", "TRADING CODE", "CLOSEP"]
-    )
-    if table is None:
-        raise BackfillError("day-end archive: no DATE/CLOSEP data table found")
-
-    rows = table.find_all("tr")
-    header_cells = [c.get_text(" ", strip=True) for c in rows[0].find_all(["th", "td"])]
-    date_idx = _header_index(header_cells, "DATE")
-    code_idx = _header_index(header_cells, "TRADING CODE")
-    close_idx = _header_index(header_cells, "CLOSEP")
-
+    obj = _load_json_object(payload, "day-end archive")
     out: list[CloseRow] = []
-    for tr in rows[1:]:
-        cells = [c.get_text(" ", strip=True) for c in tr.find_all(["td", "th"])]
-        # Need enough columns and a date-shaped first data field.
-        if len(cells) <= max(date_idx, code_idx, close_idx):
+    for row in _rows(obj, "day-end archive"):
+        if not isinstance(row, dict):
             continue
-        raw_date = cells[date_idx].strip()
-        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", raw_date):
-            continue  # skip totals / spacer / non-data rows
-        code = cells[code_idx].strip().upper()
+        code = str(row.get("tradingCode", "")).strip().upper()
         if expected_code and code != expected_code.upper():
             continue
+        raw_date = row.get("date")
+        closep = row.get("closep")
         try:
             as_of = date.fromisoformat(raw_date)
-            closep = _clean_number(cells[close_idx])
-        except (ValueError, TypeError):
-            logger.warning("skipping unparseable row for %s: %r", code, cells)
+        except (TypeError, ValueError):
+            logger.warning("skipping row with bad date for %s: %r", code, row)
             continue
+        if (start and as_of < start) or (end and as_of > end):
+            continue
+        if isinstance(closep, bool) or not isinstance(closep, (int, float)):
+            logger.warning("skipping row with non-numeric close for %s: %r", code, row)
+            continue
+        closep = float(closep)
         if not (_MIN_CLOSE < closep <= _MAX_CLOSE):
             logger.warning(
                 "skipping out-of-range close for %s @ %s: %s", code, raw_date, closep
@@ -303,21 +279,36 @@ def _make_client() -> HttpClient:
 
 
 def fetch_ds30_codes(client: HttpClient) -> list[str]:
-    html = client.fetch_html(DS30_URL)
-    return parse_ds30_codes(html)
+    return parse_ds30_codes(client.fetch_html(DS30_URL))
 
 
 def fetch_scrip_closes(
     client: HttpClient, code: str, start: date, end: date
 ) -> list[CloseRow]:
-    params = {
-        "startDate": start.isoformat(),
-        "endDate": end.isoformat(),
-        "inst": code,
-        "archive": "data",
-    }
-    html = client.fetch_html(ARCHIVE_URL, params=params)
-    return parse_day_end_archive(html, expected_code=code)
+    """Fetch every archive page for one scrip over [start, end]."""
+    out: list[CloseRow] = []
+    seen_rows = 0
+    for page in range(1, _MAX_ARCHIVE_PAGES + 1):
+        params = {
+            "from": start.isoformat(),
+            "to": end.isoformat(),
+            "inst": code,
+            "page": page,
+        }
+        obj = _load_json_object(client.fetch_html(ARCHIVE_URL, params=params), "day-end archive")
+        rows = _rows(obj, "day-end archive")
+        out.extend(parse_day_end_archive(obj, expected_code=code, start=start, end=end))
+        seen_rows += len(rows)
+        total = obj.get("total")
+        if not rows or not isinstance(total, int) or seen_rows >= total:
+            break
+    else:
+        raise BackfillError(
+            f"day-end archive for {code}: still paging after {_MAX_ARCHIVE_PAGES} pages"
+        )
+    # Pages are disjoint, but dedupe defensively on (code, date).
+    unique = {(r.code, r.as_of): r for r in out}
+    return sorted(unique.values(), key=lambda r: r.as_of)
 
 
 # --------------------------------------------------------------------------- #
@@ -390,7 +381,7 @@ def run_backfill(
     all_rows: list[CloseRow] = []
     for i, code in enumerate(codes):
         if i:
-            time.sleep(_REQUEST_DELAY_S)  # be polite to dsebd.org
+            time.sleep(_REQUEST_DELAY_S)  # be polite to DSE
         try:
             rows = fetch_scrip_closes(client, code, start, end)
         except (HttpClient.FetchError, BackfillError) as e:
@@ -455,7 +446,7 @@ def run_backfill(
                 source=SOURCE_LABEL,
                 source_as_of_map=as_of_map,
                 ingested_at=write_ts,
-                # Regex/table-column parse of the DSE Day End Archive HTML — no LLM call.
+                # Direct JSON field read from the DSE Day End Archive API — no LLM call.
                 provenance="deterministic",
             )
             total += n

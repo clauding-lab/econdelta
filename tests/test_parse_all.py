@@ -1,6 +1,6 @@
 import json
 import subprocess
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -103,7 +103,7 @@ def test_load_last_good_excludes_todays_own_snapshot(tmp_path: Path):
     because it is already sitting on disk. _load_last_good must skip a
     snapshot scraped today and fall back to yesterday's real value."""
     today = datetime.now(timezone.utc)
-    yesterday = today.replace(day=today.day - 1) if today.day > 1 else today
+    yesterday = today - timedelta(days=1)
     _write_snapshot(
         tmp_path, "x", "today.json", value=999.0, scraped_at=today.isoformat(),
     )

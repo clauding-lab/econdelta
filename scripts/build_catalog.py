@@ -546,7 +546,7 @@ def _short_source(url: str) -> str:
         return "Daily Star"
     if "dam.gov.bd" in url:
         return "DAM"
-    if "dsebd.org" in url:
+    if "dsebd.org" in url or "dse.com.bd" in url:
         return "DSE"
     if "gsom.bb.org.bd" in url:
         return "BB GSOM"

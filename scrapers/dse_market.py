@@ -1,4 +1,11 @@
-"""DSE daily market scraper — requests-based, trading-day-gated, anomaly-gated."""
+"""DSE daily market scraper — requests-based, session-dated, anomaly-gated.
+
+Source: the JSON feed behind the new www.dse.com.bd site (Next.js, launched
+~24-28 Sep 2026). The old PHP pages this scraper used to read
+(``market-statistics.php`` + the homepage index widget) now answer HTTP 410
+Gone. ``/api/live/market`` carries the indices, totals, breadth AND the
+session's own date in one response, so one fetch replaces the old two.
+"""
 
 from __future__ import annotations
 
@@ -10,8 +17,6 @@ import re
 import sys
 from datetime import date, datetime, timezone
 from pathlib import Path
-
-from bs4 import BeautifulSoup
 
 from utils.anomaly import check_threshold, load_thresholds
 from utils.calendar import is_bd_trading_day, load_holidays, previous_trading_day
@@ -30,285 +35,188 @@ FetchError = HttpClient.FetchError
 
 logger = logging.getLogger("dse_market")
 
-_TAKA_PER_CRORE = 10_000_000
-_DSE_API_TURNOVER_MILLION_TO_CRORE = 10.0
+# /api/live/market reports `totals.turnover` in Tk MILLION (the site's own
+# "At a glance" panel labels the same number "Total Turnover in Tk. mn").
+# 1 crore = 10 million, so crore = mn / 10.
+_TK_MN_PER_CRORE = 10
 
 
 class ParseError(Exception):
     pass
 
 
-def _parse_float(text: str) -> float:
-    """Strip whitespace and parse a float from a string."""
-    cleaned = text.strip().rstrip("%").replace(",", "")
-    return float(cleaned)
+def load_live_market(text: str) -> dict:
+    """Decode the /api/live/market body; anything but a JSON object is a ParseError."""
+    try:
+        payload = json.loads(text)
+    except ValueError as exc:
+        raise ParseError(f"/api/live/market did not return JSON: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise ParseError(f"/api/live/market returned {type(payload).__name__}, not an object")
+    return payload
 
 
-def parse_homepage_indices(html: str) -> DseIndices:
-    """Extract DSEX, DS30, DSES from homepage inline text widget.
+def parse_session_date(payload: dict) -> date:
+    """Return the trading SESSION the payload's numbers belong to.
 
-    The homepage shows index values in a summary strip inside div.LeftColHome.
-    Three consecutive div.midrow elements hold DSEX, DSES, and DS30 in order.
-    Each midrow has: m_col-1 (label), m_col-2 (value), m_col-3 (change), m_col-4 (pct).
-    """
-    soup = BeautifulSoup(html, "html.parser")
+    ``session.sessionDate`` is the source's own date for the last session.
+    DSE runs weekend makeup sessions (AGENT_LEARNINGS.md 2026-08-08) and the
+    timer fires at 01:21 BDT the NEXT calendar day, so the date must come from
+    the source, never from the run clock. ``session.date`` is merely "today in
+    Dhaka" (the calendar/session context; it can be a day later on weekends
+    and holidays) and is deliberately ignored.
 
-    left_col = soup.find("div", class_="LeftColHome")
-    if left_col is None:
-        raise ParseError("LeftColHome div not found on DSE homepage")
-
-    midrows = left_col.find_all("div", class_="midrow")
-    if len(midrows) < 3:
-        raise ParseError(
-            f"Expected at least 3 midrow divs in LeftColHome, found {len(midrows)}"
-        )
-
-    def extract_row(midrow) -> tuple[str, float, float, float]:
-        """Return (label_lower, value, change, change_pct) from a midrow div."""
-        label_el = midrow.find("div", class_="m_col-1")
-        value_el = midrow.find("div", class_="m_col-2")
-        change_el = midrow.find("div", class_="m_col-3")
-        pct_el = midrow.find("div", class_="m_col-4")
-
-        if not (label_el and value_el and change_el and pct_el):
-            raise ParseError(f"Missing m_col elements in midrow: {midrow}")
-
-        label = label_el.get_text(" ", strip=True).lower()
-        value = _parse_float(value_el.get_text())
-        change = _parse_float(change_el.get_text())
-        pct = _parse_float(pct_el.get_text())
-        return label, value, change, pct
-
-    # Rows 0, 1, 2 are DSEX, DSES, DS30 respectively.
-    # Label text (stripped, no separator): "DSEXIndex", "DSESIndex", "DS30 Index"
-    # The <font> tag inside m_col-1 merges the split "X"/"S" character without spacing.
-    label0, val0, chg0, pct0 = extract_row(midrows[0])
-    label1, val1, chg1, pct1 = extract_row(midrows[1])
-    label2, val2, chg2, pct2 = extract_row(midrows[2])
-
-    # Match by canonical slug (case-insensitive, whitespace-collapsed)
-    def _slugify(s):
-        return re.sub(r"\s+", "", s.lower())
-
-    dsex_val = dsex_chg = dsex_pct = None
-    dses_val = None
-    ds30_val = None
-
-    for label, val, chg, pct in [
-        (label0, val0, chg0, pct0),
-        (label1, val1, chg1, pct1),
-        (label2, val2, chg2, pct2),
-    ]:
-        slug = _slugify(label)
-        if "dsex" in slug:
-            if dsex_val is None:
-                dsex_val, dsex_chg, dsex_pct = val, chg, pct
-        elif "dses" in slug or ("dse" in slug and "s" in slug and "30" not in slug):
-            if dses_val is None:
-                dses_val = val
-        elif "30" in slug or "ds30" in slug:
-            if ds30_val is None:
-                ds30_val = val
-
-    # Positional fallback if label matching failed
-    if dsex_val is None:
-        dsex_val, dsex_chg, dsex_pct = val0, chg0, pct0
-    if dses_val is None:
-        dses_val = val1
-    if ds30_val is None:
-        ds30_val = val2
-
-    return DseIndices(
-        dsex=dsex_val,
-        dsex_change=dsex_chg,
-        dsex_change_pct=dsex_pct,
-        ds30=ds30_val,
-        dses=dses_val,
-    )
-
-
-def _extract_code_block_text(html: str) -> str:
-    """Return the plaintext of the <code> block on market-statistics.php.
-
-    Shared by parse_market_stats and parse_trading_date -- both read different
-    lines out of the SAME preformatted block, so a bad/missing selector only
-    needs fixing in one place.
-    """
-    soup = BeautifulSoup(html, "html.parser")
-
-    # Try progressively looser selectors
-    code_block = (
-        soup.select_one("table > tbody > tr > td > code")
-        or soup.select_one("table code")
-        or soup.select_one("code")
-    )
-    if code_block is None:
-        raise ParseError("no <code> block found on market-statistics.php")
-
-    return code_block.get_text("\n")
-
-
-# DSE stamps every market-statistics.php snapshot with its own session date:
-# "                  TODAY'S SHARE MARKET : 2026-04-20". This is the SOURCE's
-# own trading date -- extracting it here (rather than trusting date.today())
-# is the whole point of this fix. See parse_trading_date's docstring.
-_TRADING_DATE_RE = re.compile(
-    r"TODAY[’']S\s+SHARE\s+MARKET\s*:\s*(\d{4}-\d{2}-\d{2})", re.IGNORECASE
-)
-
-
-def parse_trading_date(text: str) -> date:
-    """Extract the page's own trading date from market-statistics.php's code block.
-
-    The systemd timer fires at 19:21 UTC (01:21 BDT the NEXT calendar day) to
-    capture that day's already-closed session, so ``date.today()`` at run time
-    is reliably one day ahead of the session the page describes -- every
-    dse_market snapshot was stamped with the wrong day until this fix (see
-    AGENTS.md landmine 33 / AGENT_LEARNINGS.md 2026-08-08 "one trading day
-    late"). This function reads the page's own "TODAY'S SHARE MARKET : YYYY-
-    MM-DD" line instead, so the snapshot is stamped with the SESSION's real
-    date regardless of what the run clock or run-date/BDT-offset math says.
-
-    Args:
-        text: the plaintext of the <code> block (see _extract_code_block_text).
+    Refuses (ParseError) to date a payload while the market is not closed:
+    pre-open / open / halted / post-close values are intraday or provisional
+    and must never be written as a session's close.
 
     Raises:
-        ParseError: if the label is missing or its value isn't a valid ISO
-            date. NEVER falls back to date.today() -- a silent run-date
-            fallback is exactly the bug this function exists to prevent from
-            reappearing.
+        ParseError: missing/invalid sessionDate, a non-closed session, or a
+            ``dailyTotals`` row for the same date that disagrees with the
+            headline totals. NEVER falls back to date.today().
     """
-    m = _TRADING_DATE_RE.search(text)
-    if m is None:
-        raise ParseError(
-            "could not find \"TODAY'S SHARE MARKET\" date in market-statistics code block"
-        )
-    raw = m.group(1)
+    if not isinstance(payload, dict):
+        raise ParseError("/api/live/market response must be an object")
+    session = payload.get("session")
+    if not isinstance(session, dict):
+        raise ParseError("/api/live/market has no `session` object (no sessionDate)")
+    # The date is validated before the open/closed gate so a payload with no
+    # sessionDate always names that defect, whatever its phase fields say.
+    raw = session.get("sessionDate")
+    if not isinstance(raw, str):
+        raise ParseError("/api/live/market session has no `sessionDate` string")
     try:
-        return date.fromisoformat(raw)
+        session_date = date.fromisoformat(raw)
     except ValueError as exc:
-        raise ParseError(f"TODAY'S SHARE MARKET date {raw!r} is not a valid ISO date") from exc
+        raise ParseError(f"sessionDate {raw!r} is not a valid ISO date") from exc
+    if session.get("isOpen") is not False or session.get("phase") != "closed":
+        raise ParseError(
+            "DSE session not closed "
+            f"(isOpen={session.get('isOpen')!r}, phase={session.get('phase')!r}); "
+            "refusing to record intraday values"
+        )
+
+    # Cross-check: the payload also carries a per-day `dailyTotals` history.
+    # If it has a row for this sessionDate, the headline totals must match it
+    # -- otherwise the totals block and the date disagree and we cannot know
+    # which day the numbers belong to.
+    totals = payload.get("totals") or {}
+    for row in payload.get("dailyTotals") or []:
+        if isinstance(row, dict) and row.get("date") == raw:
+            if row.get("trades") != totals.get("trades"):
+                raise ParseError(
+                    f"totals.trades={totals.get('trades')!r} disagrees with "
+                    f"dailyTotals[{raw}].trades={row.get('trades')!r}"
+                )
+            break
+    else:
+        logger.warning("dailyTotals has no row for sessionDate %s; cannot cross-check", raw)
+    return session_date
 
 
-def parse_market_stats(html: str) -> DseMarket:
-    """Extract turnover/trades/advancing/declining/unchanged from market-statistics.php.
-
-    The data is inside a <code> element nested in a table. Contents are preformatted
-    plaintext under the heading "TOTAL TRANSACTIONS" and "All Category".
-    Turnover is in Taka — divide by _TAKA_PER_CRORE (10M) to get crore.
-    """
-    text = _extract_code_block_text(html)
-
-    # --- Trades: "A. NO. OF TRADES : 223903" ---
-    trades_m = re.search(r"NO\.\s+OF\s+TRADES\s*:\s*([\d,]+)", text)
-    if trades_m is None:
-        raise ParseError("could not parse NO. OF TRADES from market-statistics code block")
-    total_trades = int(trades_m.group(1).replace(",", ""))
-
-    # --- Turnover: "C. VALUE(Tk) : 8247602308.40" ---
-    turnover_m = re.search(r"VALUE\s*\(Tk\)\s*:\s*([\d,\.]+)", text)
-    if turnover_m is None:
-        raise ParseError("could not parse VALUE(Tk) from market-statistics code block")
-    turnover_taka = float(turnover_m.group(1).replace(",", ""))
-    turnover_crore = turnover_taka / _TAKA_PER_CRORE
-
-    # --- Advancing/Declining/Unchanged from "All Category" block ---
-    # Use the FIRST occurrence of each label (= All Category aggregate)
-    adv_m = re.search(r"ISSUES\s+ADVANCED\s*:\s*([\d,]+)", text)
-    dec_m = re.search(r"ISSUES\s+DECLINED\s*:\s*([\d,]+)", text)
-    unc_m = re.search(r"ISSUES\s+UNCHANGED\s*:\s*([\d,]+)", text)
-
-    if adv_m is None or dec_m is None or unc_m is None:
-        raise ParseError("could not parse advancing/declining/unchanged")
-
-    advancing = int(adv_m.group(1).replace(",", ""))
-    declining = int(dec_m.group(1).replace(",", ""))
-    unchanged = int(unc_m.group(1).replace(",", ""))
-
-    return DseMarket(
-        turnover_crore=round(turnover_crore, 4),
-        total_trades=total_trades,
-        advancing=advancing,
-        declining=declining,
-        unchanged=unchanged,
-    )
-
-
-def _finite_number(value: object, field: str) -> float:
-    """Parse a finite source number without allowing booleans as numbers."""
-    if isinstance(value, bool):
-        raise ValueError(f"{field} must be a finite number, not a boolean")
-    parsed = float(value)
+def _number(obj: dict, key: str, where: str) -> float:
+    """A finite source number; booleans, non-numbers, NaN and infinities are refused."""
+    val = obj.get(key)
+    if isinstance(val, bool) or not isinstance(val, (int, float, str)):
+        raise ParseError(f"{where}.{key} missing or not numeric: {val!r}")
+    try:
+        parsed = float(val)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ParseError(f"{where}.{key} missing or not numeric: {val!r}") from exc
     if not math.isfinite(parsed):
-        raise ValueError(f"{field} must be finite")
+        raise ParseError(f"{where}.{key} must be finite: {val!r}")
     return parsed
 
 
-def _nonnegative_count(value: object, field: str) -> int:
-    """Parse an integer count; reject negatives, fractions and booleans."""
-    if isinstance(value, bool):
-        raise ValueError(f"{field} must be a non-negative integer")
-    if isinstance(value, int):
-        count = value
-    elif isinstance(value, str) and re.fullmatch(r"\s*\d+\s*", value):
-        count = int(value)
+def _count(obj: dict, key: str, where: str) -> int:
+    """A non-negative whole count; negatives, fractions and booleans are refused.
+
+    ``int(202860.5)`` would silently truncate, so fractions are rejected here
+    rather than coerced.
+    """
+    val = obj.get(key)
+    if isinstance(val, bool):
+        raise ParseError(f"{where}.{key} must be a non-negative integer: {val!r}")
+    if isinstance(val, int):
+        count = val
+    elif isinstance(val, str) and re.fullmatch(r"\s*\d+\s*", val):
+        count = int(val)
     else:
-        raise ValueError(f"{field} must be a non-negative integer")
+        raise ParseError(f"{where}.{key} must be a non-negative integer: {val!r}")
     if count < 0:
-        raise ValueError(f"{field} must be a non-negative integer")
+        raise ParseError(f"{where}.{key} must be a non-negative integer: {val!r}")
     return count
 
 
-def parse_live_market_payload(payload: dict) -> tuple[date, DseIndices, DseMarket]:
-    """Extract one completed DSE session from the official live-market API.
+def _index_level(row: dict, name: str) -> float:
+    level = _number(row, "value", name)
+    if level <= 0:
+        raise ParseError(f"{name} index level must be positive and finite: {level!r}")
+    return level
 
-    The response has both the calendar's ``session.date`` and the observation
-    field ``session.sessionDate``. Only the latter identifies the last actual
-    trading session (for example, on a closed day the two can differ).
-    API turnover is in million BDT; one crore is ten million BDT.
+
+def parse_indices(payload: dict) -> DseIndices:
+    """Map ``indices[{key, value, change, percent}]`` onto DseIndices.
+
+    ``percent`` is already a percentage (-0.33855 means -0.34%), the same unit
+    the old homepage widget showed. DSEX is required; DS30/DSES are None when
+    absent (never fabricated) but, when present, must be positive and finite.
     """
-    try:
-        if not isinstance(payload, dict):
-            raise ValueError("response must be an object")
-        raw_date = payload["session"]["sessionDate"]
-        if not isinstance(raw_date, str):
-            raise ValueError("sessionDate must be a string")
-        trading_date = date.fromisoformat(raw_date)
-        index_rows = payload["indices"]
-        if not isinstance(index_rows, list):
-            raise ValueError("indices must be a list")
-        rows: dict[str, dict] = {}
-        for row in index_rows:
-            if not isinstance(row, dict) or not isinstance(row.get("key"), str):
-                raise ValueError("each index row must have a string key")
-            rows[row["key"].upper()] = row
-        dsex = rows["DSEX"]
-        ds30 = rows["DS30"]
-        dses = rows["DSES"]
-        indices = DseIndices(
-            dsex=_finite_number(dsex["value"], "DSEX value"),
-            dsex_change=_finite_number(dsex["change"], "DSEX change"),
-            dsex_change_pct=_finite_number(dsex["percent"], "DSEX percent"),
-            ds30=_finite_number(ds30["value"], "DS30 value"),
-            dses=_finite_number(dses["value"], "DSES value"),
-        )
-        totals = payload["totals"]
-        breadth = payload["breadth"]
-        turnover_million = _finite_number(totals["turnover"], "turnover")
-        if turnover_million <= 0:
-            raise ValueError("turnover must be a positive finite number")
-        market = DseMarket(
-            turnover_crore=round(turnover_million / _DSE_API_TURNOVER_MILLION_TO_CRORE, 4),
-            total_trades=_nonnegative_count(totals["trades"], "trades"),
-            advancing=_nonnegative_count(breadth["advanced"], "advanced"),
-            declining=_nonnegative_count(breadth["declined"], "declined"),
-            unchanged=_nonnegative_count(breadth["unchanged"], "unchanged"),
-        )
-        if any(not math.isfinite(value) or value <= 0 for value in (indices.dsex, indices.ds30, indices.dses)):
-            raise ValueError("DSE index levels must be positive and finite")
-    except (KeyError, TypeError, ValueError, OverflowError) as exc:
-        raise ParseError(f"invalid DSE live-market response: {exc}") from exc
-    return trading_date, indices, market
+    rows = payload.get("indices")
+    if not isinstance(rows, list):
+        raise ParseError("/api/live/market has no `indices` list")
+    by_key: dict[str, dict] = {}
+    for row in rows:
+        if not isinstance(row, dict) or not isinstance(row.get("key"), str):
+            raise ParseError("each index row must be an object with a string key")
+        by_key[row["key"].upper()] = row
+    dsex = by_key.get("DSEX")
+    if dsex is None:
+        raise ParseError(f"DSEX missing from indices (keys: {sorted(by_key)})")
+    ds30 = by_key.get("DS30")
+    dses = by_key.get("DSES")
+    return DseIndices(
+        dsex=_index_level(dsex, "DSEX"),
+        dsex_change=_number(dsex, "change", "DSEX"),
+        dsex_change_pct=_number(dsex, "percent", "DSEX"),
+        ds30=_index_level(ds30, "DS30") if ds30 is not None else None,
+        dses=_index_level(dses, "DSES") if dses is not None else None,
+    )
+
+
+def parse_market(payload: dict) -> DseMarket:
+    """Map ``totals`` + ``breadth`` onto DseMarket (turnover Tk mn -> crore)."""
+    totals = payload.get("totals")
+    breadth = payload.get("breadth")
+    if not isinstance(totals, dict) or not isinstance(breadth, dict):
+        raise ParseError("/api/live/market is missing `totals` or `breadth`")
+    turnover_mn = _number(totals, "turnover", "totals")
+    if turnover_mn <= 0:
+        raise ParseError(f"totals.turnover must be a positive finite number: {turnover_mn!r}")
+    return DseMarket(
+        turnover_crore=round(turnover_mn / _TK_MN_PER_CRORE, 4),
+        total_trades=_count(totals, "trades", "totals"),
+        advancing=_count(breadth, "advanced", "breadth"),
+        declining=_count(breadth, "declined", "breadth"),
+        unchanged=_count(breadth, "unchanged", "breadth"),
+    )
+
+
+def parse_live_market_payload(payload: dict) -> tuple[date, DseIndices, DseMarket]:
+    """Parse an already-decoded /api/live/market object into (session_date, indices, market).
+
+    Every part is validated before anything is returned, so ``main()`` never
+    sees a half-valid session: an invalid payload raises ParseError and no
+    snapshot is written (a corrected payload on the next run still ingests).
+    """
+    if not isinstance(payload, dict):
+        raise ParseError("/api/live/market response must be an object")
+    return parse_session_date(payload), parse_indices(payload), parse_market(payload)
+
+
+def parse_live_market(text: str) -> tuple[date, DseIndices, DseMarket]:
+    """Parse one /api/live/market body into (session_date, indices, market)."""
+    return parse_live_market_payload(load_live_market(text))
 
 
 def load_previous_snapshot_for(d: date, holidays: set[date]) -> DseSnapshot | None:
@@ -363,12 +271,10 @@ def main() -> int:
 
     thresholds = load_thresholds(THRESHOLDS_PATH)
 
-    # The official API supplies the last completed session, index levels and
-    # market totals in one response. ``sessionDate`` is the observation date;
-    # do not substitute the calendar's ``session.date`` or the run date.
+    # One fetch carries the session's own date plus every number we store.
+    # The skip/no-op decision happens AFTER a successful parse, never before.
     try:
-        payload = DEFAULT_CLIENT.fetch_json(summary_url)
-        trading_date, indices, market = parse_live_market_payload(payload)
+        trading_date, indices, market = parse_live_market(DEFAULT_CLIENT.fetch_html(summary_url))
         logger.info(
             "Parsed market: date=%s trades=%d turnover=%.4f crore adv=%d dec=%d unc=%d",
             trading_date.isoformat(),
@@ -378,29 +284,32 @@ def main() -> int:
             market.declining,
             market.unchanged,
         )
+        logger.info(
+            "Parsed indices: DSEX=%.5f DS30=%.5f DSES=%.5f",
+            indices.dsex,
+            indices.ds30 or 0,
+            indices.dses or 0,
+        )
     except (FetchError, ParseError, json.JSONDecodeError) as e:
         logger.exception("fetch/parse failed")
         notify("error", "dse_market fetch failed", f"{type(e).__name__}: {e}")
         return 1
 
-    # Idempotency gate, evaluated on the PARSED trading date, never the run
+    # Idempotency gate, evaluated on the PARSED session date, never the run
     # date. This session may already be on disk -- a re-run later the same
-    # day, or DSE re-serving the last real session's page on a weekend/
-    # holiday when nothing new traded (the site always reports the latest
-    # actual session, so a closed day naturally parses to an already-seen
-    # date). Either way there is nothing new to write; no-op cleanly.
+    # day, or DSE re-serving the last real session on a weekend/holiday when
+    # nothing new traded (the feed always reports the latest actual session,
+    # so a closed day naturally parses to an already-seen date). Either way
+    # there is nothing new to write; no-op cleanly.
     if _already_ingested(trading_date):
         logger.info("session %s already ingested; no-op", trading_date.isoformat())
         return 0
 
-    # This is the ONLY other case the gate considers, and it is observability
-    # only -- it never blocks the write. config/holidays_2026.json's Sun-Thu
-    # default is a DEFAULT, not a hard rule: DSE runs makeup sessions on
+    # Observability only -- it never blocks the write. config/holidays_2026.json's
+    # Sun-Thu default is a DEFAULT, not a hard rule: DSE runs makeup sessions on
     # weekends around Eid (AGENT_LEARNINGS.md 2026-08-08), and a moon-sighting
-    # holiday can also simply be missing from the calendar file. Either way,
-    # the source just reported a REAL, never-before-seen session on this
-    # date -- trusting the calendar over the source here would silently drop
-    # a genuine trading day, which is the exact failure this fix replaces.
+    # holiday can also simply be missing from the calendar file. Trusting the
+    # calendar over the source here would silently drop a genuine trading day.
     if not is_bd_trading_day(trading_date, holidays):
         logger.warning(
             "parsed trading date %s falls on a day config/holidays_2026.json "
@@ -409,29 +318,11 @@ def main() -> int:
             trading_date.isoformat(),
         )
 
-    logger.info(
-        "Parsed indices: DSEX=%.5f DS30=%.5f DSES=%.5f",
-        indices.dsex,
-        indices.ds30 or 0,
-        indices.dses or 0,
-    )
-
     # Anomaly check vs previous trading day. MEDIUM-2 (2026-08-22 round-1
-    # review): the threshold was calibrated for a ONE-trading-day move.
-    # config/holidays_2026.json now carries the 7-day Eid-ul-Fitr and
-    # Eid-ul-Adha closures (this PR's holiday-calendar completion), so
-    # `load_previous_snapshot_for` can legitimately walk back a week or more
-    # to find the last real session -- a week's worth of accumulated market
-    # movement compressed into one same-day comparison is not the anomaly
-    # this threshold exists to catch, and hard-blocking the write would
-    # silently skip DSE data for the whole re-opening week. Past a 3-
-    # calendar-day baseline gap, downgrade a threshold breach from a write-
-    # block to a write+warning: the number still lands, flagged for a human
-    # to sanity-check, instead of vanishing. A genuine DSE makeup weekend
-    # session (e.g. Sat 23 May 2026) is unaffected either way -- item 1's
-    # parsed-date design means the weekday/holiday calendar only ever
-    # produces a WARNING there, never a gate; this downgrade is scoped
-    # purely to the anomaly-threshold hard-block.
+    # review): the threshold was calibrated for a ONE-trading-day move. Past a
+    # 3-calendar-day baseline gap (e.g. a 7-day Eid closure), downgrade a
+    # threshold breach from a write-block to a write+warning: the number still
+    # lands, flagged for a human to sanity-check, instead of vanishing.
     _ANOMALY_BASELINE_GAP_GRACE_DAYS = 3
     prev = load_previous_snapshot_for(trading_date, holidays)
     if prev is not None and prev.indices is not None:

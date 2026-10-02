@@ -516,7 +516,7 @@
       "cadence": "daily",
       "fetch": {
         "type": "html",
-        "url": "https://www.dsebd.org/recent_market_information.php",
+        "url": "https://www.dse.com.bd/api/live/prices",
         "task": "Per-scrip daily % change for all listed DSE scrips. Aggregated by sector via config/dse_sector_constituents.json (simple average per sector)."
       },
       "parse": {

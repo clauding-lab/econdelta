@@ -118,10 +118,11 @@ _TRADING_DAY_SOURCES = frozenset({"dse_market"})
 # in upsert_metric_history fires identically whether or not the strategy is
 # listed here. Adding a strategy to this set silences the warning; it never
 # fixes the underlying as_of forgery.
+# dse_sector_heat left this set on 2026-10-01: its new JSON source carries the
+# trading-session date (session.sessionDate), so a miss from it is now signal.
 _NEVER_DATED_PARSE_STRATEGIES = frozenset({
     "html_table_row",
     "html_call_money",
-    "dse_sector_heat",
 })
 
 STALE_THRESHOLD_HOURS = 24.0
@@ -368,7 +369,10 @@ def _load_last_good_snapshot(
         return None
     candidates = sorted(d.glob("*.json"), reverse=True)
     cutoff_age_days = max_days_back
-    today = today if today is not None else datetime.now(timezone.utc).date()
+    # Judge age against the run's own `now` when given, so the lookback and
+    # the stale-fallback age both read the same clock.
+    if today is None:
+        today = datetime.now(timezone.utc).date()
     for path in candidates:
         try:
             blob = json.loads(path.read_text())
@@ -415,6 +419,23 @@ def _stale_fallback_age_days(snapshot: dict, today: date) -> int | None:
     snapshot's filename stem, e.g. "2026-04-29").
     """
     return _iso_age_days(snapshot.get("_stale_from"), today)
+
+
+def _alert_value(value: Any) -> float | int | str | None:
+    """An indicator value in the shape `Alert.value` accepts.
+
+    Most indicators are scalars, but some (e.g. `dse_sector_heat`, a
+    {sector: change} table) are dicts. `Alert` is strict, so passing one
+    through raised a ValidationError inside `_build_v3_blocks` and took down
+    the whole aggregate — every indicator froze because one alarm could not
+    describe its value. An alarm must never be able to crash the run it
+    reports on, so a non-scalar is summarised instead.
+    """
+    if value is None or isinstance(value, (float, int, str)):
+        return value
+    if isinstance(value, (dict, list, tuple)):
+        return f"<table of {len(value)} values>"
+    return f"<{type(value).__name__}>"
 
 
 def _prior_good_snapshot(indicator_id: str, today: date) -> dict | None:
@@ -859,7 +880,7 @@ def _build_v3_blocks(
                         indicator_id=indicator_id,
                         type="stale_fallback",
                         severity="error",
-                        value=historical.get("value"),
+                        value=_alert_value(historical.get("value")),
                         age_days=age_days,
                     )
                 )
@@ -962,7 +983,7 @@ def _build_v3_blocks(
                         indicator_id=indicator_id,
                         type="undated_source",
                         severity="error",
-                        value=snapshot.get("value"),
+                        value=_alert_value(snapshot.get("value")),
                     )
                 )
             elif as_of_age >= stale_after:
@@ -976,7 +997,7 @@ def _build_v3_blocks(
                         indicator_id=indicator_id,
                         type="stale_fallback",
                         severity="error",
-                        value=snapshot.get("value"),
+                        value=_alert_value(snapshot.get("value")),
                         age_days=as_of_age,
                     )
                 )
@@ -1006,8 +1027,8 @@ def _build_v3_blocks(
                     indicator_id=indicator_id,
                     type="anomaly",
                     severity="warn",
-                    value=snapshot.get("value"),
-                    previous=snapshot.get("previous_value"),
+                    value=_alert_value(snapshot.get("value")),
+                    previous=_alert_value(snapshot.get("previous_value")),
                     change_pct=change_pct,
                 )
             )
@@ -1297,6 +1318,19 @@ def _build_source_as_of_map(domains: dict[str, dict[str, Any]]) -> dict[str, dat
     if mmrr_date is not None:
         for fanned_id in MONEY_MARKET_REF_RATE_FANOUT_IDS:
             result.setdefault(fanned_id, mmrr_date)
+
+    # DSE sector-heat fan-out dates: same landmine 26/47 class as above.
+    # ``_flatten_dict_indicators`` mints ``dse_sector_heat_<sector>`` from the
+    # parent dict; only the parent carries the trading-session date, so copy
+    # it to every minted key or the Fri/Sat runs would stamp Thursday's
+    # percentages with the run date.
+    heat_date = result.get("dse_sector_heat")
+    if heat_date is not None:
+        for indicators in domains.values():
+            heat = (indicators.get("dse_sector_heat") or {}).get("value")
+            if isinstance(heat, dict):
+                for sector in heat:
+                    result.setdefault(_dse_sector_heat_key(sector), heat_date)
 
     # The brief reads brief-side keys (e.g. banking_npl_pct), not the EconDelta
     # indicator ids — _apply_brief_aliases copies the VALUE to those keys but not
@@ -3914,6 +3948,11 @@ def _derive_daily_yields_from_auctions(
 # key in the latter silently re-forges that fanned row's ``as_of`` to the run
 # date (the landmine 26/47 class this source's real value-dating exists to
 # prevent).
+def _dse_sector_heat_key(sector: object) -> str:
+    """metric_id minted for one sector of the ``dse_sector_heat`` dict."""
+    return "dse_sector_heat_" + str(sector).lower().replace(" ", "_")
+
+
 MONEY_MARKET_REF_RATE_FANOUT_IDS: tuple[str, ...] = (
     "dommr",
     "dommr_1w",
@@ -3947,7 +3986,7 @@ def _flatten_dict_indicators(data: dict) -> None:
         for sector, pct in sector_heat.items():
             if not isinstance(pct, (int, float)):
                 continue
-            key = "dse_sector_heat_" + str(sector).lower().replace(" ", "_")
+            key = _dse_sector_heat_key(sector)
             if key not in data:
                 data[key] = float(pct)
 

@@ -624,3 +624,63 @@ class TestSchemaCompatibility:
         assert all(isinstance(a, Alert) for a in alerts)
         # round-trips through the JSON the bundle is written as
         assert json.loads(alerts[0].model_dump_json())["age_days"] == 60
+
+
+class TestTableShapedIndicators:
+    """`dse_sector_heat` is a {sector: change} table, not a scalar. When DSE
+    retired its pages in late September the indicator went stale, the alarm
+    above tried to put the dict in `Alert.value`, and pydantic raised inside
+    `_build_v3_blocks` — on 30 Sep and 1 Oct the whole aggregate crashed and
+    every indicator froze, not just the DSE ones. The alarm must describe a
+    table, never die on one."""
+
+    SECTORS = {"Banks": -1.03, "NBFI": 0.4, "Food": 0.07, "IT": 0.33}
+
+    def _run_table(self, tmp_path, monkeypatch, *, good_age_days: int):
+        d = tmp_path / INDICATOR
+        d.mkdir(parents=True)
+        good_day = NOW - timedelta(days=good_age_days)
+        good = _snapshot(good_day, None)
+        good["value"] = self.SECTORS
+        (d / f"{good_day:%Y-%m-%d}.json").write_text(json.dumps(good))
+        (d / f"{NOW:%Y-%m-%d}.json").write_text(json.dumps(_snapshot(NOW, 0.0, bad=True)))
+        monkeypatch.setattr(agg, "SOURCES_V3_PATH", _registry(tmp_path))
+        monkeypatch.setattr(agg, "DATA_DIR", tmp_path)
+        return agg._build_v3_blocks(NOW)
+
+    def test_a_long_stale_table_alarms_instead_of_crashing(self, tmp_path, monkeypatch):
+        """THE regression: 8 days stale, dict value."""
+        data, _dom, _fresh, alerts = self._run_table(tmp_path, monkeypatch, good_age_days=8)
+        assert [a.type for a in alerts] == ["stale_fallback"]
+        assert alerts[0].age_days == 8
+        assert alerts[0].value == "<table of 4 values>"
+        # the held-over table itself still publishes untouched
+        assert data[INDICATOR] == self.SECTORS
+
+    def test_a_table_valued_anomaly_does_not_crash(self, tmp_path, monkeypatch):
+        d = tmp_path / INDICATOR
+        d.mkdir(parents=True)
+        snap = _snapshot(NOW, None)
+        snap["value"] = self.SECTORS
+        snap["previous_value"] = self.SECTORS
+        snap["change_pct"] = 50.0
+        (d / f"{NOW:%Y-%m-%d}.json").write_text(json.dumps(snap))
+        reg = tmp_path / "sources-v3.json"
+        reg.write_text(json.dumps({"indicators": [
+            {"id": INDICATOR, "domain": "money_market", "cadence": "monthly",
+             "anomaly_threshold": 10}
+        ]}))
+        monkeypatch.setattr(agg, "SOURCES_V3_PATH", reg)
+        monkeypatch.setattr(agg, "DATA_DIR", tmp_path)
+        _add, _dom, _fresh, alerts = agg._build_v3_blocks(NOW)
+        assert [(a.type, a.value, a.previous) for a in alerts] == [
+            ("anomaly", "<table of 4 values>", "<table of 4 values>")
+        ]
+
+    @pytest.mark.parametrize(
+        "value, expected",
+        [(1.5, 1.5), (7, 7), ("x", "x"), (None, None),
+         ({"a": 1}, "<table of 1 values>"), ([1, 2], "<table of 2 values>")],
+    )
+    def test_alert_value_passes_scalars_and_summarises_tables(self, value, expected):
+        assert agg._alert_value(value) == expected
