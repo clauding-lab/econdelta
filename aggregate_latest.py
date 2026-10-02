@@ -1422,9 +1422,13 @@ def _build_tier1_source_as_of_map(
     if dse is not None:
         # MEDIUM-7 (2026-08-22 round-1 review): corrected -- the previous
         # version of this comment described PRE-fix/date-integrity-monitoring
-        # behaviour that no longer exists. scrapers/dse_market.py now parses
-        # the SOURCE page's own "TODAY'S SHARE MARKET : YYYY-MM-DD" trading
-        # date and stamps DseSnapshot.date with it -- never date.today(), and
+        # behaviour that no longer exists. scrapers/dse_market.py now takes
+        # the trading date from the source's own `session.sessionDate` in
+        # the /api/live/market JSON (#139; it replaced the old HTML page's
+        # "TODAY'S SHARE MARKET" text), and only when the session is closed
+        # (isOpen false, phase "closed" -- an open or pre-open session is
+        # refused, never dated). It stamps DseSnapshot.date with that
+        # session date -- never date.today(), and
         # there is no longer a non-trading "write a trading_day=False marker
         # dated today" path at all (a non-trading/already-seen session is a
         # pure no-op now: nothing new is written). What still distinguishes a
