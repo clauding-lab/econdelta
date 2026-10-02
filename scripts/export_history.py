@@ -26,6 +26,7 @@ Repair snapshot (round 4, owner decision D2): service key only, writers paused, 
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import json
 import logging
@@ -240,7 +241,25 @@ def _service_key() -> str:
             "repair snapshot needs SUPABASE_SERVICE_ROLE_KEY or SUPABASE_SERVICE_KEY "
             "(service key only; the anon key is refused)"
         )
+    problem = _service_key_problem(key)
+    if problem:
+        raise ExportError(f"repair snapshot refused: {problem} (service key only)")
     return key
+
+
+def _service_key_problem(key: str) -> str | None:
+    """A JWT must carry role service_role (payload read, signature not checked); an opaque key
+    must be an ``sb_secret_`` key. The key itself is never echoed."""
+    parts = key.split(".")
+    if len(parts) != 3:
+        return None if key.startswith("sb_secret_") else (
+            "the key is neither a service_role JWT nor an sb_secret_ key")
+    try:
+        payload = json.loads(base64.urlsafe_b64decode(parts[1] + "=" * (-len(parts[1]) % 4)))
+    except ValueError:
+        return "the key looks like a JWT but its payload does not decode"
+    role = payload.get("role") if isinstance(payload, dict) else None
+    return None if role == "service_role" else f"the key's JWT role is {role!r}, not service_role"
 
 
 def _project_ref(url: str | None) -> str:
