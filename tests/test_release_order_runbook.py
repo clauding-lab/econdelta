@@ -128,3 +128,47 @@ def test_release_order_never_inverts_its_timing_rules() -> None:
     )
     found = [p for p in inversions if re.search(p, order, flags=re.IGNORECASE)]
     assert found == [], found
+
+
+# R1 refresh close (2 Oct 2026 BDT): the reviewed R1 manifest was built from the 25 Sep backup and
+# the old producer re-stamps rows, so Night-1 refreshes the before-images from the final backup
+# (scripts/repair_refresh_before_images.py). The recheck run against that same backup always
+# refuses (exit 2: backup-is-candidate-source, backup-not-after-candidate), so a runbook that still
+# demanded its `match` would strand the operator. Pin the new sequence in all three Night-1 texts.
+_FINAL_BACKUP_CMD = "python -m scripts.export_history --repair-snapshot DIR --r1-final-backup"
+_NIGHT1_SEQUENCE = (
+    _FINAL_BACKUP_CMD,
+    "python -m scripts.repair_refresh_before_images --manifest",
+    "python -m scripts.repair_observation_history --plan --candidate",
+    "python -m scripts.repair_observation_history --apply",
+)
+
+
+def _night1_texts() -> dict[str, str]:
+    root = RUNBOOK.parent.parent
+    agents = re.search(r"^60\. .*$", (root / "AGENTS.md").read_text(), re.MULTILINE)
+    runbook = (root / "docs/reviews/2026-09-25-history-repair-manifest.md").read_text()
+    item4 = re.search(r"^4\. .*$", runbook.split("## Safety contract", 1)[1], re.MULTILINE)
+    steps = _numbered_steps(_order())
+    assert agents and item4
+    return {"landmine 60": agents.group(0), "runbook item 4": item4.group(0),
+            "deploy step 2": steps[_step_of(steps, MILESTONES[1][1])]}
+
+
+def test_night1_runs_backup_then_refresh_then_engine_plan_then_apply() -> None:
+    for name, text in _night1_texts().items():
+        text = " ".join(text.split())
+        positions = [text.find(command) for command in _NIGHT1_SEQUENCE]
+        assert -1 not in positions and positions == sorted(positions), (name, positions)
+        assert "Validated 2016 operations" in text, name
+        assert re.search(r"refresh run replaces the recheck for a refreshed candidate", text), name
+        assert re.search(r"--reference-backup`? is (?:still )?never a Night-1 pass", text), name
+
+
+def test_no_night1_text_demands_a_recheck_match_for_the_refreshed_candidate() -> None:
+    for name, text in _night1_texts().items():
+        text = " ".join(text.split())
+        assert not re.search(r"refreshed candidate[^;]{0,80}must print `?match", text), name
+        # Any surviving "must print `match`" demand is scoped to a candidate that was NOT refreshed.
+        for demand in re.finditer(r"must print `?match", text):
+            assert "not refreshed" in text[max(0, demand.start() - 400):demand.start()], name
