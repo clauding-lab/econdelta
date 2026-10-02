@@ -23,7 +23,6 @@ from typing import Any, Callable
 
 import pytest
 
-import aggregate_latest as agg
 import scripts.nbr_round4_candidates as r4
 from scripts.export_history import export_repair_snapshot
 from scripts.history_repair_candidates import NBR_RESTAMP_WINDOW, nbr_restamp_rows
@@ -42,10 +41,10 @@ from tests.test_r1_nbr_exclusion_release_order import TARGET as R1_TARGET
 from tests.test_r1_nbr_exclusion_release_order import (
     MetricHistory,
     _exclusion_manifest,
+    _first_night,
     _reviewed_backup,
 )
-from tests.test_shared_case_contract import BINDING, CASES, RUN, _changed, _produce
-from utils.supabase_writer import _DEFAULT_SOURCE, _rows_from_data
+from tests.test_shared_case_contract import CASES
 
 Row = dict[str, Any]
 CHILD, PARENT, ALIAS = ROUND4_IDS
@@ -75,7 +74,7 @@ PRE_WINDOW = {CHILD: 4.02, PARENT: 402000.0, ALIAS: 402000.0}  # SYNTHETIC, date
 @pytest.fixture(autouse=True)
 def _service_key(monkeypatch):
     """The world's snapshots come from the real exporter, which needs a service key."""
-    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "synthetic-service-key")
+    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "sb_secret_synthetic-service-key")
 
 
 def _days(first: str, last: str) -> list[str]:
@@ -97,20 +96,6 @@ def _post_rows(runs: dict, quirks: dict[str, float]) -> list[Row]:
                     alias_value = quirks.get(day) if mid == ALIAS else None
                     rows.append(_row(mid, day, alias_value or value))
     return rows
-
-
-def _night(store: MetricHistory, name: str) -> None:
-    """One real producer night (shared contract run `name`) onto the store."""
-    run = next(r for r in CASES["nbr_fytd_period_rows"]["runs"] if r["run"] == name)
-    inputs = _changed(BINDING["producer_inputs"], run["input_changes"])
-    observations = _produce(inputs, RUN)["observations"]
-    values = {mid: obs.value for mid, obs in observations.items() if obs.value is not None}
-    to_write, _ = agg._unrecorded_nbr_fytd(values, observations, today=RUN.date(),
-                                            reader=store.read_at)
-    for row in _rows_from_data(to_write, RUN.date(), _DEFAULT_SOURCE, ingested_at=RUN,
-                               observations=observations):
-        if row["metric_id"] in ROUND4_IDS:
-            store.upsert(row)
 
 
 def _contract_rows(nights: tuple[str, ...]) -> list[tuple[str, str, float, str]]:
@@ -183,7 +168,7 @@ def _world(
     removed = _r1_removed_keys()
     store = MetricHistory([r for r in n1_rows if (r["metric_id"], r["as_of"]) not in removed])
     for name in nights:
-        _night(store, name)
+        _first_night(store, name)  # the real producer night, shared R1 fixture
     r4_rows = sorted(store.rows.values(), key=lambda r: (r["metric_id"], r["as_of"]))
     if both_edit:
         n1_rows, r4_rows = both_edit(n1_rows), both_edit(r4_rows)
@@ -203,6 +188,8 @@ def _world(
         keep_period_rows=keep,
         recapture_sha256=file_hash(r4_dir / "metric_history.json"),
         night1_sha256=file_hash(n1 / "metric_history.json"),
+        recapture_manifest_sha256=file_hash(r4_dir / "manifest.json"),
+        night1_manifest_sha256=file_hash(n1 / "manifest.json"),
     )
     return World(n1, r4_dir, review, n1_rows, r4_rows)
 

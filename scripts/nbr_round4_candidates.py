@@ -58,6 +58,8 @@ class Round4Review:
     keep_period_rows: dict[str, tuple[tuple[str, float], ...]]  # id -> ((as_of, value), ...)
     recapture_sha256: str  # Day-2 recapture metric_history.json
     night1_sha256: str  # Night-1 metric_history snapshot (must equal the run-sheet record)
+    recapture_manifest_sha256: str  # Day-2 recapture manifest.json (binds its started_at)
+    night1_manifest_sha256: str  # Night-1 manifest.json (binds its started_at)
 
 
 ROUND4_FIRST_DAY = "2026-09-25"  # = NBR_RESTAMP_WINDOW[1] + 1 day
@@ -116,6 +118,10 @@ def load_snapshot(directory: Path, label: str) -> Snapshot:
         raise RepairConflict(f"{label} manifest has no metric_history entry keyed metric_id, as_of")
     if not manifest.get("started_at"):
         raise RepairConflict(f"{label} manifest has no started_at")
+    if manifest.get("key_role") != "service":
+        raise RepairConflict(f"{label} manifest key_role is {manifest.get('key_role')!r}, not 'service'")
+    if manifest.get("non_transactional") is not True:
+        raise RepairConflict(f"{label} manifest does not record non_transactional: true")
     path = directory / "metric_history.json"
     table_sha256 = file_hash(path)
     if table_sha256 != ref["sha256"]:
@@ -219,6 +225,8 @@ def propose_review(r4: Snapshot, n1: Snapshot) -> Round4Review:
         },
         recapture_sha256=r4.table_sha256,
         night1_sha256=n1.table_sha256,
+        recapture_manifest_sha256=r4.manifest_sha256,
+        night1_manifest_sha256=n1.manifest_sha256,
     )
 
 
@@ -251,6 +259,8 @@ def format_literal(review: Round4Review) -> list[str]:
         *_table_literal("keep_period_rows", review.keep_period_rows),
         f"    recapture_sha256={_lit(review.recapture_sha256)},",
         f"    night1_sha256={_lit(review.night1_sha256)},",
+        f"    recapture_manifest_sha256={_lit(review.recapture_manifest_sha256)},",
+        f"    night1_manifest_sha256={_lit(review.night1_manifest_sha256)},",
         ")",
     ]
 
@@ -439,6 +449,10 @@ def _check_inputs(r4: Snapshot, n1: Snapshot, review: Round4Review) -> None:
         raise RepairConflict("recapture metric_history.json hash differs from the reviewed hash")
     if n1.table_sha256 != review.night1_sha256:
         raise RepairConflict("Night-1 metric_history.json hash differs from the reviewed hash")
+    if r4.manifest_sha256 != review.recapture_manifest_sha256:
+        raise RepairConflict("recapture manifest.json hash differs from the reviewed hash")
+    if n1.manifest_sha256 != review.night1_manifest_sha256:
+        raise RepairConflict("Night-1 manifest.json hash differs from the reviewed hash")
     started = (datetime.fromisoformat(s.manifest["started_at"]) for s in (n1, r4))
     if not next(started) < next(started):
         raise RepairConflict("Night-1 snapshot did not start before the recapture")
@@ -605,6 +619,11 @@ def verify_unchanged(
         raise RepairConflict(f"{out} already exists; a drift receipt is never overwritten")
     r4 = load_snapshot(recapture_dir, "recapture R4")
     fresh = load_snapshot(fresh_dir, "fresh")
+    if fresh.manifest_sha256 == r4.manifest_sha256:
+        raise RepairConflict("fresh snapshot is the recapture itself (same manifest.json)")
+    started = (datetime.fromisoformat(s.manifest["started_at"]) for s in (r4, fresh))
+    if not next(started) < next(started):
+        raise RepairConflict("fresh snapshot did not start after the recapture")
     expected = (
         _expected_after(r4, expect_applied) if expect_applied
         else {key: row for key, row in r4.index.items() if key[0] in WATCHED_IDS}
@@ -714,6 +733,8 @@ def _run_build(args: argparse.Namespace, git: GitRunner) -> int:
         raise RepairConflict("candidate already exists; preserve reviewed bytes")
     if not all(re.fullmatch(r"[0-9a-f]{40}", c) for c in (args.econdelta_commit, args.brief_commit)):
         raise RepairConflict("both exact 40-hex code commits required")
+    if args.owner_ruled_unmerged is not None and not args.owner_ruled_unmerged.strip():
+        raise RepairConflict("--owner-ruled-unmerged needs the ruling text")
     review = REVIEWED
     if review is None:
         raise RepairConflict(PLACEHOLDER_MESSAGE)

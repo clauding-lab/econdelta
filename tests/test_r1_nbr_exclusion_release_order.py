@@ -165,9 +165,11 @@ def _apply(path: Path, store: MetricHistory, tmp_path: Path) -> ApplyReceipt:
     )
 
 
-def _first_night(store: MetricHistory) -> list[Row]:
-    """The new producer's first aggregate night on the real 25 Sep input; the NBR rows it wrote."""
-    run = next(r for r in CASES["nbr_fytd_period_rows"]["runs"] if r["run"] == "first-night")
+def _first_night(store: MetricHistory, name: str = "first-night") -> list[Row]:
+    """The new producer's first aggregate night on the real 25 Sep input; the NBR rows it wrote.
+
+    ``name`` picks another shared-contract run (round 4 also plays ``new-month``)."""
+    run = next(r for r in CASES["nbr_fytd_period_rows"]["runs"] if r["run"] == name)
     observations = _produce(_changed(BINDING["producer_inputs"], run["input_changes"]), RUN)[
         "observations"
     ]
