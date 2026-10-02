@@ -17,7 +17,7 @@ import dataclasses
 import functools
 import json
 import tempfile
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable
 
@@ -84,14 +84,8 @@ def _days(first: str, last: str) -> list[str]:
 
 
 def _row(mid: str, day: str, value: float, **fields: Any) -> Row:
-    return {
-        "metric_id": mid,
-        "as_of": day,
-        "value": value,
-        "source": "EconDelta",
-        "ingested_at": f"{day}T21:18:08.437914+00:00",
-        "provenance": None,
-    } | fields
+    return {"metric_id": mid, "as_of": day, "value": value, "source": "EconDelta",
+            "ingested_at": f"{day}T21:18:08.437914+00:00", "provenance": None} | fields
 
 
 def _post_rows(runs: dict, quirks: dict[str, float]) -> list[Row]:
@@ -129,14 +123,14 @@ def _contract_rows(nights: tuple[str, ...]) -> list[tuple[str, str, float, str]]
 
 
 def _export(directory: Path, rows: list[Row], started_at: str, project: str = PROJECT) -> Path:
-    from datetime import datetime
+    return export_repair_snapshot(directory, fetcher=lambda table, key: rows,
+                                  url=f"https://{project}.supabase.co",
+                                  now=datetime.fromisoformat(started_at))
 
-    return export_repair_snapshot(
-        directory,
-        fetcher=lambda table, key: rows,
-        url=f"https://{project}.supabase.co",
-        now=datetime.fromisoformat(started_at),
-    )
+
+def _night1_rows(runs: dict, quirks: dict[str, float], extra: list[Row]) -> list[Row]:
+    pre = [_row(mid, "2026-04-30", value) for mid, value in PRE_WINDOW.items()]
+    return _reviewed_backup() + _corroborator_rows() + pre + _post_rows(runs, quirks) + extra
 
 
 @functools.lru_cache(maxsize=1)
@@ -146,8 +140,7 @@ def _r1_removed_keys() -> frozenset[tuple[str, str]]:
     Every world holds the same 420 reviewed rows, so applying R1 to it removes exactly these
     keys; the worlds below reuse this one real apply instead of repeating it.
     """
-    pre = [_row(mid, "2026-04-30", value) for mid, value in PRE_WINDOW.items()]
-    n1_rows = _reviewed_backup() + _corroborator_rows() + pre + _post_rows(ONE_RUN, {})
+    n1_rows = _night1_rows(ONE_RUN, {}, [])
     store = MetricHistory(n1_rows)
     with tempfile.TemporaryDirectory() as tmp:
         r1 = _exclusion_manifest(Path(tmp), _reviewed_backup())
@@ -186,9 +179,7 @@ def _world(
 ) -> World:
     """Night 1 snapshot -> real R1 apply -> real producer night(s) -> Day-2 recapture."""
     quirks = quirks or {}
-    pre = [_row(mid, "2026-04-30", value) for mid, value in PRE_WINDOW.items()]
-    n1_rows = (_reviewed_backup() + _corroborator_rows() + pre + _post_rows(runs, quirks)
-               + (extra_n1 or []))
+    n1_rows = _night1_rows(runs, quirks, extra_n1 or [])
     removed = _r1_removed_keys()
     store = MetricHistory([r for r in n1_rows if (r["metric_id"], r["as_of"]) not in removed])
     for name in nights:
@@ -235,11 +226,7 @@ def test_the_committed_review_is_a_placeholder_and_build_refuses(tmp_path, capsy
     world = _world(tmp_path)
     output = tmp_path / "candidate.json"
 
-    code = r4.main([
-        "--build", "--recapture-dir", str(world.r4), "--night1-backup-dir", str(world.n1),
-        "--target", TARGET, "--econdelta-commit", "c" * 40, "--brief-commit", "d" * 40,
-        "--output", str(output),
-    ])
+    code = _main_build(world, None, output=output)  # the real local git is never reached
 
     assert r4.REVIEWED is None
     assert code == 1
@@ -254,7 +241,7 @@ def test_round4_first_day_is_the_day_after_the_reviewed_r1_window():
 
 # --- T3, T4: the draft proposes, it never decides ------------------------------------------
 BANNER = "PROPOSAL ONLY: a human must check and transcribe this; it decides nothing"
-LITERAL_HEADER = "# DRAFT: paste into REVIEWED only after review"
+LITERAL_HEADER = r4.LITERAL_HEADER
 
 
 def _draft(world: World, capsys) -> tuple[int, list[str]]:
@@ -325,6 +312,7 @@ def test_round4_excludes_exactly_the_reviewed_post_window_restamps_with_full_bef
 ):
     world = _world(tmp_path)
     r4_index = {(r["metric_id"], r["as_of"]): r for r in world.r4_rows}
+    r4_path, n1_path = (str((d / "metric_history.json").resolve()) for d in (world.r4, world.n1))
 
     candidate = _build(world)
 
@@ -338,21 +326,12 @@ def test_round4_excludes_exactly_the_reviewed_post_window_restamps_with_full_bef
         assert op["before"] == r4_index[key] and op["after"] is None and op["requires"] == []
         assert op["reason"] == r4.ROUND4_REASON
         recapture, night1 = op["evidence"]
-        assert recapture == {
-            "path": str((world.r4 / "metric_history.json").resolve()),
-            "sha256": world.review.recapture_sha256,
-            "locator": recapture["locator"],
-        }
+        assert (recapture["path"], recapture["sha256"]) == (r4_path, world.review.recapture_sha256)
         assert "archive/exclusion only, no period corroboration" in recapture["locator"]
-        assert night1["path"] == str((world.n1 / "metric_history.json").resolve())
-        assert night1["sha256"] == world.review.night1_sha256
+        assert (night1["path"], night1["sha256"]) == (n1_path, world.review.night1_sha256)
         assert "pre-R1 Night-1 snapshot" in night1["locator"]
-    assert candidate["backups"] == [{
-        "table": "metric_history",
-        "path": str((world.r4 / "metric_history.json").resolve()),
-        "sha256": world.review.recapture_sha256,
-        "rows": len(world.r4_rows),
-    }]
+    assert candidate["backups"] == [{"table": "metric_history", "path": r4_path, "sha256":
+                                     world.review.recapture_sha256, "rows": len(world.r4_rows)}]
     assert candidate["backup_manifest_sha256"] == file_hash(world.r4 / "manifest.json")
     assert (candidate["version"], candidate["target"], candidate["target_project"]) == (
         1, TARGET, PROJECT)
@@ -382,10 +361,7 @@ def test_round4_keeps_only_07_31_when_night1_first_wrote_july(tmp_path):
     world = _world(tmp_path, nights=("new-month",))
     touched = _ops_by_key(_build(world))
     assert world.review.keep_period_rows == {
-        CHILD: (("2026-07-31", 0.31),),
-        PARENT: (("2026-07-31", 30512.4),),
-        ALIAS: (("2026-07-31", 30512.4),),
-    }
+        mid: (("2026-07-31", v),) for mid, v in ((CHILD, 0.31), (PARENT, 30512.4), (ALIAS, 30512.4))}
     assert sorted(touched) == sorted(_post_keys(world))
     with pytest.raises(r4.RepairConflict, match="R1-window keys differ"):  # 06-30 is not kept
         _build(world, dataclasses.replace(world.review, keep_period_rows={
@@ -721,3 +697,92 @@ def test_after_round4_the_nbr_family_equals_the_contract_rows_the_brief_publishe
                       for r in store.rows.values()
                       if r["metric_id"] in ROUND4_IDS and r["as_of"] >= "2026-05-02")
     assert residual == _contract_rows(nights)
+
+
+# --- T18: the commit guard binds the candidate to the clean, merged code that built it -----
+HEAD = "e" * 40
+
+
+class FakeGit:
+    """Offline stand-in for the three local git calls; records what was asked."""
+
+    def __init__(self, head: str = HEAD, porcelain: str = "", on_main: bool = True) -> None:
+        self.head, self.porcelain, self.on_main = head, porcelain, on_main
+        self.calls: list[list[str]] = []
+
+    def __call__(self, args: list[str]) -> tuple[int, str]:
+        self.calls.append(args)
+        if args == ["rev-parse", "HEAD"]:
+            return 0, self.head + "\n"
+        if args == ["status", "--porcelain"]:
+            return 0, self.porcelain
+        if args == ["merge-base", "--is-ancestor", "HEAD", "origin/main"]:
+            return (0 if self.on_main else 1), ""
+        raise AssertionError(f"unexpected git call {args}")
+
+
+def _main_build(world: World, git: FakeGit | None, *extra: str, output: Path | None = None) -> int:
+    argv = ["--build", "--recapture-dir", str(world.r4), "--night1-backup-dir", str(world.n1),
+            "--target", TARGET, "--econdelta-commit", HEAD, "--brief-commit", "d" * 40]
+    argv += ["--output", str(output)] if output else []
+    return r4.main(argv + list(extra), git=git)
+
+
+def test_build_refuses_a_head_that_is_not_the_named_commit_a_dirty_tree_or_a_commit_off_main(
+    tmp_path, monkeypatch, capsys
+):
+    world = _world(tmp_path)
+    monkeypatch.setattr(r4, "REVIEWED", world.review)
+    output = tmp_path / "candidate" / "candidate.json"
+    for git, refusal in (
+        (FakeGit(head="f" * 40), "HEAD ffff"),
+        (FakeGit(porcelain="?? stray.py\n"), "checkout is not clean"),
+        (FakeGit(on_main=False), "not an ancestor of origin/main"),
+    ):
+        assert _main_build(world, git, output=output) == 1
+        assert refusal in capsys.readouterr().out and not output.exists()
+
+    git = FakeGit()
+    assert _main_build(world, git, output=output) == 0
+    candidate = json.loads(output.read_text())
+    assert candidate["code_commits"] == {"econdelta": HEAD, "brief": "d" * 40}
+    assert len(candidate["operations"]) == 21
+    assert f"21 exact operations; candidate sha256={file_hash(output)}" in capsys.readouterr().out
+    assert _main_build(world, FakeGit(), output=output) == 1  # never overwrites reviewed bytes
+    assert "candidate already exists" in capsys.readouterr().out
+
+
+def test_owner_ruled_unmerged_records_the_ruling_and_head_in_the_candidate(
+    tmp_path, monkeypatch
+):
+    world = _world(tmp_path)
+    monkeypatch.setattr(r4, "REVIEWED", world.review)
+    output = tmp_path / "candidate.json"
+    git = FakeGit(on_main=False)
+    ruling = "D2(b): owner rules the PR-B head may build before merge (SYNTHETIC)"
+
+    assert _main_build(world, git, "--owner-ruled-unmerged", ruling, output=output) == 0
+
+    unresolved = json.loads(output.read_text())["unresolved"]
+    assert any(ruling in line and HEAD in line for line in unresolved)
+    assert ["merge-base", "--is-ancestor", "HEAD", "origin/main"] not in git.calls
+
+
+def test_preview_writes_no_file_and_skips_only_the_origin_main_check(
+    tmp_path, monkeypatch, capsys
+):
+    world = _world(tmp_path)
+    monkeypatch.setattr(r4, "REVIEWED", world.review)
+    before = _tree(tmp_path)
+    git = FakeGit(on_main=False)
+
+    assert _main_build(world, git, "--preview") == 0
+
+    out = capsys.readouterr().out
+    assert _tree(tmp_path) == before
+    assert "PREVIEW: 21 exact operations; no file written" in out
+    assert f"  {CHILD}: 2026-09-25, 2026-09-26, 2026-09-27, 2026-09-29" in out
+    assert f"  kept {PARENT} 2026-06-30 415473.0" in out
+    assert ["merge-base", "--is-ancestor", "HEAD", "origin/main"] not in git.calls
+    assert _main_build(world, FakeGit(porcelain=" M scripts/x.py\n"), "--preview") == 1
+    assert _main_build(world, FakeGit(head="f" * 40), "--preview") == 1
