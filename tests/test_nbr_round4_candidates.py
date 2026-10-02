@@ -691,18 +691,22 @@ HEAD = "e" * 40
 
 
 class FakeGit:
-    """Offline stand-in for the three local git calls; records what was asked."""
+    """Offline stand-in for the four local git calls; records what was asked."""
 
-    def __init__(self, head: str = HEAD, porcelain: str = "", on_main: bool = True) -> None:
+    def __init__(self, head: str = HEAD, porcelain: str = "", on_main: bool = True,
+                 ls_files: str = "H scripts/nbr_round4_candidates.py\n") -> None:
         self.head, self.porcelain, self.on_main = head, porcelain, on_main
+        self.ls_files = ls_files
         self.calls: list[list[str]] = []
 
     def __call__(self, args: list[str]) -> tuple[int, str]:
         self.calls.append(args)
         if args == ["rev-parse", "HEAD"]:
             return 0, self.head + "\n"
-        if args == ["status", "--porcelain"]:
+        if args == ["status", "--porcelain", "--untracked-files=all"]:
             return 0, self.porcelain
+        if args == ["ls-files", "-v"]:
+            return 0, self.ls_files
         if args == ["merge-base", "--is-ancestor", "HEAD", "origin/main"]:
             return (0 if self.on_main else 1), ""
         raise AssertionError(f"unexpected git call {args}")
@@ -724,6 +728,8 @@ def test_build_refuses_a_head_that_is_not_the_named_commit_a_dirty_tree_or_a_com
     for git, refusal in (
         (FakeGit(head="f" * 40), "HEAD ffff"),
         (FakeGit(porcelain="?? stray.py\n"), "checkout is not clean"),
+        (FakeGit(ls_files="h scripts/nbr_round4_candidates.py\n"), "assume-unchanged"),
+        (FakeGit(ls_files="S scripts/nbr_round4_candidates.py\n"), "skip-worktree"),
         (FakeGit(on_main=False), "not an ancestor of origin/main"),
     ):
         assert _main_build(world, git, output=output) == 1
