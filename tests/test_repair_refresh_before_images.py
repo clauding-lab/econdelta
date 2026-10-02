@@ -273,6 +273,14 @@ _REFUSALS = [
                  id="unlisted-value-change"),
     pytest.param(_mh(_A, _B | {"source": "SECRET-SOURCE"}, _LC_NOW), None,
                  "metric_history dsex 2026-09-21 differs in source", id="other-column-change"),
+    # A new ingested_at never excuses another changed column: only diff == {ingested_at} refreshes.
+    pytest.param(_mh(_A, _B | {"ingested_at": _NEW_TS, "source": "SECRET-SOURCE"}, _LC_NOW), None,
+                 "metric_history dsex 2026-09-21 differs in ingested_at, source",
+                 id="ingested-at-plus-other-column"),
+    # A listed re-bind covers exactly {ingested_at, value}; a third changed column refuses.
+    pytest.param(_mh(_A, _B | {"ingested_at": _NEW_TS}, _LC_NOW | {"source": "SECRET-SOURCE"}),
+                 None, f"metric_history {_LC_KEY} differs in ingested_at, source, value",
+                 id="rebind-plus-other-column"),
     pytest.param(_mh(_A, _B | {"extra": "SECRET-COLUMN"}, _LC_NOW), None,
                  "metric_history dsex 2026-09-21 column set differs", id="column-set-change"),
     pytest.param(_mh(_A, _B | {"value": _SECRET}, _LC_NOW), None,
