@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -23,6 +24,10 @@ SCRIPT = Path(__file__).resolve().parent.parent / "deploy" / "copotron-ops-ssh.s
 
 
 def run(command: str, *, dryrun: bool = True, home: Path | None = None):
+    # The deployed forced command uses Bash 4's ${name@Q} and GNU tools.
+    # macOS ships Bash 3.2/BSD; only shell-invoking cases need Linux.
+    if sys.platform != "linux":
+        pytest.skip("requires Linux Bash 4+ and GNU tools used by the deployed SSH script")
     env = {"PATH": "/usr/bin:/bin", "SSH_ORIGINAL_COMMAND": command}
     if dryrun:
         env["COPOTRON_OPS_DRYRUN"] = "1"

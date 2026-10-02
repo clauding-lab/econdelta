@@ -61,7 +61,7 @@ from parsers.registry import register
 _NUMBER_RE = re.compile(r"-?\d+(?:,\d{3})*(?:\.\d+)?")
 _ROW_RE = re.compile(r'row="([^"]+)"')
 _MIN_RE = re.compile(r"min=(-?\d+(?:\.\d+)?)")
-_PAGE_RE = re.compile(r"page=(\d+)")
+_PAGE_RE = re.compile(r"pages?\s*(?:=\s*)?(\d+)", re.IGNORECASE)
 
 # BB "Major Economic Indicators: Monthly Update" idiom — duplicated from
 # pdf_component.py (not imported) to keep independently-registered parsers

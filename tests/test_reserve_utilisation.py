@@ -175,12 +175,33 @@ def test_derived_definition_seed_ids_match_computation_ids():
         money_market_ref_rate fan-out (MONEY_MARKET_REF_RATE_FANOUT_IDS).
     Both families must be FULLY seeded, and no seed may exist outside a
     known family — the exact-equality check preserves the original intent.
+    The IMF debt series is a third family, written by scrapers.imf_debt_gdp.
     """
-    from aggregate_latest import (
-        MONEY_MARKET_REF_RATE_FANOUT_IDS,
-        RESERVE_UTIL_DERIVED,
-    )
+    from aggregate_latest import MONEY_MARKET_REF_RATE_FANOUT_IDS, RESERVE_UTIL_DERIVED
+    from scrapers.imf_debt_gdp import IMF_METRIC_ID
 
     seed_ids = {d["metric_id"] for d in DERIVED_DEFINITION_SEEDS}
-    writer_ids = set(RESERVE_UTIL_DERIVED.keys()) | set(MONEY_MARKET_REF_RATE_FANOUT_IDS)
+    writer_ids = (
+        set(RESERVE_UTIL_DERIVED.keys())
+        | set(MONEY_MARKET_REF_RATE_FANOUT_IDS)
+        | {IMF_METRIC_ID}
+    )
     assert seed_ids == writer_ids
+
+
+def test_aggregate_only_derives_reserve_ratios_from_aligned_dated_levels():
+    from datetime import datetime, timezone
+
+    import aggregate_latest as agg
+    now = datetime(2026, 9, 25, tzinfo=timezone.utc)
+    def records(period):
+        return {"banking": {
+            "deposits_held_with_bb_crr": {"value": 60000, "source_as_of": "2026-07-31", "value_type": "amount_bdt_crore", "_provenance": "deterministic", "cadence": "monthly"},
+            "deposits_of_the_system": {"value": 1500000, "source_as_of": period, "value_type": "amount_bdt_crore", "_provenance": "deterministic", "cadence": "monthly"},
+        }}
+    for period in (None, "2026-06-30"):
+        obs = agg._build_observations({}, records(period), {}, now=now, holidays=set(), yield_values={}, yield_dates={})
+        assert "crr_utilisation_pct" not in obs
+    obs = agg._build_observations({}, records("2026-07-31"), {}, now=now, holidays=set(), yield_values={}, yield_dates={})
+    assert obs["crr_utilisation_pct"].value == 4
+    assert obs["crr_utilisation_pct"].as_of.isoformat() == "2026-07-31"

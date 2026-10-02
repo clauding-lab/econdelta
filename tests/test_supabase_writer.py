@@ -532,3 +532,29 @@ def test_history_and_definitions_monthly_share_batching_behavior():
     )
     assert n == 1200
     assert sess.post.call_count == 3
+
+
+def test_writer_rejects_nonfinite_and_future_values_but_keeps_dated_historical_callers():
+    from datetime import date, datetime, timezone
+
+    from utils.supabase_writer import _rows_from_data
+    rows = _rows_from_data(
+        {"old": 2.97, "bad_nan": float("nan"), "bad_inf": float("inf"), "bool": True, "future": 9},
+        date(2026, 9, 25), "test",
+        {"old": date(2026, 8, 31), "future": date(2031, 12, 31)},
+        datetime(2026, 9, 25, tzinfo=timezone.utc),
+    )
+    assert [(r["metric_id"], r["as_of"]) for r in rows] == [("old", "2026-08-31")]
+
+
+def test_observation_writer_omits_undated_and_mismatched_values():
+    from dataclasses import replace
+    from datetime import date, datetime, timezone
+
+    from utils.observations import Observation
+    from utils.supabase_writer import _rows_from_data
+    obs = Observation("monthly_remittance", 2.97, date(2026, 8, 31), "USD billion", "BB", None,
+                      datetime(2026, 9, 25, tzinfo=timezone.utc), "verified", "observation", "August row")
+    for value, record in ((9, obs), (2.97, replace(obs, as_of=None, quality="unavailable", date_basis="unknown"))):
+        assert not _rows_from_data({obs.metric_id: value}, date(2026, 9, 25), "EconDelta", observations={obs.metric_id: record})
+    assert not _rows_from_data({"legacy": 3}, date(2026, 9, 25), "EconDelta", observations={})

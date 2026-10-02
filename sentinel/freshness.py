@@ -125,12 +125,8 @@ RETIRED_METRIC_IDS: frozenset[str] = frozenset(
 #     has no equivalent food/non-food 12-month-average extraction to derive
 #     from -- only the point-to-point food/non-food ids are safe daily
 #     sources, see cpi_p2p_food_monthly/cpi_p2p_nonfood_monthly).
-#   - exports_usd_mn_monthly: backfilled to Jun 2026 from EPB press figures
-#     (scripts/backfill_monthly_chart_series.py); the EPB portal itself is
-#     JS-rendered/unscrapeable, so there is no live writer yet. Ongoing
-#     source research is PARKED, not abandoned -- revisit note: check whether
-#     EPB or BSS ever exposes a scrapeable monthly export table before
-#     assuming this stays accepted-stale forever.
+# exports_usd_mn_monthly now has the verified EPB goods-summary appender
+# (E6). It is deliberately no longer exempt from real freshness breaches.
 #
 # imports_usd_mn_monthly was REMOVED from this set in the same PR that added
 # its live leg (PR-C, build-brief item 1) -- BB's MEI PDF DOES carry a
@@ -146,7 +142,6 @@ ACCEPTED_STALE_METRIC_IDS = ACCEPTED_STALE_METRIC_IDS | frozenset(
     {
         "cpi_12m_food_monthly",
         "cpi_12m_nonfood_monthly",
-        "exports_usd_mn_monthly",
     }
 )
 
@@ -353,6 +348,13 @@ def _aggregate(
         if not mid:
             continue
         as_of = _parse_date(row.get("as_of"))
+        if table == "metric_history_monthly":
+            # The grouping key is not the auction/value date. Prefer evidence
+            # where available; legacy month-first evidence remains visibly old
+            # until an exact R1 correction, never invent a day to freshen it.
+            evidence_date = _parse_date(row.get("source_as_of"))
+            if evidence_date is not None:
+                as_of = evidence_date
         ing = _parse_ts(row.get("ingested_at"))
         entry = acc.setdefault(
             mid,

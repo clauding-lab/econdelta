@@ -150,6 +150,15 @@ DERIVED_KEYS: list[tuple[str, str, str, str]] = [
         "2021 = 7.64%); the true vintage is stamped, NOT the run date.",
     ),
     (
+        "imf_general_govt_debt_pct_gdp",
+        "percent",
+        "fiscal_year",
+        "IMF DataMapper GGXWDG_NGDP general-government gross debt as a percentage of GDP. "
+        "Bangladesh fiscal years end on 30 June. Estimates and projections are preserved "
+        "in the local timestamped source-payload archive; IMF observations are not treated "
+        "as independently audited actuals.",
+    ),
+    (
         "lng_price_usd_mmbtu",
         "amount_usd_mmbtu",
         "monthly",

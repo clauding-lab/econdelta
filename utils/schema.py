@@ -1,9 +1,17 @@
 """Pydantic models for scraper snapshots and latest.json bundle."""
 
 from datetime import date, datetime
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    model_serializer,
+    model_validator,
+)
 
 
 class FreshnessByCadence(BaseModel):
@@ -178,6 +186,109 @@ class CommoditySnapshot(BaseModel):
     provider: str
 
 
+ReceiptStatus = Literal["ok", "failed", "skipped"]
+# Strict: a bool, "2" or 2.0 is a producer bug, not a row count (the Brief reader rejects them too).
+RowCount = Annotated[int, Field(strict=True, ge=0)]
+LagDays = Annotated[int, Field(strict=True, gt=0)]
+
+
+def _without_absent(handler: SerializerFunctionWrapHandler, model: BaseModel) -> dict[str, Any]:
+    """An unset optional receipt field is left out, never written as null."""
+    return {k: v for k, v in handler(model).items() if v is not None}
+
+
+class ReceiptFailure(BaseModel):
+    """One failed operation of a persistence attempt (utils/write_receipts.py)."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    operation: str
+    category: str
+    detail: str
+
+
+class ReceiptSkip(BaseModel):
+    """One reason nothing was written; a skip is never a persistence failure."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    category: str
+    detail: str
+    # Publication lag only: the newest official month already stored (R2 fix 4).
+    newest_recorded: date | None = None
+    # Publication lag only: the accepted lag window for that series, in days (R2 fix 4 round 1:
+    # the sentinel's vintage grace for its cadence, ruling E1).
+    lag_window_days: LagDays | None = None
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        return _without_absent(handler, self)
+
+
+class WriteReceipt(BaseModel):
+    """The outcome of one persistence stage or leg (R2 fix 10).
+
+    `ok` means rows were written AND confirmed; `failed` means a write, read or
+    readback failed or went unconfirmed; `skipped` means nothing needed writing.
+    A leg's failure dominates its parent, and confirmed rows are never erased.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    status: ReceiptStatus
+    attempted_at: AwareDatetime
+    reason: str | None = None
+    confirmed_rows: RowCount | None = None
+    failures: tuple[ReceiptFailure, ...] | None = None
+    skips: tuple[ReceiptSkip, ...] | None = None
+    legs: "dict[str, WriteReceipt] | None" = None
+
+    @model_validator(mode="after")
+    def _status_agrees_with_its_evidence(self) -> "WriteReceipt":
+        if self.failures and self.status != "failed":
+            raise ValueError(f"a receipt with failures cannot be {self.status!r}")
+        if self.failures is not None and self.confirmed_rows is not None:
+            implied = "failed" if self.failures else "ok" if self.confirmed_rows else "skipped"
+            if self.status != implied:
+                raise ValueError(f"status {self.status!r} contradicts its rows/failures ({implied!r})")
+        if self.legs:
+            self._agrees_with_legs(self.legs)
+        return self
+
+    def _agrees_with_legs(self, legs: "dict[str, WriteReceipt]") -> None:
+        states = {leg.status for leg in legs.values()}
+        implied = "failed" if "failed" in states else "ok" if "ok" in states else "skipped"
+        if self.status != implied:
+            raise ValueError(f"status {self.status!r} hides its legs' outcome ({implied!r})")
+        rows = sum(leg.confirmed_rows or 0 for leg in legs.values())
+        if self.confirmed_rows is not None and self.confirmed_rows != rows:
+            raise ValueError(f"{self.confirmed_rows} confirmed rows but its legs confirm {rows}")
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        return _without_absent(handler, self)
+
+
+class WriteStatus(BaseModel):
+    """Database persistence outcome recorded in the snapshot, after the attempts.
+
+    `daily` is the main metric_history write alone; `media_overrides` is the
+    approved-press re-assertion that runs after it, reported on its own so an
+    override problem is neither charged to nor hidden by the daily write.
+    Absent from pre-receipt snapshots (LatestBundle.write_status is None).
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    daily: WriteReceipt
+    monthly: WriteReceipt
+    media_overrides: WriteReceipt | None = None
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        return _without_absent(handler, self)
+
+
 class LatestBundle(BaseModel):
     """Top-level latest.json structure consumed by The Brief agent.
 
@@ -196,6 +307,8 @@ class LatestBundle(BaseModel):
     updated_at: datetime
     sources_status: dict[str, SourceStatus]
     data: dict[str, Any]
+    write_status: WriteStatus | None = None  # None: a pre-receipt producer, never a success
+    observations: dict[str, dict[str, Any]] = {}
     domains: dict[str, dict[str, Any]] = {}
     freshness: FreshnessSummary | None = None
     alerts: list[Alert] = []

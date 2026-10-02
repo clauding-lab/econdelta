@@ -125,6 +125,12 @@ def test_parse_instruction_with_page(mod):
     assert page == 7
 
 
+@pytest.mark.parametrize("hint", ["page=16", "page 16", "pages 16-18"])
+def test_parse_instruction_accepts_shared_page_hint_syntax(mod, hint):
+    _, _, page = mod._parse_instruction(f'row="Money multiplier" {hint}')
+    assert page == 16
+
+
 def test_parse_instruction_page_defaults_to_none(mod):
     """Backward compatible: existing entries without page= are unaffected."""
     _, _, page = mod._parse_instruction('row="b) Broad Money" min=1000')

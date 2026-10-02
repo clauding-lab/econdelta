@@ -416,6 +416,7 @@ def _setup_v3_with_usd_bdt_exchange_rate_indicator(
         "cadence": "daily",
         "scraped_at": datetime.now(timezone.utc).isoformat(),
         "value": v3_value,
+        "source_as_of": datetime.now(timezone.utc).date().isoformat(),
         "_provenance": "deterministic",
         "_parse_strategy": "html_footer_ticker",
     }))
@@ -508,11 +509,8 @@ def test_alias_date_follows_gated_value_not_stale_bb_forex_date(
     # The value is the fresh v3 one (999.9), confirmed by the sibling test above.
     assert captured["data"]["usd_bdt_exchange_rate"] == 999.9
     source_as_of_map = captured.get("source_as_of_map") or {}
-    assert "usd_bdt_exchange_rate" not in source_as_of_map, (
-        f"usd_bdt_exchange_rate must get NO Tier-1 date when bb_forex is stale "
-        f"-- found {source_as_of_map.get('usd_bdt_exchange_rate')!r} instead. "
-        f"The date must follow the (gated) value, not bb_forex unconditionally."
-    )
+    assert source_as_of_map["usd_bdt_exchange_rate"] == datetime.now(timezone.utc).date()
+    assert captured["observations"]["usd_bdt_exchange_rate"].value == 999.9
 
 
 def test_main_fires_warning_on_stale_source(
@@ -863,6 +861,16 @@ class TestWriteReservesMonthlySplit:
             agg.RESERVES_MONTHLY_GROSS_ID, agg.RESERVES_MONTHLY_BPM6_ID,
         }
 
+    def test_keeps_legacy_bpm6_id_and_full_source_precision(self, monkeypatch):
+        captured_rows, _ = self._patch_monthly_writers(monkeypatch)
+        n = agg._write_reserves_monthly_split(
+            _reserves_with_bpm6(gross=37.35, bpm6=32.4423, reserves_date=date(2026, 8, 1))
+        )
+        assert n == 2
+        bpm6 = next(r for r in captured_rows if r["metric_id"] == "net_reserves_bpm6_usd_bn_monthly")
+        assert bpm6["value"] == 32.4423
+        assert bpm6["as_of"] == "2026-08-31"
+
     def test_as_of_is_month_end_not_month_start(self, monkeypatch):
         """2026-08-05 review H3: as_of must be _month_end(reserves_date), not
         reserves_date itself -- matches
@@ -881,6 +889,36 @@ class TestWriteReservesMonthlySplit:
         captured_rows, _ = self._patch_monthly_writers(monkeypatch)
         agg._write_reserves_monthly_split(_reserves_with_bpm6(reserves_date=date(2024, 2, 1)))
         assert captured_rows[0]["as_of"] == "2024-02-29"  # 2024 is a leap year
+
+
+def test_dam_onion_anomaly_threshold_still_emits_review_alert(monkeypatch):
+    """The newly dated DAM onion row keeps the existing 30% warning intact."""
+    indicator = next(
+        item for item in agg._load_v3_registry() if item["id"] == "food_onion_local"
+    )
+    assert indicator["anomaly_threshold"] == 0.3
+    monkeypatch.setattr(agg, "_load_v3_registry", lambda: [indicator])
+    monkeypatch.setattr(
+        agg,
+        "_load_v3_snapshot",
+        lambda _indicator_id: {
+            "value": 42.045,
+            "previous_value": 62.0,
+            "change_pct": (42.045 - 62.0) / 62.0,
+            "source_as_of": "2026-09-24",
+            "cadence": "daily",
+            "scraped_at": "2026-09-25T00:00:00+00:00",
+            "_provenance": "deterministic",
+        },
+    )
+
+    _, _, _, alerts = agg._build_v3_blocks(datetime(2026, 9, 25, tzinfo=timezone.utc))
+
+    anomaly = next(alert for alert in alerts if alert.indicator_id == "food_onion_local")
+    assert anomaly.type == "anomaly"
+    assert anomaly.severity == "warn"
+    assert anomaly.previous == 62.0
+    assert anomaly.value == 42.045
 
 
 def test_main_writes_reserves_monthly_split_when_bb_forex_fresh(

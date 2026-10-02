@@ -33,6 +33,8 @@ def _make_multipage_pdf(path, page_count: int = 5) -> None:
         ("on PAGE 7", 7),
         ("see pages 22-24 for details", 22),
         ("page  3", 3),
+        ("page=16 table=1", 16),
+        ("page = 7", 7),
         ("Self explanatory", None),
         ("", None),
         ("row=Total col=2", None),
@@ -40,6 +42,36 @@ def _make_multipage_pdf(path, page_count: int = 5) -> None:
 )
 def test_parse_page_hint(instruction, expected):
     assert _parse_page_hint(instruction) == expected
+
+
+@pytest.mark.parametrize("instruction,expected", [
+    ("page=16 table=1", 16),
+    ("Go to page 16 of the doc", 16),
+])
+def test_page_hints_shared_syntax(instruction, expected):
+    assert _parse_page_hint(instruction) == expected
+
+
+def test_llm_pdf_excerpt_over_cap_fails_instead_of_truncating(monkeypatch, tmp_path):
+    from datetime import datetime, timezone
+    from unittest.mock import patch
+
+    from claude_max.max_client import MaxCallError
+    from fetchers.base import FetchResult
+    from parsers.hybrid import LLM_TEXT_CAP, _llm_extract
+
+    artifact = FetchResult(
+        indicator_id="test_pdf", artifact_path=tmp_path / "doc.pdf",
+        artifact_type="pdf", fetched_at=datetime.now(timezone.utc),
+        source_url="fixture", sha256="0" * 64, cache_hit=False,
+    )
+    indicator = {"id": "test_pdf", "name": "Test", "fetch": {"task": "page=16"},
+                 "parse": {"llm_prompt": "pdf_component.txt", "value_type": "number",
+                           "valid_range": [0, 10]}}
+    with patch("parsers.hybrid._extract_pdf_text", return_value="x" * (LLM_TEXT_CAP + 1)), \
+         patch("parsers.hybrid._load_prompt", return_value="{pdf_text}"):
+        with pytest.raises(MaxCallError, match="refusing to send a truncated table"):
+            _llm_extract(indicator=indicator, artifact=artifact)
 
 
 def test_extract_pdf_text_with_page_hint_returns_window(tmp_path):

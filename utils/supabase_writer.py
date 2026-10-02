@@ -44,6 +44,7 @@ from typing import Optional as _Optional
 import requests
 
 from utils.alert_dedup import should_alert_today
+from utils.observations import Observation, eligible, finite_number, latest_permitted_date
 from utils.run_log_capture import RingBufferHandler, scrub_secrets
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -142,12 +143,14 @@ def _rows_from_data(
     source_as_of_map: Mapping[str, date] | None = None,
     ingested_at: datetime | None = None,
     provenance: str | None = None,
+    *, observations: Mapping[str, Observation] | None = None,
 ) -> list[dict]:
     """Build PostgREST row dicts from ``data``.
 
     Args:
         data: Flat snapshot dict — only ``int`` and ``float`` values are kept.
-        as_of: Global fallback date for all metrics without a per-metric override.
+        as_of: Explicit observation date for historical callers. With observations,
+            this is the pipeline clock used to reject future periods.
         source: Source label written to ``metric_history.source``.
         source_as_of_map: Optional per-metric publication-date overrides. When a
             metric_id appears in this map, that date is used as ``as_of`` instead
@@ -157,6 +160,8 @@ def _rows_from_data(
         ingested_at: The write timestamp posted on EVERY row so a merge-upsert
             (ON CONFLICT DO UPDATE) BUMPS ``metric_history.ingested_at``. Defaults
             to now (UTC). See below for why this matters.
+        observations: Optional complete records. When supplied, only matching,
+            eligible dated records are written; missing metadata has no fallback.
         provenance: Optional extraction-method tag — one of 'deterministic',
             'llm', 'hybrid', 'manual' (see supabase/migrations/0013_provenance.sql).
             Included in every row's payload ONLY when this is not None AND
@@ -194,7 +199,19 @@ def _rows_from_data(
             # any ``status: true``-style flag in the snapshot doesn't slip in.
             continue
         if isinstance(value, (int, float)):
+            if not finite_number(value):
+                continue
             effective_as_of = overrides.get(metric_id, as_of)
+            write_day = (ingested_at or datetime.now(timezone.utc)).date()
+            if observations is not None:
+                obs = observations.get(metric_id)
+                if obs is None or not eligible(obs, today=as_of) or obs.value != value:
+                    continue
+                effective_as_of = obs.as_of
+                # A Bangladesh-dated record may carry the Dhaka day of its capture.
+                write_day = latest_permitted_date(obs, today=write_day)
+            if effective_as_of > write_day:
+                continue
             row = {
                 "metric_id": metric_id,
                 "as_of": effective_as_of.isoformat(),
@@ -229,6 +246,7 @@ def upsert_metric_history(
     source_as_of_map: Mapping[str, date] | None = None,
     ingested_at: datetime | None = None,
     provenance: str | None = None,
+    observations: Mapping[str, Observation] | None = None,
     url: str | None = None,
     service_key: str | None = None,
     timeout: int = _DEFAULT_TIMEOUT,
@@ -278,7 +296,7 @@ def upsert_metric_history(
             four allowed values.
     """
     base_url, key = _resolve_credentials(url, service_key)
-    rows = _rows_from_data(data, as_of, source, source_as_of_map, ingested_at, provenance)
+    rows = _rows_from_data(data, as_of, source, source_as_of_map, ingested_at, provenance, observations=observations)
     if not rows:
         logger.info("no scalar values to upsert (snapshot empty or non-numeric only)")
         return 0
@@ -1135,10 +1153,19 @@ def upsert_metric_history_monthly(
     Raises:
         SupabaseWriteError: on missing creds, network failure, or non-2xx.
     """
-    return _upsert_monthly_table(
-        _MONTHLY_HISTORY_TABLE, rows, "metric_id,as_of",
-        url=url, service_key=service_key, timeout=timeout, session=session,
-    )
+    from utils.write_receipts import confirm_monthly, record_write_failure
+
+    try:
+        count = _upsert_monthly_table(
+            _MONTHLY_HISTORY_TABLE, rows, "metric_id,as_of",
+            url=url, service_key=service_key, timeout=timeout, session=session,
+        )
+    except Exception as exc:
+        record_write_failure(rows, exc)  # charged to each leg in the batch; still raised
+        raise
+
+    confirm_monthly(rows)
+    return count
 
 
 def upsert_metric_definitions_monthly(

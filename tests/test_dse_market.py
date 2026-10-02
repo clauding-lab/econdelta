@@ -21,6 +21,7 @@ from scrapers.dse_market import (
     load_live_market,
     parse_indices,
     parse_live_market,
+    parse_live_market_payload,
     parse_market,
     parse_session_date,
 )
@@ -169,6 +170,134 @@ class TestLoadLiveMarket:
         assert d == FIXTURE_SESSION
         assert indices.dsex == pytest.approx(5531.64623)
         assert market.total_trades == 184_783
+
+
+# ---------------------------------------------------------------------------
+# Repair-branch payload validation (fix/data-reliability-20260925), run on the
+# 2026-09-24 capture. Kept alongside #139's tests: both sides moved this
+# scraper to /api/live/market independently; the merged parser carries #139's
+# closed-session gate and dailyTotals cross-check AND the repair branch's
+# finite-number / whole-count / string-key validation.
+# ---------------------------------------------------------------------------
+
+class TestParseLiveMarketPayload:
+    def test_uses_source_session_date_and_converts_million_turnover(self):
+        payload = json.loads((FIXTURES_DIR / "dse_market_api_20260924.json").read_text())
+        trading_date, indices, market = parse_live_market_payload(payload)
+        assert trading_date == date(2026, 9, 24)
+        assert trading_date != date.fromisoformat(payload["session"]["date"])
+        assert indices.dsex == pytest.approx(5578.3276)
+        assert indices.dsex_change_pct == pytest.approx(-0.3197)
+        assert market.turnover_crore == pytest.approx(756.3161)
+        assert market.total_trades == 202860
+
+    def test_rejects_missing_or_invalid_session_date(self):
+        with pytest.raises(ParseError, match="sessionDate"):
+            parse_live_market_payload({"session": {"date": "2026-09-25"}})
+
+    def test_holiday_calendar_does_not_override_actual_session_date(self):
+        payload = json.loads((FIXTURES_DIR / "dse_market_api_20260924.json").read_text())
+        trading_date, _, _ = parse_live_market_payload(payload)
+        # 25 Sep is a closed/no-session day, but DSE explicitly identifies the
+        # last completed session as 24 Sep; the calendar date is never substituted.
+        assert payload["session"]["date"] == "2026-09-25"
+        assert payload["session"]["tradingDay"] is False
+        assert trading_date == date(2026, 9, 24)
+
+    @pytest.mark.parametrize(
+        "mutate",
+        [
+            lambda payload: next(row for row in payload["indices"] if row["key"] == "DSEX").update(change="NaN"),
+            lambda payload: next(row for row in payload["indices"] if row["key"] == "DSEX").update(percent="Infinity"),
+            lambda payload: next(row for row in payload["indices"] if row["key"] == "DSEX").update(change=True),
+            lambda payload: payload["totals"].update(trades="-1"),
+            lambda payload: payload["totals"].update(trades=202860.5),
+            lambda payload: payload["breadth"].update(advanced="-1"),
+            lambda payload: payload["breadth"].update(advanced=True),
+            lambda payload: payload["breadth"].update(declined="-1"),
+            lambda payload: payload["breadth"].update(unchanged="-1"),
+        ],
+        ids=["nonfinite-change", "nonfinite-percent", "boolean-change", "negative-trades", "fractional-trades", "negative-advancing", "boolean-advancing", "negative-declining", "negative-unchanged"],
+    )
+    def test_rejects_invalid_change_or_market_count_before_snapshot(self, mutate):
+        payload = json.loads((FIXTURES_DIR / "dse_market_api_20260924.json").read_text())
+        # Merge with #139: drop the dailyTotals history so its trades
+        # cross-check cannot mask the field validator this test is about.
+        payload["dailyTotals"] = []
+        mutate(payload)
+        with pytest.raises(ParseError):
+            parse_live_market_payload(payload)
+
+    def test_rejects_nonstring_index_key(self):
+        payload = json.loads((FIXTURES_DIR / "dse_market_api_20260924.json").read_text())
+        payload["indices"][0]["key"] = 123
+        with pytest.raises(ParseError, match="index"):
+            parse_live_market_payload(payload)
+
+    def test_accepts_zero_trade_and_breadth_counts(self):
+        payload = json.loads((FIXTURES_DIR / "dse_market_api_20260924.json").read_text())
+        payload["totals"]["trades"] = 0
+        payload["breadth"].update(advanced=0, declined=0, unchanged=0)
+        # Merge with #139: the same-date dailyTotals row must agree with the
+        # headline totals, so move it to zero too.
+        next(row for row in payload["dailyTotals"] if row["date"] == "2026-09-24")["trades"] = 0
+
+        _, _, market = parse_live_market_payload(payload)
+
+        assert market.total_trades == 0
+        assert market.advancing == market.declining == market.unchanged == 0
+
+    # Merge fix round 1: #139's dailyTotals cross-check runs BEFORE
+    # parse_market's shape check, so a badly shaped `totals` / `dailyTotals`
+    # must still end as a ParseError (the handled path), never an
+    # AttributeError / TypeError that skips notify().
+    @pytest.mark.parametrize(
+        "mutate",
+        [
+            lambda payload: payload.update(totals=[1, 2]),
+            lambda payload: payload.update(totals="202860"),
+            lambda payload: payload.update(dailyTotals=5),
+            lambda payload: payload.update(dailyTotals={"2026-09-24": {"trades": 202860}}),
+        ],
+        ids=["totals-list", "totals-string", "dailytotals-scalar", "dailytotals-object"],
+    )
+    def test_badly_shaped_totals_or_history_is_a_parse_error(self, mutate):
+        payload = json.loads((FIXTURES_DIR / "dse_market_api_20260924.json").read_text())
+        mutate(payload)
+        with pytest.raises(ParseError):
+            parse_live_market_payload(payload)
+
+    def test_string_headline_trades_agrees_with_integer_history_row(self):
+        # The repair branch accepts a digit-string count; #139's cross-check
+        # must compare the parsed counts, not the raw JSON values, or a
+        # stringified headline would be refused as a date disagreement.
+        payload = json.loads((FIXTURES_DIR / "dse_market_api_20260924.json").read_text())
+        payload["totals"]["trades"] = "202860"
+
+        trading_date, _, market = parse_live_market_payload(payload)
+
+        assert trading_date == date(2026, 9, 24)
+        assert market.total_trades == 202860
+
+    def test_string_headline_trades_that_really_disagrees_is_still_refused(self):
+        payload = json.loads((FIXTURES_DIR / "dse_market_api_20260924.json").read_text())
+        payload["totals"]["trades"] = "202861"
+        with pytest.raises(ParseError, match="disagrees"):
+            parse_live_market_payload(payload)
+
+    def test_session_without_ds30_and_dses_parses_with_none_never_fabricated(self):
+        # Chosen rule at merge (#139's): DS30/DSES are optional. A session
+        # missing them still ingests, with None -- never an invented level.
+        payload = json.loads((FIXTURES_DIR / "dse_market_api_20260924.json").read_text())
+        payload["indices"] = [row for row in payload["indices"] if row["key"] == "DSEX"]
+
+        _, indices, _ = parse_live_market_payload(payload)
+
+        assert indices.dsex == pytest.approx(5578.3276)
+        assert indices.ds30 is None and indices.dses is None
+
+
+# ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------
@@ -448,3 +577,99 @@ class TestMainEntryPoint:
 
         assert result == 0
         assert (tmp_path / "2026-10-01.json").exists()
+
+
+# ---------------------------------------------------------------------------
+# Repair-branch main() validation paths, ported from fetch_json(dict) to the
+# fetch_html(text) path #139 uses: a malformed body, an invalid index shape and
+# an invalid-then-corrected session all take the handled error path and write
+# no snapshot; the corrected payload still ingests on the next run.
+# ---------------------------------------------------------------------------
+
+
+def _live_api_payload(*, trading_date: str = "2026-04-20", dsex: float | None = None) -> dict:
+    payload = json.loads((FIXTURES_DIR / "dse_market_api_20260924.json").read_text())
+    payload["session"]["sessionDate"] = trading_date
+    if dsex is not None:
+        next(row for row in payload["indices"] if row["key"] == "DSEX")["value"] = dsex
+    return payload
+
+
+class TestMainEntryPointPayloadValidation:
+    def test_malformed_api_json_uses_handled_error_path_without_snapshot(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("ECONDELTA_DRY_RUN", "1")
+        monkeypatch.setattr("scrapers.dse_market.DATA_DIR", tmp_path)
+        with (
+            patch("scrapers.dse_market.DEFAULT_CLIENT.fetch_html", return_value="<html>not json</html>"),
+            patch("scrapers.dse_market.notify") as mock_notify,
+        ):
+            from scrapers.dse_market import main
+
+            assert main() == 1
+
+        mock_notify.assert_called_once()
+        assert mock_notify.call_args.args[:2] == ("error", "dse_market fetch failed")
+        assert list(tmp_path.glob("*.json")) == []
+
+    def test_invalid_api_index_shape_uses_handled_error_path_without_snapshot(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("ECONDELTA_DRY_RUN", "1")
+        monkeypatch.setattr("scrapers.dse_market.DATA_DIR", tmp_path)
+        payload = _live_api_payload()
+        payload["indices"][0]["key"] = 123
+        with (
+            patch("scrapers.dse_market.DEFAULT_CLIENT.fetch_html", return_value=json.dumps(payload)),
+            patch("scrapers.dse_market.notify") as mock_notify,
+        ):
+            from scrapers.dse_market import main
+
+            assert main() == 1
+
+        mock_notify.assert_called_once()
+        assert mock_notify.call_args.args[:2] == ("error", "dse_market fetch failed")
+        assert list(tmp_path.glob("*.json")) == []
+
+    def test_non_object_totals_with_matching_history_row_uses_handled_error_path(self, tmp_path, monkeypatch):
+        # sessionDate AND its dailyTotals row both move to 2026-04-20, so
+        # #139's cross-check actually reaches the malformed `totals`.
+        monkeypatch.setenv("ECONDELTA_DRY_RUN", "1")
+        monkeypatch.setattr("scrapers.dse_market.DATA_DIR", tmp_path)
+        payload = _live_api_payload()
+        next(row for row in payload["dailyTotals"] if row["date"] == "2026-09-24")["date"] = "2026-04-20"
+        payload["totals"] = ["x"]
+        with (
+            patch("scrapers.dse_market.DEFAULT_CLIENT.fetch_html", return_value=json.dumps(payload)),
+            patch("scrapers.dse_market.notify") as mock_notify,
+        ):
+            from scrapers.dse_market import main
+
+            assert main() == 1
+
+        mock_notify.assert_called_once()
+        assert mock_notify.call_args.args[:2] == ("error", "dse_market fetch failed")
+        assert list(tmp_path.glob("*.json")) == []
+
+    def test_invalid_session_can_be_corrected_and_retried_before_ingest(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("ECONDELTA_DRY_RUN", "1")
+        monkeypatch.setattr("scrapers.dse_market.DATA_DIR", tmp_path)
+        monkeypatch.setattr("scrapers.dse_market.load_holidays", lambda _p: set())
+        invalid = _live_api_payload()
+        invalid["breadth"]["advanced"] = "-1"
+        corrected = _live_api_payload()
+        with (
+            patch(
+                "scrapers.dse_market.DEFAULT_CLIENT.fetch_html",
+                side_effect=[json.dumps(invalid), json.dumps(corrected)],
+            ),
+            patch("scrapers.dse_market.notify") as mock_notify,
+        ):
+            from scrapers.dse_market import main
+
+            assert main() == 1
+            assert list(tmp_path.glob("*.json")) == []
+            assert main() == 0
+
+        mock_notify.assert_called_once()
+        written = tmp_path / "2026-04-20.json"
+        assert written.exists()
+        snapshot = json.loads(written.read_text())
+        assert snapshot["market"]["advancing"] >= 0

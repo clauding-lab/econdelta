@@ -19,15 +19,19 @@ from __future__ import annotations
 
 import ast
 import inspect
+import json
+from datetime import date, timedelta
 
 import pytest
 
 
 @pytest.fixture(autouse=True)
-def _no_notify(monkeypatch):
+def _no_notify(monkeypatch, request):
     """Swallow Discord notifies and record them for assertions."""
     import aggregate_latest as a
 
+    if request.node.name != "test_export_leg_runs_even_if_other_independent_appenders_fail":
+        monkeypatch.setattr("utils.epb_monthly.write_exports_monthly", lambda: 0)
     sent: list[tuple] = []
     monkeypatch.setattr(a, "notify", lambda *args, **kw: sent.append(args))
     monkeypatch.setenv("ECONDELTA_SKIP_SUPABASE", "0")
@@ -199,3 +203,71 @@ class TestHardRejectPathOrdering:
             and n.func.id == "_run_chart_feeding_monthly_appenders"
         ]
         assert len(sites) == 2
+
+    def test_zero_field_reject_keeps_latest_and_history_unpublished_but_runs_appenders(
+        self, tmp_path, monkeypatch
+    ):
+        import aggregate_latest as a
+
+        config = tmp_path / "config"
+        data = tmp_path / "data"
+        archive = data / "archive"
+        config.mkdir()
+        archive.mkdir(parents=True)
+        (config / "sources.json").write_text(json.dumps({"sources": {}}))
+        registry = config / "sources-v3.json"
+        registry.write_text(json.dumps({"version": "3.0", "indicators": []}))
+        yesterday = (date.today() - timedelta(days=1)).isoformat()
+        (archive / f"latest_{yesterday}.json").write_text(json.dumps({
+            "updated_at": f"{yesterday}T00:00:00+00:00", "data": {"prior": 5.0}
+        }))
+        latest_path = data / "latest.json"
+        prior_latest = '{"data":{"prior":5.0}}'
+        latest_path.write_text(prior_latest)
+
+        monkeypatch.setattr(a, "REPO_ROOT", tmp_path)
+        monkeypatch.setattr(a, "DATA_DIR", data)
+        monkeypatch.setattr(a, "LATEST_PATH", latest_path)
+        monkeypatch.setattr(a, "ARCHIVE_DIR", archive)
+        monkeypatch.setattr(a, "CONFIG_PATH", config / "sources.json")
+        monkeypatch.setattr(a, "SOURCES_V3_PATH", registry)
+        monkeypatch.setattr(a, "review_data", lambda *args, **kwargs: {
+            "status": "reject", "reason": "no safe field mapping", "missing": [],
+            "anomalies": [],
+        })
+        appender_calls: list[str] = []
+        monkeypatch.setattr(
+            a, "_run_chart_feeding_monthly_appenders",
+            lambda: appender_calls.append("ran"),
+        )
+        monkeypatch.setenv("ECONDELTA_SKIP_OPUS_REVIEW", "0")
+        monkeypatch.setenv("ECONDELTA_SKIP_SUPABASE", "1")
+        monkeypatch.setenv("ECONDELTA_DRY_RUN", "1")
+
+        assert a.main() == 1
+        assert latest_path.read_text() == prior_latest
+        assert sorted(p.name for p in archive.glob("latest_*.json")) == [
+            f"latest_{yesterday}.json"
+        ]
+        assert appender_calls == ["ran"]
+
+
+def test_export_leg_runs_even_if_other_independent_appenders_fail(monkeypatch, tmp_path):
+    import aggregate_latest as a
+    import utils.epb_monthly as epb
+    import utils.monthly_evidence as evidence
+    import utils.supabase_reader as reader
+    import utils.supabase_writer as writer
+
+    def fail():
+        raise RuntimeError("unrelated monthly source unavailable")
+
+    monkeypatch.setattr(a, "_write_macro_monthly_append", fail)
+    monkeypatch.setattr(a, "_write_yield_ladder_monthly_append", fail)
+    monkeypatch.setattr(epb, "fetch_exports", lambda: ([(date(2026, 8, 1), 4429.45)], "official.xlsx"))
+    monkeypatch.setattr(reader, "get_metric_history_monthly", lambda mid: [])
+    monkeypatch.setattr(evidence, "DEFAULT_DIRECTORY", tmp_path)
+    written = []
+    monkeypatch.setattr(writer, "upsert_metric_history_monthly", lambda rows: written.extend(rows) or len(rows))
+    a._run_chart_feeding_monthly_appenders()
+    assert [(r["metric_id"], r["value"]) for r in written] == [("exports_usd_mn_monthly", 4429.45)]

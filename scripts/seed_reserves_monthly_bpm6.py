@@ -70,6 +70,10 @@ DEFAULT_FIXTURE = REPO_ROOT / "scripts" / "_seed_data" / "bb_reserves_gross_bpm6
 
 GROSS_METRIC_ID = "gross_reserves_usd_bn_monthly"
 BPM6_METRIC_ID = "net_reserves_bpm6_usd_bn_monthly"
+BPM6_DISPLAY_NAME = "FX reserves (BPM6 gross)"
+BPM6_DESCRIPTION = (
+    "Gross foreign exchange reserves reported by Bangladesh Bank under the IMF BPM6 methodology."
+)
 SOURCE_LABEL = "bb_reserves_history_seed"
 
 # Mirrors scrapers.bb_forex._BPM6_GROSS_RATIO_MIN/MAX (see that module for
@@ -199,12 +203,12 @@ def build_definition_rows() -> list[dict]:
         },
         {
             "metric_id": BPM6_METRIC_ID,
-            "display_name": "FX reserves (BPM6/net)",
+            "display_name": BPM6_DISPLAY_NAME,
             "unit": "USD bn",
             "source_url": "https://www.bb.org.bd/en/index.php/econdata/intreserve",
             "source_attribution": "Bangladesh Bank",
             "domain": "external",
-            "description": "Foreign exchange reserves per IMF BPM6 methodology.",
+            "description": BPM6_DESCRIPTION,
             "notes": "Sparse — BB began reporting BPM6 ~2021; nulls for earlier months.",
             "grace_days": _GRACE_DAYS,
         },

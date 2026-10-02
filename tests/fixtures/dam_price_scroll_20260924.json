@@ -1,0 +1,53 @@
+{
+  "success": true,
+  "data": [
+    {
+      "price_date": "2026-09-24",
+      "commodity_id": 604,
+      "a_r_lowestPrice": "47.45",
+      "a_r_howestPrice": "50.48",
+      "a_w_lowestPrice": "4402.26",
+      "a_w_howestPrice": "4673.87"
+    },
+    {
+      "price_date": "2026-09-24",
+      "commodity_id": 628,
+      "a_r_lowestPrice": "56.81",
+      "a_r_howestPrice": "60.09",
+      "a_w_lowestPrice": "5205.15",
+      "a_w_howestPrice": "5441.03"
+    },
+    {
+      "price_date": "2026-09-24",
+      "commodity_id": 676,
+      "a_r_lowestPrice": "172.60",
+      "a_r_howestPrice": "178.60",
+      "a_w_lowestPrice": "15252.00",
+      "a_w_howestPrice": "16292.00"
+    },
+    {
+      "price_date": "2026-09-24",
+      "commodity_id": 682,
+      "a_r_lowestPrice": "48.40",
+      "a_r_howestPrice": "50.54",
+      "a_w_lowestPrice": "1143.25",
+      "a_w_howestPrice": "1172.94"
+    },
+    {
+      "price_date": "2026-09-24",
+      "commodity_id": 760,
+      "a_r_lowestPrice": "117.25",
+      "a_r_howestPrice": "120.75",
+      "a_w_lowestPrice": "11160.00",
+      "a_w_howestPrice": "11426.67"
+    },
+    {
+      "price_date": "2026-09-24",
+      "commodity_id": 831,
+      "a_r_lowestPrice": "39.50",
+      "a_r_howestPrice": "44.59",
+      "a_w_lowestPrice": "3422.14",
+      "a_w_howestPrice": "3808.57"
+    }
+  ]
+}
