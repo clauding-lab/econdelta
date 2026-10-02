@@ -87,10 +87,11 @@ _TRADING_DAY_SOURCES = frozenset({"dse_market"})
 # in upsert_metric_history fires identically whether or not the strategy is
 # listed here. Adding a strategy to this set silences the warning; it never
 # fixes the underlying as_of forgery.
+# dse_sector_heat left this set on 2026-10-01: its new JSON source carries the
+# trading-session date (session.sessionDate), so a miss from it is now signal.
 _NEVER_DATED_PARSE_STRATEGIES = frozenset({
     "html_table_row",
     "html_call_money",
-    "dse_sector_heat",
 })
 
 STALE_THRESHOLD_HOURS = 24.0
@@ -1150,6 +1151,19 @@ def _build_source_as_of_map(domains: dict[str, dict[str, Any]]) -> dict[str, dat
     if mmrr_date is not None:
         for fanned_id in MONEY_MARKET_REF_RATE_FANOUT_IDS:
             result.setdefault(fanned_id, mmrr_date)
+
+    # DSE sector-heat fan-out dates: same landmine 26/47 class as above.
+    # ``_flatten_dict_indicators`` mints ``dse_sector_heat_<sector>`` from the
+    # parent dict; only the parent carries the trading-session date, so copy
+    # it to every minted key or the Fri/Sat runs would stamp Thursday's
+    # percentages with the run date.
+    heat_date = result.get("dse_sector_heat")
+    if heat_date is not None:
+        for indicators in domains.values():
+            heat = (indicators.get("dse_sector_heat") or {}).get("value")
+            if isinstance(heat, dict):
+                for sector in heat:
+                    result.setdefault(_dse_sector_heat_key(sector), heat_date)
 
     # The brief reads brief-side keys (e.g. banking_npl_pct), not the EconDelta
     # indicator ids — _apply_brief_aliases copies the VALUE to those keys but not
@@ -3488,6 +3502,11 @@ BRIEF_CONVERSIONS: dict[str, tuple[str, float]] = {
 # key in the latter silently re-forges that fanned row's ``as_of`` to the run
 # date (the landmine 26/47 class this source's real value-dating exists to
 # prevent).
+def _dse_sector_heat_key(sector: object) -> str:
+    """metric_id minted for one sector of the ``dse_sector_heat`` dict."""
+    return "dse_sector_heat_" + str(sector).lower().replace(" ", "_")
+
+
 MONEY_MARKET_REF_RATE_FANOUT_IDS: tuple[str, ...] = (
     "dommr",
     "dommr_1w",
@@ -3521,7 +3540,7 @@ def _flatten_dict_indicators(data: dict) -> None:
         for sector, pct in sector_heat.items():
             if not isinstance(pct, (int, float)):
                 continue
-            key = "dse_sector_heat_" + str(sector).lower().replace(" ", "_")
+            key = _dse_sector_heat_key(sector)
             if key not in data:
                 data[key] = float(pct)
 
