@@ -28,7 +28,17 @@ from scripts.history_repair_candidates import (
     NBR_RESTAMP_WINDOW,
     nbr_restamp_rows,
 )
-from scripts.repair_observation_history import RepairConflict, Row, file_hash, same
+from scripts.repair_observation_history import (
+    Backup,
+    CodeCommits,
+    Evidence,
+    Manifest,
+    Operation,
+    RepairConflict,
+    Row,
+    file_hash,
+    same,
+)
 from utils.observations import BRIEF_CONVERSIONS
 
 
@@ -347,6 +357,220 @@ def draft_lines(r4: Snapshot, n1: Snapshot) -> list[str]:
               *_cross_check_lines(r4, n1, proposal), "", "4. Literal", LITERAL_HEADER,
               *format_literal(proposal)]
     return lines
+
+
+# --- the build: every check is a refusal, never a filter -----------------------------------
+
+
+def _run_shape_problems(mid: str, runs: tuple, days: list[str]) -> list[str]:
+    position = {day: n for n, day in enumerate(days)}
+    edges = [(position.get(first), position.get(last)) for _, first, last in runs]
+    contiguous = (
+        bool(runs) and bool(days) and None not in {i for edge in edges for i in edge}
+        and edges[0][0] == 0 and edges[-1][1] == len(days) - 1
+        and all(a <= b for a, b in edges)  # type: ignore[operator]
+        and all(nxt[0] == prev[1] + 1 for prev, nxt in zip(edges, edges[1:]))  # type: ignore[operator]
+    )
+    return [] if contiguous else [f"{mid} runs overlap or leave gaps over the reviewed capture days"]
+
+
+def _value_problems(review: Round4Review, days: list[str]) -> list[str]:
+    problems = []
+    quirks = dict(review.alias_quirks.get(ALIAS_ID, ()))
+    for day in days:
+        child, parent, alias = (_run_value(review.runs[mid], day) for mid in ROUND4_IDS)
+        if parent is None or child != round(float(parent) * CHILD_FACTOR, 2):
+            problems.append(f"child != round(parent x {CHILD_FACTOR}, 2) on {day}")
+        if day not in quirks and alias != parent:
+            problems.append(f"alias != parent on {day} and the day is not listed in alias_quirks")
+    for day, listed in quirks.items():
+        alias, parent = _run_value(review.runs[ALIAS_ID], day), _run_value(review.runs[PARENT_ID], day)
+        if day not in days:
+            problems.append(f"alias quirk day {day} is not a reviewed capture day")
+        elif alias == parent:
+            problems.append(f"alias quirk day {day}: the alias value equals the parent")
+        elif alias != listed:
+            problems.append(f"alias quirk day {day}: alias value {alias!r} differs from the listed "
+                            f"{listed!r}")
+    return problems
+
+
+def _keep_problems(review: Round4Review) -> list[str]:
+    problems = []
+    if set(review.keep_period_rows) != set(ROUND4_IDS):
+        problems.append("keep_period_rows must name exactly the three round-4 ids")
+    for mid in ROUND4_IDS:
+        rows = review.keep_period_rows.get(mid, ())
+        if not rows:
+            problems.append(f"keep_period_rows is empty for {mid}")
+        for day, _ in rows:
+            if day >= ROUND4_FIRST_DAY:
+                problems.append(f"kept period row {mid} {day} is inside the round-4 capture range")
+            elif day < WINDOW_START:
+                problems.append(f"kept period row {mid} {day} is before the R1 window")
+    return problems
+
+
+def transcription_problems(review: Round4Review) -> list[str]:
+    """Inconsistencies inside the transcribed review itself, before any data is compared."""
+    if set(review.runs) != set(ROUND4_IDS) or set(review.alias_quirks) - {ALIAS_ID}:
+        return ["runs must name exactly the three round-4 ids and alias_quirks only the alias"]
+    if review.last_capture_day < ROUND4_FIRST_DAY:
+        return [f"last_capture_day {review.last_capture_day} is before {ROUND4_FIRST_DAY}"]
+    span = set(_days(ROUND4_FIRST_DAY, review.last_capture_day))
+    days = capture_days(review)
+    problems = [f"missing day {day} is outside the capture range"
+                for day in sorted(review.missing_days - span)]
+    for mid in ROUND4_IDS:
+        problems += _run_shape_problems(mid, review.runs[mid], days)
+    if not problems:
+        problems += _value_problems(review, days)
+    return problems + _keep_problems(review)
+
+
+def _check_inputs(r4: Snapshot, n1: Snapshot, review: Round4Review) -> None:
+    if r4.table_sha256 != review.recapture_sha256:
+        raise RepairConflict("recapture metric_history.json hash differs from the reviewed hash")
+    if n1.table_sha256 != review.night1_sha256:
+        raise RepairConflict("Night-1 metric_history.json hash differs from the reviewed hash")
+    started = (datetime.fromisoformat(s.manifest["started_at"]) for s in (n1, r4))
+    if not next(started) < next(started):
+        raise RepairConflict("Night-1 snapshot did not start before the recapture")
+    problems = transcription_problems(review)
+    if problems:
+        raise RepairConflict("review transcription problems: " + "; ".join(problems))
+    check_night1_provenance(n1)
+    date_sets = {tuple(str(r["as_of"]) for r in _family(r4, mid, ROUND4_FIRST_DAY))
+                 for mid in ROUND4_IDS}
+    if len(date_sets) != 1:
+        raise RepairConflict("the three ids have different post-window date sets")
+
+
+def _check_pre_window(r4: Snapshot, n1: Snapshot, mid: str) -> None:
+    rows, before = ([r for r in _family(s, mid) if str(r["as_of"]) < WINDOW_START] for s in (r4, n1))
+    if len(rows) != len(before) or not all(same(a, b) for a, b in zip(rows, before)):
+        raise RepairConflict(f"{mid} pre-window rows differ from the Night-1 snapshot")
+
+
+def _check_r1_window(r4: Snapshot, mid: str, review: Round4Review) -> None:
+    rows = _family(r4, mid, WINDOW_START, WINDOW_END)
+    keep = dict(review.keep_period_rows[mid])
+    if sorted(str(r["as_of"]) for r in rows) != sorted(keep):
+        raise RepairConflict(f"{mid} R1-window keys differ from the reviewed kept period rows")
+    for row in rows:
+        day = str(row["as_of"])
+        if not same(row["value"], keep[day]):
+            raise RepairConflict(f"{mid} kept period row {day} value differs from the review")
+        if row.get("source") != "EconDelta" or not _month_end(day):
+            raise RepairConflict(f"{mid} kept period row {day} is not an EconDelta month-end row")
+
+
+def _post_window_rows(r4: Snapshot, n1: Snapshot, mid: str, review: Round4Review) -> list[Row]:
+    if _family(r4, mid, review.last_capture_day + "~"):
+        raise RepairConflict(f"{mid} has rows after the reviewed last capture day")
+    rows = _family(r4, mid, ROUND4_FIRST_DAY, review.last_capture_day)
+    if [str(r["as_of"]) for r in rows] != capture_days(review):
+        raise RepairConflict(f"{mid} post-window capture days differ from the review")
+    if not all(same(r["value"], _run_value(review.runs[mid], str(r["as_of"]))) for r in rows):
+        raise RepairConflict(f"{mid} post-window values differ from the reviewed runs")
+    for row in rows:
+        day = str(row["as_of"])
+        if row.get("source") != "EconDelta" or row.get("provenance") is not None:
+            raise RepairConflict(f"{mid} {day} is not an EconDelta restamp with null provenance")
+        night1 = n1.index.get((mid, day))
+        if night1 is None:
+            raise RepairConflict(f"{mid} {day} is absent from the Night-1 snapshot")
+        if not same(night1, row):
+            raise RepairConflict(f"{mid} {day} is not identical to its Night-1 row")
+    return rows
+
+
+def _check_night1_post_rows(r4: Snapshot, n1: Snapshot, review: Round4Review) -> None:
+    for mid in ROUND4_IDS:
+        if _family(n1, mid, review.last_capture_day + "~"):
+            raise RepairConflict(
+                f"Night-1 snapshot holds {mid} rows after the reviewed last capture day")
+        lacking = [str(r["as_of"]) for r in _family(n1, mid, ROUND4_FIRST_DAY)
+                   if (mid, str(r["as_of"])) not in r4.index]
+        if lacking:
+            raise RepairConflict(f"Night-1 snapshot holds {mid} rows at or after "
+                                 f"{ROUND4_FIRST_DAY} missing from the recapture: {lacking}")
+
+
+def _check_month_ends(review: Round4Review) -> None:
+    month_ends = {day for day in capture_days(review) if _month_end(day)}
+    for day in sorted(month_ends - review.acknowledged_month_end_days):
+        raise RepairConflict(f"month-end capture day {day} is not acknowledged; a restamp there "
+                             "may equal the producer's own row for that period")
+    for day in sorted(review.acknowledged_month_end_days - month_ends):
+        raise RepairConflict(f"acknowledged day {day} is not a month-end capture day")
+
+
+def _operation(row: Row, refs: list[Evidence]) -> Operation:
+    mid, day = str(row["metric_id"]), str(row["as_of"])
+    return {
+        "operation_id": f"metric_history:{mid}:{day}",
+        "table": "metric_history",
+        "key": {"metric_id": mid, "as_of": day},
+        "before": row,
+        "after": None,
+        "reason": ROUND4_REASON,
+        "evidence": refs,
+        "requires": [],
+    }
+
+
+def build_round4_candidate(
+    recapture_dir: Path,
+    night1_dir: Path,
+    review: Round4Review,
+    *,
+    target: str,
+    commits: CodeCommits,
+    generated_at: str,
+    extra_unresolved: tuple[str, ...] = (),
+) -> Manifest:
+    """One exact exclusion per reviewed post-window restamp, in R1's manifest shape."""
+    r4 = load_snapshot(recapture_dir, "recapture R4")
+    n1 = load_snapshot(night1_dir, "Night-1 N1")
+    _check_inputs(r4, n1, review)
+    post: list[Row] = []
+    for mid in ROUND4_IDS:
+        _check_pre_window(r4, n1, mid)
+        _check_r1_window(r4, mid, review)
+        post += _post_window_rows(r4, n1, mid, review)
+    _check_night1_post_rows(r4, n1, review)
+    _check_month_ends(review)
+    refs: list[Evidence] = [
+        {"path": str(r4.table_path.resolve()), "sha256": r4.table_sha256,
+         "locator": "exact key and value in the writer-paused Day-2 recapture; archive/exclusion "
+                    "only, no period corroboration"},
+        {"path": str(n1.table_path.resolve()), "sha256": n1.table_sha256,
+         "locator": "identical row present in the pre-R1 Night-1 snapshot, before the new "
+                    "producer's first write"},
+    ]
+    kept = "; ".join(f"{mid} {day}={value!r}" for mid in ROUND4_IDS
+                     for day, value in review.keep_period_rows[mid])
+    backup: Backup = {"table": "metric_history", "path": str(r4.table_path.resolve()),
+                      "sha256": r4.table_sha256, "rows": len(r4.rows)}
+    return {
+        "version": 1,
+        "target_project": EXPECTED_PROJECT,
+        "target": target,
+        "code_commits": commits,
+        "generated_at": generated_at,
+        "backup_manifest_sha256": r4.manifest_sha256,
+        "backups": [backup],
+        "operations": [_operation(row, refs) for row in post],
+        "unresolved": [
+            f"Producer period rows kept, never excluded: {kept}",
+            "Pre-window rows of the three ids untouched (identical to the Night-1 snapshot)",
+            "Retired corroborators nbr_fytd_collected_dailystar/_tbs untouched",
+            f"R1 window {WINDOW_START}..{WINDOW_END} owned by the reviewed R1 candidate "
+            "12abc596...9aa3; nothing there is touched here",
+            *extra_unresolved,
+        ],
+    }
 
 
 PLACEHOLDER_MESSAGE = (
