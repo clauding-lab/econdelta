@@ -176,7 +176,7 @@ def test_repair_snapshot_writes_the_split_layout_the_round4_generator_verifies(
     assert calls == [("metric_history", _SERVICE_KEY)]  # the service key, never the anon key
     assert json.loads(raw) == _NBR_ROWS
     assert set(manifest) == {
-        "target_project", "started_at", "non_transactional", "key_role", "tables"
+        "target_project", "started_at", "non_transactional", "key_role", "tables", "finished_at"
     }
     assert manifest["target_project"] == "ssbliukchgibjcjohibi"
     assert manifest["non_transactional"] is True and manifest["key_role"] == "service"
