@@ -249,7 +249,11 @@ def _service_key() -> str:
 
 def _service_key_problem(key: str) -> str | None:
     """A JWT must carry role service_role (payload read, signature not checked); an opaque key
-    must be an ``sb_secret_`` key. The key itself is never echoed."""
+    must be an ``sb_secret_`` key. The key itself is never echoed: a trailing CR/LF (a CRLF env
+    file) would otherwise reach requests, whose InvalidHeader error quotes the whole value."""
+    if any(char.isspace() or not char.isprintable() for char in key):
+        return ("the key contains whitespace or control characters (a trailing newline or CR "
+                "from the env file?)")
     parts = key.split(".")
     if len(parts) != 3:
         return None if key.startswith("sb_secret_") else (
@@ -260,6 +264,14 @@ def _service_key_problem(key: str) -> str | None:
         return "the key looks like a JWT but its payload does not decode"
     role = payload.get("role") if isinstance(payload, dict) else None
     return None if role == "service_role" else f"the key's JWT role is {role!r}, not service_role"
+
+
+def _redact(text: str, key: str) -> str:
+    """Remove the key, and each JWT part of it, from an error message before it is logged."""
+    fragments = {key, *(part for part in key.split(".") if len(part) >= 8)}
+    for fragment in sorted(fragments, key=len, reverse=True):
+        text = text.replace(fragment, "[redacted]")
+    return text
 
 
 def _project_ref(url: str | None) -> str:
@@ -306,7 +318,10 @@ def export_repair_snapshot(
     project = _project_ref(url)
     fetch = fetcher or (lambda table, k: paginate_table(table, url=url, key=k))
     started_at = (now or datetime.now(timezone.utc)).isoformat()
-    payloads = {table: json.dumps(fetch(table, key), indent=2).encode() for table in tables}
+    try:
+        payloads = {table: json.dumps(fetch(table, key), indent=2).encode() for table in tables}
+    except ExportError as exc:
+        raise ExportError(_redact(str(exc), key)) from None  # no chained traceback holds the key
     out_dir.mkdir(parents=True, exist_ok=False, mode=0o700)
     refs = {}
     for table, raw in payloads.items():

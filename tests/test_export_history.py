@@ -357,3 +357,77 @@ def test_repair_snapshot_cli_writes_the_layout_with_the_environment_service_key(
     assert calls == [("metric_history", None, _SERVICE_KEY)]
     assert sorted(p.name for p in out.iterdir()) == ["manifest.json", "metric_history.json"]
     assert load_snapshot(out, "recapture R4").rows == _NBR_ROWS
+
+
+_SERVICE_JWT = _jwt({"role": "service_role", "ref": "ssbliukchgibjcjohibi"})
+
+
+def _no_network(monkeypatch) -> None:
+    import requests.adapters
+
+    def refuse(*args, **kwargs):
+        raise AssertionError("SYNTHETIC test: the repair snapshot must not reach the network")
+
+    monkeypatch.setattr(requests.adapters.HTTPAdapter, "send", refuse)
+
+
+def _secret_fragments(key: str) -> list[str]:
+    """The key, its stripped form and every JWT part: none may appear in any output."""
+    stripped = key.strip()
+    return [stripped, *(part for part in stripped.split(".") if len(part) >= 8)]
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        pytest.param(_SERVICE_JWT + "\n", id="jwt-trailing-lf"),
+        pytest.param(_SERVICE_JWT + "\r", id="jwt-trailing-cr"),
+        pytest.param(_SERVICE_JWT + "\r\n", id="jwt-trailing-crlf"),
+        pytest.param(" " + _SERVICE_JWT, id="jwt-leading-space"),
+        pytest.param(_SERVICE_KEY + "\n", id="sb-secret-trailing-lf"),
+        pytest.param(_SERVICE_KEY[:12] + "\t" + _SERVICE_KEY[12:], id="sb-secret-inner-tab"),
+    ],
+)
+def test_repair_snapshot_refuses_a_key_with_whitespace_or_control_characters_and_never_logs_it(
+    tmp_path, monkeypatch, caplog, capsys, key
+):
+    """A CRLF env file leaves a trailing \\r or \\n on the service key; requests would then echo the
+    whole header value in its error, which main() logs. Refuse first, never print any of it."""
+    from scripts.export_history import main
+
+    _service_env(monkeypatch, service=False)
+    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", key)
+    _no_network(monkeypatch)
+    out = tmp_path / "round4-recapture"
+
+    with caplog.at_level("DEBUG"):
+        code = main(["--repair-snapshot", str(out), "--table", "metric_history"])
+
+    captured = capsys.readouterr()
+    output = caplog.text + captured.out + captured.err
+    assert code == 1 and not out.exists()
+    assert "whitespace or control characters" in output
+    assert not [fragment for fragment in _secret_fragments(key) if fragment in output]
+
+
+def test_repair_snapshot_redacts_the_key_from_a_read_error(tmp_path, monkeypatch, caplog, capsys):
+    """Defence in depth: whatever a failed read echoes, the key never reaches the log."""
+    import scripts.export_history as export_module
+
+    _service_env(monkeypatch, service=False)
+    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", _SERVICE_JWT)
+
+    def paginate(table, *, url=None, key=None, **kwargs):
+        raise ExportError(f"read {table} failed: SYNTHETIC header echo {key!r}")
+
+    monkeypatch.setattr(export_module, "paginate_table", paginate)
+    out = tmp_path / "round4-recapture"
+
+    with caplog.at_level("DEBUG"):
+        code = export_module.main(["--repair-snapshot", str(out)])
+
+    captured = capsys.readouterr()
+    output = caplog.text + captured.out + captured.err
+    assert code == 1 and not out.exists()
+    assert "read metric_history failed: SYNTHETIC header echo '[redacted]'" in output
+    assert not [fragment for fragment in _secret_fragments(_SERVICE_JWT) if fragment in output]
