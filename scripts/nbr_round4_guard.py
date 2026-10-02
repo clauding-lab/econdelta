@@ -6,6 +6,7 @@ ls-files, hash-object, merge-base); the guard never touches the network.
 
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 from typing import Callable
@@ -15,15 +16,35 @@ from scripts.repair_observation_history import RepairConflict
 GitRunner = Callable[[list[str]], tuple[int, str]]  # git args -> (exit code, stdout)
 
 
+def _git_env() -> dict[str, str]:
+    """The caller's environment minus every GIT_* variable: GIT_DIR, GIT_WORK_TREE,
+    GIT_INDEX_FILE, GIT_OBJECT_DIRECTORY, GIT_ALTERNATE_OBJECT_DIRECTORIES, GIT_REPLACE_REF_BASE
+    or GIT_CONFIG_* would point the guard at another repo, index, object store or replace base."""
+    return {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+
+
 def local_git(repo_root: Path) -> GitRunner:
-    """Run git in ``repo_root``; the module's own location, never the caller's cwd."""
+    """Run git in ``repo_root``; the module's own location, never the caller's cwd.
+
+    ``--no-replace-objects``: a ``refs/replace/*`` entry makes ``HEAD:<path>`` and status read a
+    look-alike commit while ``rev-parse HEAD`` still prints the real one (probe p_replace)."""
 
     def run(args: list[str]) -> tuple[int, str]:
-        done = subprocess.run(["git", *args], cwd=repo_root, capture_output=True, text=True,
-                              check=False)
+        done = subprocess.run(["git", "--no-replace-objects", *args], cwd=repo_root,
+                              env=_git_env(), capture_output=True, text=True, check=False)
         return done.returncode, done.stdout
 
     return run
+
+
+def _check_no_replace_refs(git: GitRunner) -> None:
+    """Belt and braces with --no-replace-objects: name the disguise instead of a generic
+    'not clean'. Grafts (.git/info/grafts) change only parents, never a commit's tree, so they
+    cannot fake this comparison; they can fake the origin/main check (see commit_guard)."""
+    code, refs = git(["for-each-ref", "--format=%(refname)", "refs/replace/"])
+    if code != 0 or refs.strip():
+        raise RepairConflict("git replace refs are present (refs/replace/*), which can disguise "
+                             f"an edited commit: {refs.split() or '?'}")
 
 
 def _check_toplevel(git: GitRunner, repo_root: Path) -> None:
@@ -62,8 +83,13 @@ def commit_guard(
 
     "Clean" overrides local settings that hide changes: status.showUntrackedFiles=no (forced to
     --untracked-files=all) and assume-unchanged / skip-worktree entries (lowercase or S tag in
-    `git ls-files -v`), either of which would hide a hand-edited REVIEWED literal."""
+    `git ls-files -v`), either of which would hide a hand-edited REVIEWED literal; replace refs
+    are refused and ignored (``local_git`` runs ``--no-replace-objects`` with GIT_* scrubbed).
+
+    The origin/main check catches honest mistakes only: origin/main is a local, writable ref,
+    and grafts can fake ``--is-ancestor``. It is not tamper-proof and claims nothing more."""
     _check_toplevel(git, repo_root)
+    _check_no_replace_refs(git)
     code, head = git(["rev-parse", "HEAD"])
     head = head.strip()
     if code != 0 or head != commit:
