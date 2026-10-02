@@ -38,6 +38,7 @@ from scripts.repair_observation_history import (
     Row,
     file_hash,
     same,
+    write_json,
 )
 from utils.observations import BRIEF_CONVERSIONS
 
@@ -573,6 +574,52 @@ def build_round4_candidate(
     }
 
 
+# --- read-only drift receipt (Night 2) -----------------------------------------------------
+WATCHED_IDS = (*ROUND4_IDS, *RETIRED_CORROBORATORS)
+
+
+def _expected_after(r4: Snapshot, manifest_path: Path) -> dict[Key, Row]:
+    manifest = json.loads(manifest_path.read_text())
+    if [b.get("sha256") for b in manifest.get("backups", [])] != [r4.table_sha256]:
+        raise RepairConflict("--expect-applied manifest was not built from this recapture")
+    expected = {key: row for key, row in r4.index.items() if key[0] in WATCHED_IDS}
+    for op in manifest["operations"]:
+        key = (op["key"]["metric_id"], op["key"]["as_of"])
+        if op["after"] is None:
+            expected.pop(key, None)
+        else:
+            expected[key] = op["after"]
+    return expected
+
+
+def verify_unchanged(
+    recapture_dir: Path, fresh_dir: Path, out: Path, expect_applied: Path | None = None
+) -> dict:
+    """Compare every row of the three ids and the two corroborators; write a receipt."""
+    if out.exists():
+        raise RepairConflict(f"{out} already exists; a drift receipt is never overwritten")
+    r4 = load_snapshot(recapture_dir, "recapture R4")
+    fresh = load_snapshot(fresh_dir, "fresh")
+    expected = (
+        _expected_after(r4, expect_applied) if expect_applied
+        else {key: row for key, row in r4.index.items() if key[0] in WATCHED_IDS}
+    )
+    actual = {key: row for key, row in fresh.index.items() if key[0] in WATCHED_IDS}
+    differing = sorted(key for key in set(expected) | set(actual)
+                       if not same(expected.get(key), actual.get(key)))
+    receipt = {
+        "result": "changed" if differing else (
+            "applied-as-reviewed" if expect_applied else "unchanged"),
+        "differing_keys": [list(key) for key in differing],
+        "recapture_manifest_sha256": r4.manifest_sha256,
+        "fresh_manifest_sha256": fresh.manifest_sha256,
+        "fresh_started_at": fresh.manifest["started_at"],
+        "expect_applied_manifest_sha256": file_hash(expect_applied) if expect_applied else None,
+    }
+    write_json(out, receipt)
+    return receipt
+
+
 PLACEHOLDER_MESSAGE = (
     "round-4 review is a placeholder; transcribe the reviewed Day-2 recapture first"
 )
@@ -607,6 +654,16 @@ def _run_draft(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_verify(args: argparse.Namespace) -> int:
+    if args.fresh_dir is None or args.out is None:
+        raise RepairConflict("--verify-unchanged needs --fresh-dir and --out")
+    receipt = verify_unchanged(args.recapture_dir, args.fresh_dir, args.out, args.expect_applied)
+    print(f"{receipt['result']}; receipt sha256={file_hash(args.out)}")
+    for key in receipt["differing_keys"]:
+        print(f"  differs: {key[0]} {key[1]}")
+    return 1 if receipt["result"] == "changed" else 0
+
+
 def _run_build(args: argparse.Namespace) -> int:
     review = REVIEWED
     if review is None:
@@ -620,6 +677,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.draft:
             return _run_draft(args)
+        if args.verify_unchanged:
+            return _run_verify(args)
         return _run_build(args)
     except (RepairConflict, OSError, ValueError, KeyError) as exc:
         print(f"Round 4 stopped: {exc}")

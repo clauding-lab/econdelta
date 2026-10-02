@@ -12,6 +12,7 @@ after 2026-09-24, its value and its ingested_at stamp are SYNTHETIC, as are the 
 
 from __future__ import annotations
 
+import copy
 import dataclasses
 import functools
 import json
@@ -25,10 +26,18 @@ import pytest
 import aggregate_latest as agg
 import scripts.nbr_round4_candidates as r4
 from scripts.export_history import export_repair_snapshot
-from scripts.history_repair_candidates import NBR_RESTAMP_WINDOW
+from scripts.history_repair_candidates import NBR_RESTAMP_WINDOW, nbr_restamp_rows
 from scripts.nbr_round4_candidates import ROUND4_FIRST_DAY, ROUND4_IDS, Round4Review
-from scripts.repair_observation_history import apply_manifest, file_hash
+from scripts.repair_observation_history import (
+    apply_manifest,
+    file_hash,
+    load_manifest,
+    restore_receipts,
+    same,
+    write_json,
+)
 from tests.test_history_repair_candidates import _corroborator_rows
+from tests.test_r1_nbr_exclusion_release_order import FAMILIES as R1_FAMILIES
 from tests.test_r1_nbr_exclusion_release_order import TARGET as R1_TARGET
 from tests.test_r1_nbr_exclusion_release_order import (
     MetricHistory,
@@ -570,3 +579,145 @@ def test_the_refusal_cases_cover_every_run_edge_and_every_design_case():
     ids = [case[0] for case in REFUSALS]
     assert len([i for i in ids if i.startswith("run-boundary-shifted")]) == 6
     assert len(ids) == len(set(ids)) == 29 - 1 + 6  # 29 named cases, the boundary one per edge
+
+
+# --- T13-T17: through the unchanged engine, drift receipts, and the contract residual ------
+
+
+class Round4History(MetricHistory):
+    target = TARGET
+
+
+def _candidate_file(world: World, tmp_path: Path) -> Path:
+    path = tmp_path / "candidate" / "candidate.json"
+    write_json(path, _build(world))
+    return path
+
+
+def _apply4(candidate: Path, store: MetricHistory, receipts: Path) -> dict:
+    return apply_manifest(candidate, expected_sha256=file_hash(candidate), target=TARGET,
+                          store=store, receipts_path=receipts)
+
+
+def _rows_equal(store: MetricHistory, rows: list[Row]) -> bool:
+    expected = {(r["metric_id"], r["as_of"]): r for r in rows}
+    return set(store.rows) == set(expected) and all(
+        same(store.rows[key], row) for key, row in expected.items())
+
+
+def test_round4_manifest_plans_applies_reapplies_and_restores_exactly(tmp_path):
+    world = _world(tmp_path)
+    candidate = _candidate_file(world, tmp_path)
+    plan = load_manifest(candidate, expected_sha256=file_hash(candidate), target=TARGET)
+    keys = {(op["key"]["metric_id"], op["key"]["as_of"]) for op in plan["operations"]}
+    store = Round4History(world.r4_rows)
+    receipts = tmp_path / "receipts" / "receipts.json"
+
+    receipt = _apply4(candidate, store, receipts)
+
+    assert list(receipt["states"].values()) == ["confirmed"] * 21
+    assert _rows_equal(store, [r for r in world.r4_rows if (r["metric_id"], r["as_of"]) not in keys])
+    writes, receipt_bytes = store.repair_writes, receipts.read_bytes()
+    _apply4(candidate, store, receipts)  # idempotent re-apply: checked, not rewritten
+    assert store.repair_writes == writes == 21 and receipts.read_bytes() == receipt_bytes
+    reverse = restore_receipts(receipts, expected_sha256=file_hash(receipts), target=TARGET,
+                               store=store)
+    assert list(reverse["states"].values()) == ["confirmed"] * 21
+    assert _rows_equal(store, world.r4_rows)
+
+
+def test_round4_whole_batch_refuses_if_a_listed_restamp_changed_after_review(tmp_path):
+    world = _world(tmp_path)
+    candidate = _candidate_file(world, tmp_path)
+    store = Round4History(world.r4_rows)
+    store.rows[(ALIAS, "2026-10-01")]["ingested_at"] = "2026-10-03T21:18:08+00:00"  # SYNTHETIC
+    after_review = copy.deepcopy(store.rows)
+
+    with pytest.raises(r4.RepairConflict, match=f"{ALIAS}:2026-10-01"):
+        _apply4(candidate, store, tmp_path / "receipts" / "receipts.json")
+
+    assert store.repair_writes == 0
+    assert store.rows == after_review
+
+
+def test_r1_generator_still_refuses_the_post_night1_recapture(tmp_path):
+    world = _world(tmp_path)
+    for mid, (runs, decision, _) in R1_FAMILIES.items():
+        with pytest.raises(r4.RepairConflict, match=f"{mid} backup differs"):
+            nbr_restamp_rows(world.r4_rows, mid, runs, decision)
+        window = [r for r in world.r4_rows if "2026-05-02" <= r["as_of"] <= "2026-09-24"]
+        with pytest.raises(r4.RepairConflict, match=f"{mid} backup differs"):
+            nbr_restamp_rows(window, mid, runs, decision)
+
+
+def _verify(world: World, fresh: Path, out: Path, *extra: str) -> int:
+    return r4.main(["--verify-unchanged", "--recapture-dir", str(world.r4), "--fresh-dir",
+                    str(fresh), "--out", str(out), *extra])
+
+
+def test_verify_unchanged_writes_a_receipt_and_refuses_a_new_nbr_row_written_after_the_review(
+    tmp_path, capsys
+):
+    world = _world(tmp_path)
+    n2 = _export(tmp_path / "n2-2026-10-03", world.r4_rows, "2026-10-03T15:50:00+00:00")
+    out = tmp_path / "receipts" / "verify-n2.json"
+
+    assert _verify(world, n2, out) == 0
+    receipt = json.loads(out.read_text())
+    assert receipt == {
+        "result": "unchanged",
+        "differing_keys": [],
+        "recapture_manifest_sha256": file_hash(world.r4 / "manifest.json"),
+        "fresh_manifest_sha256": file_hash(n2 / "manifest.json"),
+        "fresh_started_at": "2026-10-03T15:50:00+00:00",
+        "expect_applied_manifest_sha256": None,
+    }
+    assert f"unchanged; receipt sha256={file_hash(out)}" in capsys.readouterr().out
+    receipt_bytes = out.read_bytes()
+    assert _verify(world, n2, out) == 1 and out.read_bytes() == receipt_bytes  # never overwrites
+
+    # SYNTHETIC: the producer writes an August period row after the review.
+    august = [_row(mid, "2026-08-31", value) for mid, value in
+              ((CHILD, 0.31), (PARENT, 30512.4), (ALIAS, 30512.4))]
+    n2b = _export(tmp_path / "n2b-2026-10-03", world.r4_rows + august,
+                  "2026-10-03T15:55:00+00:00")
+    assert _verify(world, n2b, tmp_path / "receipts" / "verify-n2b.json") == 1
+    changed = json.loads((tmp_path / "receipts" / "verify-n2b.json").read_text())
+    assert changed["result"] == "changed"
+    assert changed["differing_keys"] == [[mid, "2026-08-31"] for mid in sorted(ROUND4_IDS)]
+
+    # A retired corroborator edit is drift too.
+    n2c = _export(tmp_path / "n2c-2026-10-03",
+                  _edit("nbr_fytd_collected_tbs", "2026-05-02", value=1)(world.r4_rows),
+                  "2026-10-03T15:56:00+00:00")
+    assert _verify(world, n2c, tmp_path / "receipts" / "verify-n2c.json") == 1
+
+    # After the apply, the read-back must be R4 minus exactly the manifest keys.
+    candidate = _candidate_file(world, tmp_path)
+    store = Round4History(world.r4_rows)
+    _apply4(candidate, store, tmp_path / "receipts" / "receipts.json")
+    n3 = _export(tmp_path / "n3-2026-10-03", list(store.rows.values()),
+                 "2026-10-03T16:40:00+00:00")
+    out3 = tmp_path / "receipts" / "verify-n3.json"
+    assert _verify(world, n3, out3, "--expect-applied", str(candidate)) == 0
+    applied = json.loads(out3.read_text())
+    assert applied["result"] == "applied-as-reviewed"
+    assert applied["expect_applied_manifest_sha256"] == file_hash(candidate)
+    assert _verify(world, n2, tmp_path / "receipts" / "not-applied.json", "--expect-applied",
+                   str(candidate)) == 1  # nothing applied yet: 21 keys still present
+
+
+@pytest.mark.parametrize("nights", [("first-night",), ("first-night", "new-month")])
+def test_after_round4_the_nbr_family_equals_the_contract_rows_the_brief_publishes(
+    tmp_path, nights
+):
+    """EconDelta half of the cross-repo proof (fallback, design OQ1): the residual equals the
+    shared contract's rows_sent, which the Brief's tests prove do not HOLD (B:82-91)."""
+    world = _world(tmp_path, nights=nights)
+    store = Round4History(world.r4_rows)
+    _apply4(_candidate_file(world, tmp_path), store, tmp_path / "receipts" / "receipts.json")
+
+    residual = sorted((r["metric_id"], r["as_of"], r["value"], r["source"])
+                      for r in store.rows.values()
+                      if r["metric_id"] in ROUND4_IDS and r["as_of"] >= "2026-05-02")
+    assert residual == _contract_rows(nights)
