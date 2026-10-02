@@ -81,8 +81,13 @@ def test_r1_final_backup_writes_the_twelve_tables_in_the_25_sep_order_layout_and
     started = datetime(2026, 10, 3, 18, 0, 1, tzinfo=timezone.utc)
     finished = datetime(2026, 10, 3, 18, 0, 45, tzinfo=timezone.utc)
     out = tmp_path / "night1-final"
-    export_repair_snapshot(out, eh.R1_FINAL_BACKUP_TABLES, fetch, now=started,
-                           clock=lambda: finished)
+
+    def clock():
+        # finished_at closes the writer-paused read window: stamped only after all twelve reads.
+        assert len(calls) == len(_TWELVE), "finished_at stamped before every table was read"
+        return finished
+
+    export_repair_snapshot(out, eh.R1_FINAL_BACKUP_TABLES, fetch, now=started, clock=clock)
 
     assert eh.R1_FINAL_BACKUP_TABLES == _TWELVE
     assert calls == [(table, _SERVICE_KEY) for table in _TWELVE]
