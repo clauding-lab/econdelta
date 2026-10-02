@@ -13,8 +13,6 @@ from __future__ import annotations
 
 import dataclasses
 import json
-import subprocess
-from pathlib import Path
 
 import pytest
 
@@ -292,51 +290,3 @@ def test_verify_unchanged_refuses_a_fresh_snapshot_started_at_the_same_instant(t
 
     assert "fresh snapshot did not start after the recapture" in capsys.readouterr().out
     assert not out.exists()
-
-
-# --- the commit guard, against a REAL local git repo (offline) ------------------------------
-
-
-def _git(repo: Path, *args: str) -> str:
-    return subprocess.run(["git", "-c", "user.name=round4", "-c", "user.email=r4@example.invalid",
-                           *args], cwd=repo, check=True, capture_output=True, text=True).stdout
-
-
-def _repo(tmp_path: Path) -> tuple[Path, str]:
-    repo = tmp_path / "checkout"
-    repo.mkdir()
-    _git(repo, "init", "-q")
-    (repo / "reviewed.py").write_text("REVIEWED = None\n")
-    _git(repo, "add", "reviewed.py")
-    _git(repo, "commit", "-q", "-m", "reviewed")
-    return repo, _git(repo, "rev-parse", "HEAD").strip()
-
-
-def _runner(repo: Path):
-    def run(args: list[str]) -> tuple[int, str]:
-        done = subprocess.run(["git", *args], cwd=repo, capture_output=True, text=True)
-        return done.returncode, done.stdout
-    return run
-
-
-@pytest.mark.parametrize(
-    "hide",
-    [
-        pytest.param("untracked-with-showUntrackedFiles-no", id="untracked-hidden-by-config"),
-        pytest.param("skip-worktree", id="edit-hidden-by-skip-worktree"),
-        pytest.param("assume-unchanged", id="edit-hidden-by-assume-unchanged"),
-    ],
-)
-def test_commit_guard_sees_changes_that_local_git_settings_hide(tmp_path, hide):
-    repo, head = _repo(tmp_path)
-    assert r4.commit_guard(_runner(repo), head, check_main=False) == head  # clean: passes
-    if hide == "untracked-with-showUntrackedFiles-no":
-        _git(repo, "config", "status.showUntrackedFiles", "no")
-        (repo / "stray.py").write_text("x = 1\n")
-    else:
-        _git(repo, "update-index", f"--{hide}", "reviewed.py")
-        (repo / "reviewed.py").write_text("REVIEWED = 'hand-edited'\n")
-    assert _git(repo, "status", "--porcelain") == ""  # plain status is blind here
-
-    with pytest.raises(r4.RepairConflict, match="checkout is not clean"):
-        r4.commit_guard(_runner(repo), head, check_main=False)

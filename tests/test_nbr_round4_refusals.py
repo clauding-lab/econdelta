@@ -25,7 +25,6 @@ from tests.test_nbr_round4_candidates import (
     PARENT,
     R4_STARTED,
     TARGET,
-    FakeGit,
     Round4History,
     World,
     _add,
@@ -40,6 +39,7 @@ from tests.test_nbr_round4_candidates import (
     _verify,
     _world,
 )
+from tests.test_nbr_round4_guard import FakeGit
 from tests.test_r1_nbr_exclusion_release_order import _reviewed_backup
 
 ROUND4_IDS = (CHILD, PARENT, ALIAS)

@@ -206,6 +206,17 @@ def _post_keys(world: World) -> list[tuple[str, str]]:
     return [(mid, day) for mid in ROUND4_IDS for day in days]
 
 
+HEAD = "e" * 40  # the commit --build names (T18 in tests/test_nbr_round4_guard.py)
+
+
+def _main_build(world: World, git: Callable[[list[str]], tuple[int, str]] | None, *extra: str,
+                output: Path | None = None) -> int:
+    argv = ["--build", "--recapture-dir", str(world.r4), "--night1-backup-dir", str(world.n1),
+            "--target", TARGET, "--econdelta-commit", HEAD, "--brief-commit", "d" * 40]
+    argv += ["--output", str(output)] if output else []
+    return r4.main(argv + list(extra), git=git)
+
+
 # --- T1, T2: the committed placeholder and the first day -----------------------------------
 
 
@@ -684,98 +695,3 @@ def test_after_round4_the_nbr_family_equals_the_contract_rows_the_brief_publishe
                       for r in store.rows.values()
                       if r["metric_id"] in ROUND4_IDS and r["as_of"] >= "2026-05-02")
     assert residual == _contract_rows(nights)
-
-
-# --- T18: the commit guard binds the candidate to the clean, merged code that built it -----
-HEAD = "e" * 40
-
-
-class FakeGit:
-    """Offline stand-in for the four local git calls; records what was asked."""
-
-    def __init__(self, head: str = HEAD, porcelain: str = "", on_main: bool = True,
-                 ls_files: str = "H scripts/nbr_round4_candidates.py\n") -> None:
-        self.head, self.porcelain, self.on_main = head, porcelain, on_main
-        self.ls_files = ls_files
-        self.calls: list[list[str]] = []
-
-    def __call__(self, args: list[str]) -> tuple[int, str]:
-        self.calls.append(args)
-        if args == ["rev-parse", "HEAD"]:
-            return 0, self.head + "\n"
-        if args == ["status", "--porcelain", "--untracked-files=all"]:
-            return 0, self.porcelain
-        if args == ["ls-files", "-v"]:
-            return 0, self.ls_files
-        if args == ["merge-base", "--is-ancestor", "HEAD", "origin/main"]:
-            return (0 if self.on_main else 1), ""
-        raise AssertionError(f"unexpected git call {args}")
-
-
-def _main_build(world: World, git: FakeGit | None, *extra: str, output: Path | None = None) -> int:
-    argv = ["--build", "--recapture-dir", str(world.r4), "--night1-backup-dir", str(world.n1),
-            "--target", TARGET, "--econdelta-commit", HEAD, "--brief-commit", "d" * 40]
-    argv += ["--output", str(output)] if output else []
-    return r4.main(argv + list(extra), git=git)
-
-
-def test_build_refuses_a_head_that_is_not_the_named_commit_a_dirty_tree_or_a_commit_off_main(
-    tmp_path, monkeypatch, capsys
-):
-    world = _world(tmp_path)
-    monkeypatch.setattr(r4, "REVIEWED", world.review)
-    output = tmp_path / "candidate" / "candidate.json"
-    for git, refusal in (
-        (FakeGit(head="f" * 40), "HEAD ffff"),
-        (FakeGit(porcelain="?? stray.py\n"), "checkout is not clean"),
-        (FakeGit(ls_files="h scripts/nbr_round4_candidates.py\n"), "assume-unchanged"),
-        (FakeGit(ls_files="S scripts/nbr_round4_candidates.py\n"), "skip-worktree"),
-        (FakeGit(on_main=False), "not an ancestor of origin/main"),
-    ):
-        assert _main_build(world, git, output=output) == 1
-        assert refusal in capsys.readouterr().out and not output.exists()
-
-    git = FakeGit()
-    assert _main_build(world, git, output=output) == 0
-    candidate = json.loads(output.read_text())
-    assert candidate["code_commits"] == {"econdelta": HEAD, "brief": "d" * 40}
-    assert len(candidate["operations"]) == 21
-    assert f"21 exact operations; candidate sha256={file_hash(output)}" in capsys.readouterr().out
-    assert _main_build(world, FakeGit(), output=output) == 1  # never overwrites reviewed bytes
-    assert "candidate already exists" in capsys.readouterr().out
-
-
-def test_owner_ruled_unmerged_records_the_ruling_and_head_in_the_candidate(
-    tmp_path, monkeypatch
-):
-    world = _world(tmp_path)
-    monkeypatch.setattr(r4, "REVIEWED", world.review)
-    output = tmp_path / "candidate.json"
-    git = FakeGit(on_main=False)
-    ruling = "D2(b): owner rules the PR-B head may build before merge (SYNTHETIC)"
-
-    assert _main_build(world, git, "--owner-ruled-unmerged", ruling, output=output) == 0
-
-    unresolved = json.loads(output.read_text())["unresolved"]
-    assert any(ruling in line and HEAD in line for line in unresolved)
-    assert ["merge-base", "--is-ancestor", "HEAD", "origin/main"] not in git.calls
-
-
-def test_preview_writes_no_file_and_skips_only_the_origin_main_check(
-    tmp_path, monkeypatch, capsys
-):
-    world = _world(tmp_path)
-    monkeypatch.setattr(r4, "REVIEWED", world.review)
-    before = _tree(tmp_path)
-    git = FakeGit(on_main=False)
-
-    assert _main_build(world, git, "--preview") == 0
-
-    out = capsys.readouterr().out
-    assert _tree(tmp_path) == before
-    assert "PREVIEW: 21 exact operations; no file written" in out
-    assert f"  {CHILD}: 2026-09-25, 2026-09-26, 2026-09-27, 2026-09-29" in out
-    assert f"  kept {PARENT} 2026-06-30 415473.0" in out
-    assert ["merge-base", "--is-ancestor", "HEAD", "origin/main"] not in git.calls
-    assert _main_build(world, FakeGit(porcelain=" M scripts/x.py\n"), "--preview") == 1
-    assert _main_build(world, FakeGit(head="f" * 40), "--preview") == 1
