@@ -37,8 +37,9 @@ class FakeGit:
     def __init__(self, head: str = HEAD, porcelain: str = "", on_main: bool = True,
                  ls_files: str = "H scripts/nbr_round4_candidates.py\n",
                  toplevel: str | None = None, untracked: frozenset[str] = frozenset(),
-                 modified: frozenset[str] = frozenset()) -> None:
+                 modified: frozenset[str] = frozenset(), replace_refs: str = "") -> None:
         self.head, self.porcelain, self.on_main = head, porcelain, on_main
+        self.replace_refs = replace_refs
         self.ls_files = ls_files
         self.toplevel = str(r4.REPO_ROOT) if toplevel is None else toplevel
         self.untracked, self.modified = untracked, modified
@@ -50,6 +51,8 @@ class FakeGit:
             return 0, self.toplevel + "\n"
         if args == ["rev-parse", "HEAD"]:
             return 0, self.head + "\n"
+        if args == ["for-each-ref", "--format=%(refname)", "refs/replace/"]:
+            return 0, self.replace_refs
         if args == ["status", "--porcelain", "--untracked-files=all"]:
             return 0, self.porcelain
         if args == ["ls-files", "-v"]:
@@ -84,6 +87,7 @@ def test_build_refuses_a_head_that_is_not_the_named_commit_a_dirty_tree_or_a_com
         (FakeGit(ls_files="S scripts/nbr_round4_candidates.py\n"), "skip-worktree"),
         (FakeGit(on_main=False), "not an ancestor of origin/main"),
         (FakeGit(toplevel="/elsewhere/econdelta"), "is not the module's repo root"),
+        (FakeGit(replace_refs=f"refs/replace/{HEAD}\n"), "git replace refs are present"),
         (FakeGit(untracked=frozenset({"scripts/nbr_round4_candidates.py"})), "is not tracked"),
         (FakeGit(modified=frozenset({"scripts/nbr_round4_candidates.py"})),
          "differs from its committed bytes"),
@@ -236,3 +240,65 @@ def test_commit_guard_refuses_a_guarded_file_that_is_untracked_or_outside_the_re
     with pytest.raises(r4.RepairConflict, match="outside the repo root"):
         _guard(repo, head, outside)
     assert _guard(repo, head, repo / "reviewed.py", repo / ".gitignore") == head
+
+
+# --- T18: git replace refs and a caller's GIT_* environment cannot fake the comparison ------
+
+
+def _replace_head_with_lookalike(repo: Path, head: str, base: str = "refs/replace/") -> None:
+    """Probe p_replace (round-4 close safety review r1): hand-edit REVIEWED, stage it, and point
+    a replace ref at a look-alike commit (same parent: none) whose tree holds the edited blob.
+    `rev-parse HEAD` still prints the real commit; status and HEAD:path follow the replacement."""
+    (repo / "reviewed.py").write_text("REVIEWED = 'HAND-EDITED, NOT REVIEWED'\n")
+    _git(repo, "add", "reviewed.py")
+    lookalike = _git(repo, "commit-tree", _git(repo, "write-tree").strip(), "-m",
+                     "reviewed").strip()
+    _git(repo, "update-ref", f"{base}{head}", lookalike)
+
+
+def _real_guard(repo: Path, head: str) -> str:
+    """The production runner (scripts/nbr_round4_guard.local_git), not the test's plain one."""
+    return r4.commit_guard(r4.local_git(repo), head, check_main=False, repo_root=repo,
+                           files=(repo / "reviewed.py",))
+
+
+def test_commit_guard_refuses_a_replace_ref_that_disguises_a_hand_edit(tmp_path):
+    repo, head = _repo(tmp_path)
+    _replace_head_with_lookalike(repo, head)
+    assert _git(repo, "rev-parse", "HEAD").strip() == head  # the real commit's name
+    assert _git(repo, "status", "--porcelain", "--untracked-files=all") == ""  # blind
+
+    with pytest.raises(r4.RepairConflict, match="git replace refs are present"):
+        _real_guard(repo, head)
+
+
+def test_commit_guard_ignores_replace_objects_and_the_callers_git_environment(
+    tmp_path, monkeypatch
+):
+    """A replace ref under a base named by the caller's GIT_REPLACE_REF_BASE is not listed under
+    refs/replace, so only --no-replace-objects and a scrubbed environment catch it."""
+    repo, head = _repo(tmp_path)
+    _replace_head_with_lookalike(repo, head, base="refs/disguise/")
+    monkeypatch.setenv("GIT_REPLACE_REF_BASE", "refs/disguise/")
+    assert _git(repo, "status", "--porcelain", "--untracked-files=all") == ""  # blind
+
+    with pytest.raises(r4.RepairConflict, match="checkout is not clean"):
+        _real_guard(repo, head)
+
+
+def test_commit_guard_answers_for_the_modules_repo_not_a_git_dir_in_the_environment(
+    tmp_path, monkeypatch
+):
+    repo, head = _repo(tmp_path)
+    decoy = tmp_path / "decoy"
+    decoy.mkdir()
+    _git(decoy, "init", "-q")
+    (decoy / "other.py").write_text("x = 1\n")
+    _git(decoy, "add", "other.py")
+    _git(decoy, "commit", "-q", "-m", "decoy")
+    monkeypatch.setenv("GIT_DIR", str(decoy / ".git"))
+    monkeypatch.setenv("GIT_WORK_TREE", str(decoy))
+    monkeypatch.setenv("GIT_INDEX_FILE", str(decoy / ".git" / "index"))
+    monkeypatch.setenv("GIT_OBJECT_DIRECTORY", str(decoy / ".git" / "objects"))
+
+    assert _real_guard(repo, head) == head
