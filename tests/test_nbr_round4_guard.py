@@ -31,16 +31,23 @@ def _service_key(monkeypatch):
 
 
 class FakeGit:
-    """Offline stand-in for the four local git calls; records what was asked."""
+    """Offline stand-in for the local git calls; records what was asked. Every guarded file is
+    tracked and byte-identical to HEAD unless named in `untracked` / `modified`."""
 
     def __init__(self, head: str = HEAD, porcelain: str = "", on_main: bool = True,
-                 ls_files: str = "H scripts/nbr_round4_candidates.py\n") -> None:
+                 ls_files: str = "H scripts/nbr_round4_candidates.py\n",
+                 toplevel: str | None = None, untracked: frozenset[str] = frozenset(),
+                 modified: frozenset[str] = frozenset()) -> None:
         self.head, self.porcelain, self.on_main = head, porcelain, on_main
         self.ls_files = ls_files
+        self.toplevel = str(r4.REPO_ROOT) if toplevel is None else toplevel
+        self.untracked, self.modified = untracked, modified
         self.calls: list[list[str]] = []
 
     def __call__(self, args: list[str]) -> tuple[int, str]:
         self.calls.append(args)
+        if args == ["rev-parse", "--show-toplevel"]:
+            return 0, self.toplevel + "\n"
         if args == ["rev-parse", "HEAD"]:
             return 0, self.head + "\n"
         if args == ["status", "--porcelain", "--untracked-files=all"]:
@@ -49,7 +56,19 @@ class FakeGit:
             return 0, self.ls_files
         if args == ["merge-base", "--is-ancestor", "HEAD", "origin/main"]:
             return (0 if self.on_main else 1), ""
+        if args[:3] == ["ls-files", "--error-unmatch", "--"]:
+            return (1 if args[3] in self.untracked else 0), ""
+        if args[:2] == ["rev-parse", "--verify"] and args[2].startswith("HEAD:"):
+            rel = args[2].removeprefix("HEAD:")
+            return (128, "") if rel in self.untracked else (0, f"blob-{rel}\n")
+        if args[:3] == ["hash-object", "--no-filters", "--"]:
+            return 0, ("edited-" if args[3] in self.modified else "blob-") + args[3] + "\n"
         raise AssertionError(f"unexpected git call {args}")
+
+
+GUARDED = {"scripts/nbr_round4_candidates.py", "scripts/nbr_round4_guard.py",
+           "scripts/repair_observation_history.py", "scripts/history_repair_candidates.py",
+           "utils/observations.py"}
 
 
 def test_build_refuses_a_head_that_is_not_the_named_commit_a_dirty_tree_or_a_commit_off_main(
@@ -64,12 +83,20 @@ def test_build_refuses_a_head_that_is_not_the_named_commit_a_dirty_tree_or_a_com
         (FakeGit(ls_files="h scripts/nbr_round4_candidates.py\n"), "assume-unchanged"),
         (FakeGit(ls_files="S scripts/nbr_round4_candidates.py\n"), "skip-worktree"),
         (FakeGit(on_main=False), "not an ancestor of origin/main"),
+        (FakeGit(toplevel="/elsewhere/econdelta"), "is not the module's repo root"),
+        (FakeGit(untracked=frozenset({"scripts/nbr_round4_candidates.py"})), "is not tracked"),
+        (FakeGit(modified=frozenset({"scripts/nbr_round4_candidates.py"})),
+         "differs from its committed bytes"),
+        (FakeGit(modified=frozenset({"scripts/repair_observation_history.py"})),
+         "differs from its committed bytes"),
     ):
         assert _main_build(world, git, output=output) == 1
         assert refusal in capsys.readouterr().out and not output.exists()
 
     git = FakeGit()
     assert _main_build(world, git, output=output) == 0
+    assert ["rev-parse", "--show-toplevel"] in git.calls
+    assert {call[-1] for call in git.calls if call[0] == "hash-object"} == GUARDED
     candidate = json.loads(output.read_text())
     assert candidate["code_commits"] == {"econdelta": HEAD, "brief": "d" * 40}
     assert len(candidate["operations"]) == 21
@@ -127,7 +154,8 @@ def _repo(tmp_path: Path) -> tuple[Path, str]:
     repo.mkdir()
     _git(repo, "init", "-q")
     (repo / "reviewed.py").write_text("REVIEWED = None\n")
-    _git(repo, "add", "reviewed.py")
+    (repo / ".gitignore").write_text("data/\n")  # as in econdelta: data/ is git-ignored
+    _git(repo, "add", "reviewed.py", ".gitignore")
     _git(repo, "commit", "-q", "-m", "reviewed")
     return repo, _git(repo, "rev-parse", "HEAD").strip()
 
@@ -149,7 +177,7 @@ def _runner(repo: Path):
 )
 def test_commit_guard_sees_changes_that_local_git_settings_hide(tmp_path, hide):
     repo, head = _repo(tmp_path)
-    assert r4.commit_guard(_runner(repo), head, check_main=False) == head  # clean: passes
+    assert _guard(repo, head) == head  # clean: passes
     if hide == "untracked-with-showUntrackedFiles-no":
         _git(repo, "config", "status.showUntrackedFiles", "no")
         (repo / "stray.py").write_text("x = 1\n")
@@ -159,4 +187,52 @@ def test_commit_guard_sees_changes_that_local_git_settings_hide(tmp_path, hide):
     assert _git(repo, "status", "--porcelain") == ""  # plain status is blind here
 
     with pytest.raises(r4.RepairConflict, match="checkout is not clean"):
-        r4.commit_guard(_runner(repo), head, check_main=False)
+        _guard(repo, head)
+
+
+def _guard(repo: Path, head: str, *files: Path, root: Path | None = None) -> str:
+    return r4.commit_guard(_runner(root or repo), head, check_main=False, repo_root=root or repo,
+                           files=files or (repo / "reviewed.py",))
+
+
+def _shadow(repo: Path) -> Path:
+    """A copy of the reviewed module in a git-IGNORED folder: git status cannot see it."""
+    shadow = repo / "data" / "shadow"
+    shadow.mkdir(parents=True)
+    (shadow / "reviewed.py").write_text("REVIEWED = 'HAND-EDITED, NOT REVIEWED'\n")
+    assert _git(repo, "status", "--porcelain", "--untracked-files=all") == ""
+    return shadow
+
+
+def test_build_refuses_a_module_copy_whose_repo_root_is_not_the_git_toplevel(
+    tmp_path, monkeypatch, capsys
+):
+    """Probe p_guard (round-4 safety review r3): a copy of the module under an ignored data/
+    folder of a clean checkout derived REPO_ROOT from its own location and passed the guard."""
+    world = _world(tmp_path)
+    repo, head = _repo(tmp_path)
+    monkeypatch.setattr(r4, "REVIEWED", world.review)
+    monkeypatch.setattr(r4, "REPO_ROOT", _shadow(repo))  # where the shadow copy would live
+    argv = ["--build", "--preview", "--recapture-dir", str(world.r4), "--night1-backup-dir",
+            str(world.n1), "--target", "snapshot:round4-nbr", "--econdelta-commit", head,
+            "--brief-commit", "d" * 40]
+
+    assert r4.main(argv) == 1  # the REAL local git runner, offline
+
+    out = capsys.readouterr().out
+    assert "is not the module's repo root" in out and "PREVIEW" not in out
+
+
+def test_commit_guard_refuses_a_guarded_file_that_is_untracked_or_outside_the_repo(tmp_path):
+    repo, head = _repo(tmp_path)
+    shadow = _shadow(repo)
+    outside = tmp_path / "elsewhere.py"
+    outside.write_text("REVIEWED = None\n")
+
+    with pytest.raises(r4.RepairConflict, match="is not the module's repo root"):
+        _guard(repo, head, root=shadow)
+    with pytest.raises(r4.RepairConflict, match="data/shadow/reviewed.py is not tracked"):
+        _guard(repo, head, shadow / "reviewed.py")
+    with pytest.raises(r4.RepairConflict, match="outside the repo root"):
+        _guard(repo, head, outside)
+    assert _guard(repo, head, repo / "reviewed.py", repo / ".gitignore") == head
