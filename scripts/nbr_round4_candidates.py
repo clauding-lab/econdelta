@@ -17,9 +17,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
+import subprocess
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from typing import Callable
 
 from scripts.history_repair_candidates import (
     NBR_PARENT_RESTAMP_RUNS,
@@ -80,7 +83,9 @@ RETIRED_CORROBORATORS = ("nbr_fytd_collected_dailystar", "nbr_fytd_collected_tbs
 BANNER = "PROPOSAL ONLY: a human must check and transcribe this; it decides nothing"
 LITERAL_HEADER = "# DRAFT: paste into REVIEWED only after review"
 BDT = timezone(timedelta(hours=6))
+REPO_ROOT = Path(__file__).resolve().parent.parent
 Key = tuple[str, str]
+GitRunner = Callable[[list[str]], tuple[int, str]]  # git args -> (exit code, stdout)
 
 
 @dataclass(frozen=True)
@@ -664,14 +669,73 @@ def _run_verify(args: argparse.Namespace) -> int:
     return 1 if receipt["result"] == "changed" else 0
 
 
-def _run_build(args: argparse.Namespace) -> int:
+def _local_git(args: list[str]) -> tuple[int, str]:
+    """Local git only (rev-parse, status, merge-base); the module never touches the network."""
+    done = subprocess.run(["git", *args], cwd=REPO_ROOT, capture_output=True, text=True,
+                          check=False)
+    return done.returncode, done.stdout
+
+
+def commit_guard(git: GitRunner, commit: str, *, check_main: bool) -> str:
+    """HEAD is the named commit, the checkout is clean and (unless waived) HEAD is on main."""
+    code, head = git(["rev-parse", "HEAD"])
+    head = head.strip()
+    if code != 0 or head != commit:
+        raise RepairConflict(f"HEAD {head or '?'} is not --econdelta-commit {commit}")
+    code, status = git(["status", "--porcelain"])
+    if code != 0 or status.strip():
+        raise RepairConflict("checkout is not clean (edited, staged or untracked files)")
+    if check_main:
+        code, _ = git(["merge-base", "--is-ancestor", "HEAD", "origin/main"])
+        if code != 0:
+            raise RepairConflict(f"HEAD {head} is not an ancestor of origin/main (run "
+                                 "`git fetch origin`; or the owner rules D2(b))")
+    return head
+
+
+def _preview_lines(candidate: Manifest, review: Round4Review) -> list[str]:
+    lines = [f"PREVIEW: {len(candidate['operations'])} exact operations; no file written"]
+    for mid in ROUND4_IDS:
+        days = [op["key"]["as_of"] for op in candidate["operations"]
+                if op["key"]["metric_id"] == mid]
+        lines.append(f"  {mid}: {', '.join(str(day) for day in days)}")
+    lines += [f"  kept {mid} {day} {value!r}" for mid in ROUND4_IDS
+              for day, value in review.keep_period_rows[mid]]
+    return lines
+
+
+def _run_build(args: argparse.Namespace, git: GitRunner) -> int:
+    for name in ("night1_backup_dir", "target", "econdelta_commit", "brief_commit"):
+        if getattr(args, name) is None:
+            raise RepairConflict(f"--build needs --{name.replace('_', '-')}")
+    if not args.preview and args.output is None:
+        raise RepairConflict("--build needs --output (or --preview)")
+    if args.output is not None and args.output.exists():
+        raise RepairConflict("candidate already exists; preserve reviewed bytes")
+    if not all(re.fullmatch(r"[0-9a-f]{40}", c) for c in (args.econdelta_commit, args.brief_commit)):
+        raise RepairConflict("both exact 40-hex code commits required")
     review = REVIEWED
     if review is None:
         raise RepairConflict(PLACEHOLDER_MESSAGE)
-    raise NotImplementedError
+    waived = args.preview or args.owner_ruled_unmerged is not None
+    head = commit_guard(git, args.econdelta_commit, check_main=not waived)
+    ruling = (f"Owner ruling D2(b), built from HEAD {head} without the origin/main check: "
+              f"{args.owner_ruled_unmerged}",) if args.owner_ruled_unmerged is not None else ()
+    candidate = build_round4_candidate(
+        args.recapture_dir, args.night1_backup_dir, review, target=args.target,
+        commits={"econdelta": args.econdelta_commit, "brief": args.brief_commit},
+        generated_at=datetime.now(timezone.utc).isoformat(), extra_unresolved=ruling,
+    )
+    if args.preview:
+        print("\n".join(_preview_lines(candidate, review)))
+        return 0
+    write_json(args.output, candidate)
+    print(f"{len(candidate['operations'])} exact operations; "
+          f"candidate sha256={file_hash(args.output)}")
+    return 0
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None, *, git: GitRunner | None = None) -> int:
     """Draft, build or verify; never touches a database or the network."""
     args = _parser().parse_args(argv)
     try:
@@ -679,7 +743,7 @@ def main(argv: list[str] | None = None) -> int:
             return _run_draft(args)
         if args.verify_unchanged:
             return _run_verify(args)
-        return _run_build(args)
+        return _run_build(args, git or _local_git)
     except (RepairConflict, OSError, ValueError, KeyError) as exc:
         print(f"Round 4 stopped: {exc}")
         return 1
