@@ -187,6 +187,10 @@ def test_repair_snapshot_writes_the_split_layout_the_round4_generator_verifies(
         }
     }
     assert sorted(p.name for p in out.iterdir()) == ["manifest.json", "metric_history.json"]
+    from scripts.nbr_round4_candidates import load_snapshot
+
+    snapshot = load_snapshot(out, "recapture R4")  # the round-4 generator accepts the layout
+    assert snapshot.table_sha256 == hashlib.sha256(raw).hexdigest() and snapshot.rows == _NBR_ROWS
 
 
 def test_repair_snapshot_refuses_an_existing_directory(tmp_path, monkeypatch):
