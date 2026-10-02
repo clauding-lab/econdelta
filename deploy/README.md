@@ -68,7 +68,9 @@ step 2 amended 29 Sep 2026; AGENTS.md landmine 60).
    time, stop `econdelta-aggregate.timer` and `econdelta-aggregate-retry.timer` until it has
    (landmine 5: starting a `Persistent=true` timer after a missed slot fires it at once).
    Before the new Brief's first fire the owner also applies the round-4 NBR exclusion
-   (restamps dated after 2026-09-24, value-bound, the 2026-06-30 period row kept).
+   (restamps dated after 2026-09-24, value-bound, the 2026-06-30 period row kept), built by
+   `scripts/nbr_round4_candidates.py`; Day-2 sequence in the manifest runbook
+   (`docs/reviews/2026-09-25-history-repair-manifest.md`, "NBR release order" item 4).
 3. **The Brief's migration 0006**, owner-applied through the Supabase SQL editor.
 4. **The new Brief, before its 08:00 BDT fire**, once this producer's first daily write has
    landed (the Hetzner `latest.json` carries a `write_status` block); steps in `the-brief`
