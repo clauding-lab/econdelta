@@ -71,9 +71,10 @@ def parse_session_date(payload: dict) -> date:
     and must never be written as a session's close.
 
     Raises:
-        ParseError: missing/invalid sessionDate, a non-closed session, or a
-            ``dailyTotals`` row for the same date that disagrees with the
-            headline totals. NEVER falls back to date.today().
+        ParseError: missing/invalid sessionDate, a non-closed session, a
+            non-object ``totals`` or non-list ``dailyTotals``, or a
+            ``dailyTotals`` row for the same date whose trade count disagrees
+            with the headline totals. NEVER falls back to date.today().
     """
     if not isinstance(payload, dict):
         raise ParseError("/api/live/market response must be an object")
@@ -99,11 +100,27 @@ def parse_session_date(payload: dict) -> date:
     # Cross-check: the payload also carries a per-day `dailyTotals` history.
     # If it has a row for this sessionDate, the headline totals must match it
     # -- otherwise the totals block and the date disagree and we cannot know
-    # which day the numbers belong to.
-    totals = payload.get("totals") or {}
-    for row in payload.get("dailyTotals") or []:
+    # which day the numbers belong to. This runs before parse_market's shape
+    # checks, so a badly shaped `totals` / `dailyTotals` must be refused here
+    # as a ParseError (the handled notify-and-exit-1 path), never left to
+    # surface as an AttributeError/TypeError that skips notify().
+    totals = payload.get("totals")
+    if not isinstance(totals, dict):
+        raise ParseError("/api/live/market `totals` must be an object")
+    history = payload.get("dailyTotals")
+    if history is None:
+        history = []
+    if not isinstance(history, list):
+        raise ParseError(
+            f"/api/live/market `dailyTotals` must be a list, not {type(history).__name__}"
+        )
+    for row in history:
         if isinstance(row, dict) and row.get("date") == raw:
-            if row.get("trades") != totals.get("trades"):
+            # Compare PARSED counts, not raw JSON: _count accepts a digit
+            # string, so "202860" next to 202860 is agreement, not a clash.
+            headline = _count(totals, "trades", "totals")
+            recorded = _count(row, "trades", f"dailyTotals[{raw}]")
+            if headline != recorded:
                 raise ParseError(
                     f"totals.trades={totals.get('trades')!r} disagrees with "
                     f"dailyTotals[{raw}].trades={row.get('trades')!r}"
@@ -205,9 +222,14 @@ def parse_market(payload: dict) -> DseMarket:
 def parse_live_market_payload(payload: dict) -> tuple[date, DseIndices, DseMarket]:
     """Parse an already-decoded /api/live/market object into (session_date, indices, market).
 
-    Every part is validated before anything is returned, so ``main()`` never
-    sees a half-valid session: an invalid payload raises ParseError and no
-    snapshot is written (a corrected payload on the next run still ingests).
+    Every REQUIRED part is validated before anything is returned: sessionDate
+    and the closed-session gate, DSEX (level, change, percent), totals
+    (turnover, trades) and breadth. An invalid required part raises ParseError
+    and no snapshot is written (a corrected payload on the next run still
+    ingests). DS30 and DSES are OPTIONAL by design (#139, kept at the
+    2026-10-02 merge): when absent they come back as None and the snapshot
+    still lands with those two levels missing -- never fabricated. When
+    present they must be positive and finite like DSEX.
     """
     if not isinstance(payload, dict):
         raise ParseError("/api/live/market response must be an object")

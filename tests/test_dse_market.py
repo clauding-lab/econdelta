@@ -247,6 +247,55 @@ class TestParseLiveMarketPayload:
         assert market.total_trades == 0
         assert market.advancing == market.declining == market.unchanged == 0
 
+    # Merge fix round 1: #139's dailyTotals cross-check runs BEFORE
+    # parse_market's shape check, so a badly shaped `totals` / `dailyTotals`
+    # must still end as a ParseError (the handled path), never an
+    # AttributeError / TypeError that skips notify().
+    @pytest.mark.parametrize(
+        "mutate",
+        [
+            lambda payload: payload.update(totals=[1, 2]),
+            lambda payload: payload.update(totals="202860"),
+            lambda payload: payload.update(dailyTotals=5),
+            lambda payload: payload.update(dailyTotals={"2026-09-24": {"trades": 202860}}),
+        ],
+        ids=["totals-list", "totals-string", "dailytotals-scalar", "dailytotals-object"],
+    )
+    def test_badly_shaped_totals_or_history_is_a_parse_error(self, mutate):
+        payload = json.loads((FIXTURES_DIR / "dse_market_api_20260924.json").read_text())
+        mutate(payload)
+        with pytest.raises(ParseError):
+            parse_live_market_payload(payload)
+
+    def test_string_headline_trades_agrees_with_integer_history_row(self):
+        # The repair branch accepts a digit-string count; #139's cross-check
+        # must compare the parsed counts, not the raw JSON values, or a
+        # stringified headline would be refused as a date disagreement.
+        payload = json.loads((FIXTURES_DIR / "dse_market_api_20260924.json").read_text())
+        payload["totals"]["trades"] = "202860"
+
+        trading_date, _, market = parse_live_market_payload(payload)
+
+        assert trading_date == date(2026, 9, 24)
+        assert market.total_trades == 202860
+
+    def test_string_headline_trades_that_really_disagrees_is_still_refused(self):
+        payload = json.loads((FIXTURES_DIR / "dse_market_api_20260924.json").read_text())
+        payload["totals"]["trades"] = "202861"
+        with pytest.raises(ParseError, match="disagrees"):
+            parse_live_market_payload(payload)
+
+    def test_session_without_ds30_and_dses_parses_with_none_never_fabricated(self):
+        # Chosen rule at merge (#139's): DS30/DSES are optional. A session
+        # missing them still ingests, with None -- never an invented level.
+        payload = json.loads((FIXTURES_DIR / "dse_market_api_20260924.json").read_text())
+        payload["indices"] = [row for row in payload["indices"] if row["key"] == "DSEX"]
+
+        _, indices, _ = parse_live_market_payload(payload)
+
+        assert indices.dsex == pytest.approx(5578.3276)
+        assert indices.ds30 is None and indices.dses is None
+
 
 # ---------------------------------------------------------------------------
 
@@ -567,6 +616,26 @@ class TestMainEntryPointPayloadValidation:
         monkeypatch.setattr("scrapers.dse_market.DATA_DIR", tmp_path)
         payload = _live_api_payload()
         payload["indices"][0]["key"] = 123
+        with (
+            patch("scrapers.dse_market.DEFAULT_CLIENT.fetch_html", return_value=json.dumps(payload)),
+            patch("scrapers.dse_market.notify") as mock_notify,
+        ):
+            from scrapers.dse_market import main
+
+            assert main() == 1
+
+        mock_notify.assert_called_once()
+        assert mock_notify.call_args.args[:2] == ("error", "dse_market fetch failed")
+        assert list(tmp_path.glob("*.json")) == []
+
+    def test_non_object_totals_with_matching_history_row_uses_handled_error_path(self, tmp_path, monkeypatch):
+        # sessionDate AND its dailyTotals row both move to 2026-04-20, so
+        # #139's cross-check actually reaches the malformed `totals`.
+        monkeypatch.setenv("ECONDELTA_DRY_RUN", "1")
+        monkeypatch.setattr("scrapers.dse_market.DATA_DIR", tmp_path)
+        payload = _live_api_payload()
+        next(row for row in payload["dailyTotals"] if row["date"] == "2026-09-24")["date"] = "2026-04-20"
+        payload["totals"] = ["x"]
         with (
             patch("scrapers.dse_market.DEFAULT_CLIENT.fetch_html", return_value=json.dumps(payload)),
             patch("scrapers.dse_market.notify") as mock_notify,
