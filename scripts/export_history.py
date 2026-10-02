@@ -18,11 +18,15 @@ Usage:
 
 Reads with the Supabase key in the environment (SUPABASE_SERVICE_ROLE_KEY on the
 box; the anon key also works for the anon-readable tables). See docs/backup-export.md.
+
+Repair snapshot (round 4, owner decision D2): service key only, writers paused, new DIR:
+    python -m scripts.export_history --repair-snapshot DIR --table metric_history
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
 import os
@@ -30,6 +34,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
+from urllib.parse import urlparse
 
 import requests
 
@@ -227,6 +232,83 @@ def export_history(
     return out_path
 
 
+def _service_key() -> str:
+    """The service key only: an RLS-trimmed anon read would pass every check while short."""
+    key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ.get("SUPABASE_SERVICE_KEY")
+    if not key:
+        raise ExportError(
+            "repair snapshot needs SUPABASE_SERVICE_ROLE_KEY or SUPABASE_SERVICE_KEY "
+            "(service key only; the anon key is refused)"
+        )
+    return key
+
+
+def _project_ref(url: str | None) -> str:
+    host = urlparse(url or os.environ.get("SUPABASE_URL") or "").hostname or ""
+    if not host.endswith(".supabase.co") or host.count(".") != 2:
+        raise ExportError("SUPABASE_URL must be https://<project>.supabase.co")
+    return host.split(".")[0]
+
+
+def _write_bytes(path: Path, data: bytes) -> None:
+    tmp_path = path.with_name(f".{path.name}.tmp")
+    try:
+        with open(tmp_path, "wb") as stream:
+            stream.write(data)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(tmp_path, path)
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+
+def export_repair_snapshot(
+    out_dir: Path,
+    tables: tuple[str, ...] = ("metric_history",),
+    fetcher: Callable[[str, str], list[dict]] | None = None,
+    *,
+    url: str | None = None,
+    now: datetime | None = None,
+) -> Path:
+    """Write the split repair layout: ``<table>.json`` per table plus ``manifest.json``.
+
+    Round 4 (owner decision D2, 2 Oct 2026; docs/reviews/2026-09-25-history-repair-manifest.md).
+    Read-only toward the database, service key only, never into an existing directory. The read
+    is NOT a snapshot (see paginate_table): pause every overlapping writer first.
+    ``fetcher(table, key)`` replaces the live PostgREST read in tests.
+    """
+    out_dir = Path(out_dir)
+    if out_dir.exists():
+        raise ExportError(f"{out_dir} already exists; a repair snapshot never overwrites evidence")
+    unknown = [t for t in tables if t not in _TABLE_KEYS]
+    if not tables or unknown:
+        raise ExportError(f"unsupported repair snapshot table(s): {unknown or 'none given'}")
+    key = _service_key()
+    project = _project_ref(url)
+    fetch = fetcher or (lambda table, k: paginate_table(table, url=url, key=k))
+    started_at = (now or datetime.now(timezone.utc)).isoformat()
+    payloads = {table: json.dumps(fetch(table, key), indent=2).encode() for table in tables}
+    out_dir.mkdir(parents=True, exist_ok=False, mode=0o700)
+    refs = {}
+    for table, raw in payloads.items():
+        _write_bytes(out_dir / f"{table}.json", raw)
+        refs[table] = {
+            "rows": len(json.loads(raw)),
+            "sha256": hashlib.sha256(raw).hexdigest(),
+            "key": list(_TABLE_KEYS[table]),
+        }
+        logger.info("repair snapshot: %d rows from %s", refs[table]["rows"], table)
+    manifest = {
+        "target_project": project,
+        "started_at": started_at,
+        "non_transactional": True,
+        "key_role": "service",
+        "tables": refs,
+    }
+    _write_bytes(out_dir / "manifest.json", json.dumps(manifest, indent=2).encode())
+    return out_dir
+
+
 def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
@@ -242,8 +324,29 @@ def main(argv: list[str] | None = None) -> int:
     )
     p.add_argument("--url", type=str, default=None)
     p.add_argument("--key", type=str, default=None)
+    p.add_argument(
+        "--repair-snapshot",
+        type=Path,
+        default=None,
+        metavar="DIR",
+        help="write the split repair layout (<table>.json + manifest.json) into a NEW DIR; "
+        "service key from the environment only",
+    )
+    p.add_argument(
+        "--table",
+        action="append",
+        default=None,
+        help="table for --repair-snapshot (repeatable; default metric_history)",
+    )
     args = p.parse_args(argv)
     try:
+        if args.repair_snapshot is not None:
+            if args.key is not None:
+                raise ExportError("--repair-snapshot reads the service key from the environment")
+            export_repair_snapshot(
+                args.repair_snapshot, tuple(args.table or ("metric_history",)), url=args.url
+            )
+            return 0
         export_history(
             args.out_dir,
             url=args.url,

@@ -132,3 +132,84 @@ def test_repeated_page_refused():
 
     with pytest.raises(ExportError, match="duplicate|progress"):
         paginate_table("metric_history", url="https://test.supabase.co", key="k", session=Session())
+
+
+# --- Round 4 (owner decision D2, 2 Oct 2026): the split-layout repair snapshot -------------
+_PROJECT_URL = "https://ssbliukchgibjcjohibi.supabase.co"
+_NBR_ROWS = [  # SYNTHETIC rows in metric_history's shape
+    {"metric_id": "tax_revenue", "as_of": "2026-09-25", "value": 415473.0, "source": "EconDelta",
+     "provenance": None, "ingested_at": "2026-09-25T21:18:08.437914+00:00"},
+    {"metric_id": "fiscal_nbr_collected_trn", "as_of": "2026-09-25", "value": 4.15,
+     "source": "EconDelta", "provenance": None, "ingested_at": "2026-09-25T21:18:08.437914+00:00"},
+]
+
+
+def _service_env(monkeypatch, *, service: bool = True) -> None:
+    for var in ("SUPABASE_SERVICE_ROLE_KEY", "SUPABASE_SERVICE_KEY", "SUPABASE_ANON_KEY"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("SUPABASE_URL", _PROJECT_URL)
+    monkeypatch.setenv("SUPABASE_ANON_KEY", "anon-only")
+    if service:
+        monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "service-key")
+
+
+def test_repair_snapshot_writes_the_split_layout_the_round4_generator_verifies(
+    tmp_path, monkeypatch
+):
+    import hashlib
+
+    from scripts.export_history import export_repair_snapshot
+
+    _service_env(monkeypatch)
+    calls = []
+
+    def fetch(table, key):
+        calls.append((table, key))
+        return _NBR_ROWS
+
+    out = tmp_path / "round4-recapture"
+    export_repair_snapshot(out, fetcher=fetch)
+
+    manifest = json.loads((out / "manifest.json").read_text())
+    raw = (out / "metric_history.json").read_bytes()
+    assert calls == [("metric_history", "service-key")]  # the service key, never the anon key
+    assert json.loads(raw) == _NBR_ROWS
+    assert set(manifest) == {
+        "target_project", "started_at", "non_transactional", "key_role", "tables"
+    }
+    assert manifest["target_project"] == "ssbliukchgibjcjohibi"
+    assert manifest["non_transactional"] is True and manifest["key_role"] == "service"
+    assert manifest["tables"] == {
+        "metric_history": {
+            "rows": 2,
+            "sha256": hashlib.sha256(raw).hexdigest(),
+            "key": ["metric_id", "as_of"],
+        }
+    }
+    assert sorted(p.name for p in out.iterdir()) == ["manifest.json", "metric_history.json"]
+
+
+def test_repair_snapshot_refuses_an_existing_directory(tmp_path, monkeypatch):
+    from scripts.export_history import export_repair_snapshot, main
+
+    _service_env(monkeypatch)
+    out = tmp_path / "round4-night1"
+    out.mkdir()
+    (out / "keep.txt").write_text("earlier evidence")
+
+    with pytest.raises(ExportError, match="already exists"):
+        export_repair_snapshot(out, fetcher=lambda table, key: _NBR_ROWS)
+    assert main(["--repair-snapshot", str(out), "--table", "metric_history"]) == 1
+    assert sorted(p.name for p in out.iterdir()) == ["keep.txt"]
+
+
+def test_repair_snapshot_refuses_without_a_service_key(tmp_path, monkeypatch):
+    from scripts.export_history import export_repair_snapshot
+
+    _service_env(monkeypatch, service=False)  # anon key only
+    out = tmp_path / "round4-n2"
+    fetched = []
+
+    with pytest.raises(ExportError, match="service"):
+        export_repair_snapshot(out, fetcher=lambda table, key: fetched.append(table) or _NBR_ROWS)
+    assert fetched == [] and not out.exists()
