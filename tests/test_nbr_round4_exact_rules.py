@@ -267,6 +267,22 @@ def test_verify_unchanged_sees_a_change_that_keeps_the_value(tmp_path, capsys, k
     assert f"differs: {key[0]} {key[1]}" in capsys.readouterr().out
 
 
+@pytest.mark.parametrize("corroborator", ["nbr_fytd_collected_dailystar", "nbr_fytd_collected_tbs"])
+def test_verify_unchanged_watches_each_retired_corroborator(tmp_path, capsys, corroborator):
+    """Both retired corroborators are watched: dropping either from the drift receipt is a hole."""
+    world = _world(tmp_path)
+    key = (corroborator, "2026-05-02")
+    n2 = _export(tmp_path / "n2-2026-10-03", _edit(*key, value=1)(world.r4_rows),
+                 "2026-10-03T15:50:00+00:00")
+    out = tmp_path / "receipts" / "verify-n2.json"
+
+    assert _verify(world, n2, out) == 1
+
+    receipt = json.loads(out.read_text())
+    assert receipt["result"] == "changed" and receipt["differing_keys"] == [list(key)]
+    assert f"differs: {key[0]} {key[1]}" in capsys.readouterr().out
+
+
 def test_verify_unchanged_refuses_a_fresh_snapshot_started_at_the_same_instant(tmp_path, capsys):
     world = _world(tmp_path)
     same_instant = _export(tmp_path / "n2-same-instant", world.r4_rows[1:], R4_STARTED)
