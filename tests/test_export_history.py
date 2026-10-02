@@ -211,13 +211,44 @@ def test_repair_snapshot_refuses_an_existing_directory(tmp_path, monkeypatch):
 def test_repair_snapshot_refuses_without_a_service_key(tmp_path, monkeypatch):
     from scripts.export_history import export_repair_snapshot
 
-    _service_env(monkeypatch, service=False)  # anon key only
+    _service_env(monkeypatch, service=False)  # no service variable at all
+    # The anon slot holds a value that WOULD pass the key-shape check, so only the missing
+    # service variable can explain the refusal (an anon fallback would accept it).
+    monkeypatch.setenv("SUPABASE_ANON_KEY", "sb_secret_synthetic-but-in-the-anon-slot")
     out = tmp_path / "round4-n2"
     fetched = []
 
-    with pytest.raises(ExportError, match="service"):
+    with pytest.raises(ExportError, match="needs SUPABASE_SERVICE_ROLE_KEY or SUPABASE_SERVICE_KEY"):
         export_repair_snapshot(out, fetcher=lambda table, key: fetched.append(table) or _NBR_ROWS)
     assert fetched == [] and not out.exists()
+
+
+def test_repair_snapshot_accepts_the_service_key_alias_variable(tmp_path, monkeypatch):
+    from scripts.export_history import export_repair_snapshot
+
+    _service_env(monkeypatch, service=False)
+    monkeypatch.setenv("SUPABASE_SERVICE_KEY", _SERVICE_KEY)  # the design's named alias
+    calls = []
+    out = tmp_path / "round4-recapture"
+
+    export_repair_snapshot(out, fetcher=lambda table, key: calls.append(key) or _NBR_ROWS)
+
+    assert calls == [_SERVICE_KEY]
+    assert json.loads((out / "manifest.json").read_text())["key_role"] == "service"
+
+
+def test_repair_snapshot_writes_no_directory_when_the_read_fails(tmp_path, monkeypatch):
+    from scripts.export_history import export_repair_snapshot
+
+    _service_env(monkeypatch)
+    out = tmp_path / "round4-recapture"
+
+    def fetch(table, key):
+        raise ExportError("SYNTHETIC: PostgREST read failed mid-way")
+
+    with pytest.raises(ExportError, match="read failed"):
+        export_repair_snapshot(out, fetcher=fetch)
+    assert not out.exists()  # a retry can reuse the same evidence path
 
 
 def _jwt(payload: dict) -> str:
@@ -266,11 +297,18 @@ def test_repair_snapshot_accepts_only_a_key_that_is_a_service_key(tmp_path, monk
         assert json.loads((out / "manifest.json").read_text())["key_role"] == "service"
 
 
-def test_repair_snapshot_refuses_a_non_supabase_url(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    "url",
+    [
+        pytest.param("https://ssbliukchgibjcjohibi.attacker.example", id="other-domain"),
+        pytest.param("https://sub.ssbliukchgibjcjohibi.supabase.co", id="extra-subdomain"),
+    ],
+)
+def test_repair_snapshot_refuses_a_non_supabase_url(tmp_path, monkeypatch, url):
     from scripts.export_history import export_repair_snapshot
 
     _service_env(monkeypatch)
-    monkeypatch.setenv("SUPABASE_URL", "https://ssbliukchgibjcjohibi.attacker.example")
+    monkeypatch.setenv("SUPABASE_URL", url)
     out = tmp_path / "round4-recapture"
 
     with pytest.raises(ExportError, match="SUPABASE_URL must be https://<project>.supabase.co"):
