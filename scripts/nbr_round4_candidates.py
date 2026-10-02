@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import sys
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -702,10 +703,22 @@ def _run_verify(args: argparse.Namespace) -> int:
 
 
 def guarded_files() -> tuple[Path, ...]:
-    """The modules whose bytes decide the candidate: each must be tracked and unmodified."""
-    modules = (nbr_round4_guard, history_repair_candidates, repair_observation_history,
-               observations)
-    return (Path(__file__).resolve(), *(Path(str(m.__file__)).resolve() for m in modules))
+    """Every repo module loaded in this process (plus the named deciders) must be tracked and
+    unmodified: a hand-kept list missed utils/__init__.py, which runs on import (probe
+    p2_fsmonitor). The project's own .venv is skipped; it is untracked by design."""
+    root = REPO_ROOT.resolve()
+    venv = root / ".venv"
+    named = (nbr_round4_guard, history_repair_candidates, repair_observation_history,
+             observations)
+    found = {Path(__file__).resolve(), *(Path(str(m.__file__)).resolve() for m in named)}
+    for module in list(sys.modules.values()):
+        source = getattr(module, "__file__", None)
+        if not source:
+            continue
+        path = Path(source).resolve()
+        if path.suffix == ".py" and root in path.parents and venv not in path.parents:
+            found.add(path)
+    return tuple(sorted(found))
 
 
 def _preview_lines(candidate: Manifest, review: Round4Review) -> list[str]:
