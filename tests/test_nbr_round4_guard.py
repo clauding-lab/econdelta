@@ -100,7 +100,10 @@ def test_build_refuses_a_head_that_is_not_the_named_commit_a_dirty_tree_or_a_com
     git = FakeGit()
     assert _main_build(world, git, output=output) == 0
     assert ["rev-parse", "--show-toplevel"] in git.calls
-    assert {call[-1] for call in git.calls if call[0] == "hash-object"} == GUARDED
+    hashed = {call[-1] for call in git.calls if call[0] == "hash-object"}
+    root = r4.REPO_ROOT.resolve()
+    assert GUARDED <= hashed  # the named deciders, always
+    assert hashed == {p.relative_to(root).as_posix() for p in r4.guarded_files()}  # + every loaded
     candidate = json.loads(output.read_text())
     assert candidate["code_commits"] == {"econdelta": HEAD, "brief": "d" * 40}
     assert len(candidate["operations"]) == 21
@@ -302,3 +305,44 @@ def test_commit_guard_answers_for_the_modules_repo_not_a_git_dir_in_the_environm
     monkeypatch.setenv("GIT_OBJECT_DIRECTORY", str(decoy / ".git" / "objects"))
 
     assert _real_guard(repo, head) == head
+
+
+# --- T18: a repo-local fsmonitor hook cannot blind the clean check; every loaded module is guarded
+
+
+def test_commit_guard_refuses_an_edit_hidden_by_a_repo_local_fsmonitor_hook(tmp_path):
+    """Probe p2_fsmonitor (round-4 close safety review r2): a core.fsmonitor hook in .git/config
+    that always answers "nothing changed" blinds plain `git status`; the guard's runner turns it
+    off (-c core.fsmonitor=false), so the edit to an unguarded tracked file is still seen."""
+    repo, head = _repo(tmp_path)
+    hook = tmp_path / "fsmon.sh"
+    hook.write_text("#!/bin/sh\nprintf 'tok\\0'\n")
+    hook.chmod(0o755)
+    _git(repo, "config", "core.fsmonitor", str(hook))
+    _git(repo, "status", "--porcelain")  # seeds the hook's token into the index
+    (repo / ".gitignore").write_text("edited\n")
+    assert _git(repo, "status", "--porcelain", "--untracked-files=all") == ""  # blind
+
+    with pytest.raises(r4.RepairConflict, match="checkout is not clean"):
+        _real_guard(repo, head)
+
+
+def test_guarded_files_cover_every_loaded_repo_module_but_not_the_projects_venv(monkeypatch):
+    """A hand-kept list missed utils/__init__.py, which runs on import (probe p2_fsmonitor)."""
+    import sys
+    import types
+
+    root = r4.REPO_ROOT.resolve()
+    loaded = types.ModuleType("round4_probe_loaded")
+    loaded.__file__ = str(root / "utils" / "round4_probe_loaded.py")
+    in_venv = types.ModuleType("round4_probe_venv")
+    in_venv.__file__ = str(root / ".venv" / "lib" / "round4_probe_venv.py")
+    monkeypatch.setitem(sys.modules, "round4_probe_loaded", loaded)
+    monkeypatch.setitem(sys.modules, "round4_probe_venv", in_venv)
+
+    files = r4.guarded_files()
+
+    assert root / "utils" / "__init__.py" in files
+    assert root / "utils" / "round4_probe_loaded.py" in files
+    assert root / ".venv" / "lib" / "round4_probe_venv.py" not in files
+    assert Path(r4.__file__).resolve() in files

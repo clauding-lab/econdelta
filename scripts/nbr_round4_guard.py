@@ -14,6 +14,8 @@ from typing import Callable
 from scripts.repair_observation_history import RepairConflict
 
 GitRunner = Callable[[list[str]], tuple[int, str]]  # git args -> (exit code, stdout)
+GIT_COMMAND = ("git", "--no-replace-objects", "-c", "core.fsmonitor=false",
+               "-c", "core.untrackedCache=false")
 
 
 def _git_env() -> dict[str, str]:
@@ -27,10 +29,12 @@ def local_git(repo_root: Path) -> GitRunner:
     """Run git in ``repo_root``; the module's own location, never the caller's cwd.
 
     ``--no-replace-objects``: a ``refs/replace/*`` entry makes ``HEAD:<path>`` and status read a
-    look-alike commit while ``rev-parse HEAD`` still prints the real one (probe p_replace)."""
+    look-alike commit while ``rev-parse HEAD`` still prints the real one (probe p_replace).
+    ``core.fsmonitor=false`` / ``core.untrackedCache=false``: a repo-local fsmonitor hook or a
+    stale untracked cache can make status report "nothing changed" (probe p2_fsmonitor)."""
 
     def run(args: list[str]) -> tuple[int, str]:
-        done = subprocess.run(["git", "--no-replace-objects", *args], cwd=repo_root,
+        done = subprocess.run([*GIT_COMMAND, *args], cwd=repo_root,
                               env=_git_env(), capture_output=True, text=True, check=False)
         return done.returncode, done.stdout
 
@@ -87,7 +91,13 @@ def commit_guard(
     are refused and ignored (``local_git`` runs ``--no-replace-objects`` with GIT_* scrubbed).
 
     The origin/main check catches honest mistakes only: origin/main is a local, writable ref,
-    and grafts can fake ``--is-ancestor``. It is not tamper-proof and claims nothing more."""
+    and grafts can fake ``--is-ancestor``. It is not tamper-proof and claims nothing more.
+
+    Threat model (controller ruling, 2 Oct 2026): the guard catches HONEST mistakes — the wrong
+    checkout, an unreviewed or stray edit, a copy run from the wrong folder. It does not defend
+    against a hostile user with shell access to the build machine: such a user can edit this
+    guard itself, or plant a git-ignored forged __pycache__ (probe p3_pyc). The data-bound checks
+    in build_round4_candidate, not this guard, limit what a candidate can delete."""
     _check_toplevel(git, repo_root)
     _check_no_replace_refs(git)
     code, head = git(["rev-parse", "HEAD"])
