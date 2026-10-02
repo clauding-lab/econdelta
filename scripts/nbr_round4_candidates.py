@@ -331,6 +331,9 @@ def _cross_check_lines(r4: Snapshot, n1: Snapshot, proposal: Round4Review) -> li
                if (mid, day) not in r4.index]
     after = [f"{mid} {r['as_of']}" for mid in ROUND4_IDS
              for r in _family(n1, mid, proposal.last_capture_day + "~")]
+    unremoved = [f"{mid} {r['as_of']}" for mid in ROUND4_IDS
+                 for r in _family(r4, mid, WINDOW_START, WINDOW_END)
+                 if same(n1.index.get((mid, str(r["as_of"]))), r)]
     corroborators = [r for mid in RETIRED_CORROBORATORS for r in _family(r4, mid)]
     lines = [
         _check(provenance is None, "N1 provenance: Night-1 window rows are R1's 420 reviewed "
@@ -349,6 +352,9 @@ def _cross_check_lines(r4: Snapshot, n1: Snapshot, proposal: Round4Review) -> li
                f"{', '.join(lacking)}"),
         _check(not after, "no Night-1 row after the last capture day",
                f"Night-1 rows after the last capture day: {', '.join(after)}"),
+        _check(not unremoved, "no R1-window row is identical to its Night-1 row",
+               "R1-window rows identical to their Night-1 row (an R1 restamp R1 did not remove): "
+               f"{', '.join(unremoved)}"),
     ]
     lines += [
         f"  CHECK: month-end capture day {day} inside the post-window range: confirm the Night-1 "
@@ -472,7 +478,9 @@ def _check_pre_window(r4: Snapshot, n1: Snapshot, mid: str) -> None:
         raise RepairConflict(f"{mid} pre-window rows differ from the Night-1 snapshot")
 
 
-def _check_r1_window(r4: Snapshot, mid: str, review: Round4Review) -> None:
+def _check_r1_window(r4: Snapshot, n1: Snapshot, mid: str, review: Round4Review) -> None:
+    """Only the reviewed producer period rows. R1 removes every Night-1 window row and the producer
+    writes after Night 1, so a kept row identical to its Night-1 row is an unremoved R1 restamp."""
     rows = _family(r4, mid, WINDOW_START, WINDOW_END)
     keep = dict(review.keep_period_rows[mid])
     if sorted(str(r["as_of"]) for r in rows) != sorted(keep):
@@ -483,6 +491,9 @@ def _check_r1_window(r4: Snapshot, mid: str, review: Round4Review) -> None:
             raise RepairConflict(f"{mid} kept period row {day} value differs from the review")
         if row.get("source") != "EconDelta" or not _month_end(day):
             raise RepairConflict(f"{mid} kept period row {day} is not an EconDelta month-end row")
+        if same(n1.index.get((mid, day)), row):
+            raise RepairConflict(f"{mid} kept period row {day} is identical to its Night-1 row "
+                                 "(an R1 restamp R1 did not remove)")
 
 
 def _post_window_rows(r4: Snapshot, n1: Snapshot, mid: str, review: Round4Review) -> list[Row]:
@@ -557,7 +568,7 @@ def build_round4_candidate(
     post: list[Row] = []
     for mid in ROUND4_IDS:
         _check_pre_window(r4, n1, mid)
-        _check_r1_window(r4, mid, review)
+        _check_r1_window(r4, n1, mid, review)
         post += _post_window_rows(r4, n1, mid, review)
     _check_night1_post_rows(r4, n1, review)
     _check_month_ends(review)
@@ -696,14 +707,21 @@ def _local_git(args: list[str]) -> tuple[int, str]:
 
 
 def commit_guard(git: GitRunner, commit: str, *, check_main: bool) -> str:
-    """HEAD is the named commit, the checkout is clean and (unless waived) HEAD is on main."""
+    """HEAD is the named commit, the checkout is clean and (unless waived) HEAD is on main.
+
+    "Clean" overrides local settings that hide changes: status.showUntrackedFiles=no (forced to
+    --untracked-files=all) and assume-unchanged / skip-worktree entries (lowercase or S tag in
+    `git ls-files -v`), either of which would hide a hand-edited REVIEWED literal."""
     code, head = git(["rev-parse", "HEAD"])
     head = head.strip()
     if code != 0 or head != commit:
         raise RepairConflict(f"HEAD {head or '?'} is not --econdelta-commit {commit}")
-    code, status = git(["status", "--porcelain"])
-    if code != 0 or status.strip():
-        raise RepairConflict("checkout is not clean (edited, staged or untracked files)")
+    code, status = git(["status", "--porcelain", "--untracked-files=all"])
+    hidden_code, listing = git(["ls-files", "-v"])
+    hidden = [line for line in listing.splitlines() if line[:1].islower() or line[:1] == "S"]
+    if code != 0 or status.strip() or hidden_code != 0 or hidden:
+        raise RepairConflict("checkout is not clean (edited, staged or untracked files, or "
+                             "files marked assume-unchanged / skip-worktree)")
     if check_main:
         code, _ = git(["merge-base", "--is-ancestor", "HEAD", "origin/main"])
         if code != 0:
