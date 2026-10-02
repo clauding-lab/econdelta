@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -262,3 +263,19 @@ def test_refuses_an_existing_receipt_and_leaves_it_untouched(tmp_path, monkeypat
 
     assert _run(_candidate(tmp_path), backup, out) == 2
     assert out.read_text() == "earlier receipt"
+
+
+_ROOT = Path(__file__).resolve().parent.parent
+_FINAL_BACKUP_CMD = "python -m scripts.export_history --repair-snapshot DIR --r1-final-backup"
+_RECHECK_CMD = "python -m scripts.repair_recheck_before_images --manifest"
+
+
+def test_runbook_item_4_and_landmine_60_name_the_night1_backup_and_recheck_commands():
+    runbook = (_ROOT / "docs/reviews/2026-09-25-history-repair-manifest.md").read_text()
+    item4 = re.search(r"^4\. .*$", runbook.split("## Safety contract", 1)[1], re.MULTILINE)
+    agents = (_ROOT / "AGENTS.md").read_text()
+    landmine60 = re.search(r"^60\. .*$", agents, re.MULTILINE)
+    assert item4 and landmine60
+    for text in (item4.group(0), landmine60.group(0)):
+        assert _FINAL_BACKUP_CMD in text and _RECHECK_CMD in text
+        assert ".venv" in text  # the round-4 guard skips only REPO_ROOT/.venv
