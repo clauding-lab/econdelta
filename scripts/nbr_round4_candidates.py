@@ -18,12 +18,14 @@ from __future__ import annotations
 import argparse
 import json
 import re
-import subprocess
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Callable
 
+import scripts.history_repair_candidates as history_repair_candidates
+import scripts.nbr_round4_guard as nbr_round4_guard
+import scripts.repair_observation_history as repair_observation_history
+import utils.observations as observations
 from scripts.history_repair_candidates import (
     NBR_PARENT_RESTAMP_RUNS,
     NBR_RESTAMP_ID,
@@ -31,6 +33,7 @@ from scripts.history_repair_candidates import (
     NBR_RESTAMP_WINDOW,
     nbr_restamp_rows,
 )
+from scripts.nbr_round4_guard import GitRunner, commit_guard, local_git
 from scripts.repair_observation_history import (
     Backup,
     CodeCommits,
@@ -87,7 +90,6 @@ LITERAL_HEADER = "# DRAFT: paste into REVIEWED only after review"
 BDT = timezone(timedelta(hours=6))
 REPO_ROOT = Path(__file__).resolve().parent.parent
 Key = tuple[str, str]
-GitRunner = Callable[[list[str]], tuple[int, str]]  # git args -> (exit code, stdout)
 
 
 @dataclass(frozen=True)
@@ -699,35 +701,11 @@ def _run_verify(args: argparse.Namespace) -> int:
     return 1 if receipt["result"] == "changed" else 0
 
 
-def _local_git(args: list[str]) -> tuple[int, str]:
-    """Local git only (rev-parse, status, merge-base); the module never touches the network."""
-    done = subprocess.run(["git", *args], cwd=REPO_ROOT, capture_output=True, text=True,
-                          check=False)
-    return done.returncode, done.stdout
-
-
-def commit_guard(git: GitRunner, commit: str, *, check_main: bool) -> str:
-    """HEAD is the named commit, the checkout is clean and (unless waived) HEAD is on main.
-
-    "Clean" overrides local settings that hide changes: status.showUntrackedFiles=no (forced to
-    --untracked-files=all) and assume-unchanged / skip-worktree entries (lowercase or S tag in
-    `git ls-files -v`), either of which would hide a hand-edited REVIEWED literal."""
-    code, head = git(["rev-parse", "HEAD"])
-    head = head.strip()
-    if code != 0 or head != commit:
-        raise RepairConflict(f"HEAD {head or '?'} is not --econdelta-commit {commit}")
-    code, status = git(["status", "--porcelain", "--untracked-files=all"])
-    hidden_code, listing = git(["ls-files", "-v"])
-    hidden = [line for line in listing.splitlines() if line[:1].islower() or line[:1] == "S"]
-    if code != 0 or status.strip() or hidden_code != 0 or hidden:
-        raise RepairConflict("checkout is not clean (edited, staged or untracked files, or "
-                             "files marked assume-unchanged / skip-worktree)")
-    if check_main:
-        code, _ = git(["merge-base", "--is-ancestor", "HEAD", "origin/main"])
-        if code != 0:
-            raise RepairConflict(f"HEAD {head} is not an ancestor of origin/main (run "
-                                 "`git fetch origin`; or the owner rules D2(b))")
-    return head
+def guarded_files() -> tuple[Path, ...]:
+    """The modules whose bytes decide the candidate: each must be tracked and unmodified."""
+    modules = (nbr_round4_guard, history_repair_candidates, repair_observation_history,
+               observations)
+    return (Path(__file__).resolve(), *(Path(str(m.__file__)).resolve() for m in modules))
 
 
 def _preview_lines(candidate: Manifest, review: Round4Review) -> list[str]:
@@ -757,7 +735,8 @@ def _run_build(args: argparse.Namespace, git: GitRunner) -> int:
     if review is None:
         raise RepairConflict(PLACEHOLDER_MESSAGE)
     waived = args.preview or args.owner_ruled_unmerged is not None
-    head = commit_guard(git, args.econdelta_commit, check_main=not waived)
+    head = commit_guard(git, args.econdelta_commit, check_main=not waived, repo_root=REPO_ROOT,
+                        files=guarded_files())
     ruling = (f"Owner ruling D2(b), built from HEAD {head} without the origin/main check: "
               f"{args.owner_ruled_unmerged}",) if args.owner_ruled_unmerged is not None else ()
     candidate = build_round4_candidate(
@@ -782,7 +761,7 @@ def main(argv: list[str] | None = None, *, git: GitRunner | None = None) -> int:
             return _run_draft(args)
         if args.verify_unchanged:
             return _run_verify(args)
-        return _run_build(args, git or _local_git)
+        return _run_build(args, git or local_git(REPO_ROOT))
     except (RepairConflict, OSError, ValueError, KeyError) as exc:
         print(f"Round 4 stopped: {exc}")
         return 1
