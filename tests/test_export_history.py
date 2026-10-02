@@ -136,6 +136,7 @@ def test_repeated_page_refused():
 
 # --- Round 4 (owner decision D2, 2 Oct 2026): the split-layout repair snapshot -------------
 _PROJECT_URL = "https://ssbliukchgibjcjohibi.supabase.co"
+_SERVICE_KEY = "sb_secret_synthetic-service-key"  # SYNTHETIC opaque secret-key shape
 _NBR_ROWS = [  # SYNTHETIC rows in metric_history's shape
     {"metric_id": "tax_revenue", "as_of": "2026-09-25", "value": 415473.0, "source": "EconDelta",
      "provenance": None, "ingested_at": "2026-09-25T21:18:08.437914+00:00"},
@@ -150,7 +151,7 @@ def _service_env(monkeypatch, *, service: bool = True) -> None:
     monkeypatch.setenv("SUPABASE_URL", _PROJECT_URL)
     monkeypatch.setenv("SUPABASE_ANON_KEY", "anon-only")
     if service:
-        monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "service-key")
+        monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", _SERVICE_KEY)
 
 
 def test_repair_snapshot_writes_the_split_layout_the_round4_generator_verifies(
@@ -172,7 +173,7 @@ def test_repair_snapshot_writes_the_split_layout_the_round4_generator_verifies(
 
     manifest = json.loads((out / "manifest.json").read_text())
     raw = (out / "metric_history.json").read_bytes()
-    assert calls == [("metric_history", "service-key")]  # the service key, never the anon key
+    assert calls == [("metric_history", _SERVICE_KEY)]  # the service key, never the anon key
     assert json.loads(raw) == _NBR_ROWS
     assert set(manifest) == {
         "target_project", "started_at", "non_transactional", "key_role", "tables"
@@ -217,3 +218,104 @@ def test_repair_snapshot_refuses_without_a_service_key(tmp_path, monkeypatch):
     with pytest.raises(ExportError, match="service"):
         export_repair_snapshot(out, fetcher=lambda table, key: fetched.append(table) or _NBR_ROWS)
     assert fetched == [] and not out.exists()
+
+
+def _jwt(payload: dict) -> str:
+    """An UNSIGNED SYNTHETIC JWT: only the payload's role matters to the exporter."""
+    import base64
+
+    def part(obj: dict) -> str:
+        return base64.urlsafe_b64encode(json.dumps(obj).encode()).rstrip(b"=").decode()
+
+    return f"{part({'alg': 'HS256', 'typ': 'JWT'})}.{part(payload)}.synthetic-signature"
+
+
+@pytest.mark.parametrize(
+    ("key", "refused"),
+    [
+        pytest.param(_jwt({"role": "anon", "ref": "ssbliukchgibjcjohibi"}), True, id="anon-jwt"),
+        pytest.param(_jwt({"ref": "ssbliukchgibjcjohibi"}), True, id="jwt-without-role"),
+        pytest.param("opaque-not-a-secret-key", True, id="opaque-non-secret"),
+        pytest.param("sb_publishable_synthetic", True, id="publishable-key"),
+        pytest.param(_jwt({"role": "service_role", "ref": "ssbliukchgibjcjohibi"}), False,
+                     id="service-role-jwt"),
+        pytest.param(_SERVICE_KEY, False, id="sb-secret-key"),
+    ],
+)
+def test_repair_snapshot_accepts_only_a_key_that_is_a_service_key(tmp_path, monkeypatch, key, refused):
+    """An anon JWT stored under the service variable name would read RLS-trimmed rows silently."""
+    from scripts.export_history import export_repair_snapshot
+
+    _service_env(monkeypatch, service=False)
+    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", key)
+    out = tmp_path / "round4-recapture"
+    fetched = []
+
+    def fetch(table, k):
+        fetched.append(table)
+        return _NBR_ROWS
+
+    if refused:
+        with pytest.raises(ExportError, match="service") as caught:
+            export_repair_snapshot(out, fetcher=fetch)
+        assert key not in str(caught.value)  # the key is never echoed
+        assert fetched == [] and not out.exists()
+    else:
+        export_repair_snapshot(out, fetcher=fetch)
+        assert fetched == ["metric_history"]
+        assert json.loads((out / "manifest.json").read_text())["key_role"] == "service"
+
+
+def test_repair_snapshot_refuses_a_non_supabase_url(tmp_path, monkeypatch):
+    from scripts.export_history import export_repair_snapshot
+
+    _service_env(monkeypatch)
+    monkeypatch.setenv("SUPABASE_URL", "https://ssbliukchgibjcjohibi.attacker.example")
+    out = tmp_path / "round4-recapture"
+
+    with pytest.raises(ExportError, match="SUPABASE_URL must be https://<project>.supabase.co"):
+        export_repair_snapshot(out, fetcher=lambda table, key: _NBR_ROWS)
+    assert not out.exists()
+
+
+def _patched_reader(monkeypatch) -> list:
+    import scripts.export_history as export_module
+
+    calls = []
+
+    def paginate(table, *, url=None, key=None, **kwargs):
+        calls.append((table, url, key))
+        return _NBR_ROWS
+
+    monkeypatch.setattr(export_module, "paginate_table", paginate)
+    return calls
+
+
+def test_repair_snapshot_cli_refuses_a_key_flag(tmp_path, monkeypatch):
+    from scripts.export_history import main
+
+    _service_env(monkeypatch)
+    calls = _patched_reader(monkeypatch)
+    out = tmp_path / "round4-recapture"
+
+    code = main(["--repair-snapshot", str(out), "--key", "anon-key-value"])
+
+    assert code == 1 and calls == [] and not out.exists()
+
+
+def test_repair_snapshot_cli_writes_the_layout_with_the_environment_service_key(
+    tmp_path, monkeypatch
+):
+    from scripts.export_history import main
+    from scripts.nbr_round4_candidates import load_snapshot
+
+    _service_env(monkeypatch)
+    calls = _patched_reader(monkeypatch)
+    out = tmp_path / "round4-recapture"
+
+    code = main(["--repair-snapshot", str(out), "--table", "metric_history"])
+
+    assert code == 0
+    assert calls == [("metric_history", None, _SERVICE_KEY)]
+    assert sorted(p.name for p in out.iterdir()) == ["manifest.json", "metric_history.json"]
+    assert load_snapshot(out, "recapture R4").rows == _NBR_ROWS
