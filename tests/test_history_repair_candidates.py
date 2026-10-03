@@ -594,6 +594,74 @@ def test_parent_and_alias_restamp_exclusion_refuses_any_backup_other_than_the_re
         _candidate(_write_backup(tmp_path, backup))
 
 
+# --- Owner decision, 2 Oct 2026 ~20:58 BDT: repaired metric_history rows carry 'manual' ------
+# Production has CHECK metric_history_provenance_check (owner-approved read-only catalog
+# capture, night1/prod-schema-capture.json, 2 Oct 2026):
+#   CHECK ((provenance = ANY (ARRAY['deterministic', 'llm', 'hybrid', 'manual'])))
+# so NULL passes and any other string (e.g. a JSON detail blob) aborts the apply. Night 1
+# (2 Oct) aborted on exactly that. The reviewed detail (period, unit, release status,
+# parents, source hashes) stays in the reviewed manifest/receipts, never in the row.
+PROD_PROVENANCE_CHECK = frozenset({"deterministic", "llm", "hybrid", "manual"})
+
+
+def _occupied_destination_row() -> dict:
+    """An existing production row at a verified key, written by the live deterministic writer."""
+    return {
+        "metric_id": "broad_money",
+        "as_of": "2026-06-30",
+        "value": 2416000.0,
+        "source": "EconDelta",
+        "ingested_at": "2026-07-20T21:18:08.437914+00:00",
+        "provenance": "deterministic",
+    }
+
+
+def test_every_repaired_metric_history_row_satisfies_the_production_provenance_check(tmp_path):
+    history = _history(_restamp_rows(NBR_ID)) + [_occupied_destination_row()]
+    candidate = _candidate(_write_backup(tmp_path, history))
+    afters = [
+        op["after"]
+        for op in candidate["operations"]
+        if op["table"] == "metric_history" and op["after"] is not None
+    ]
+    assert afters  # inserts and the occupied-destination update are both generated
+    assert any(a["metric_id"] == "broad_money" and a["as_of"] == "2026-06-30" for a in afters)
+    for after in afters:
+        prov = after["provenance"]
+        assert prov is None or prov in PROD_PROVENANCE_CHECK, (after["metric_id"], prov)
+
+
+def test_owner_decision_repaired_metric_history_rows_are_manual_with_no_json_detail(tmp_path):
+    history = _history(_restamp_rows(NBR_ID)) + [_occupied_destination_row()]
+    candidate = _candidate(_write_backup(tmp_path, history))
+    ops = [op for op in candidate["operations"] if op["table"] == "metric_history" and op["after"]]
+    assert {op["after"]["provenance"] for op in ops} == {"manual"}
+    for op in ops:
+        assert not any("source_period_end" in str(v) for v in op["after"].values())
+        # The reviewed source facts and evidence still travel in the manifest operation.
+        assert op["evidence"] and all(ref["sha256"] for ref in op["evidence"])
+    # Value, source and date are the reviewed source fact, not the occupied row's.
+    (occupied,) = [op for op in ops if op["operation_id"] == "metric_history:broad_money:2026-06-30"]
+    assert occupied["before"]["provenance"] == "deterministic"
+    assert occupied["after"] == occupied["before"] | {
+        "value": 2416286.3,
+        "source": "Bangladesh Bank (reviewed source repair)",
+        "ingested_at": "2026-09-25T20:07:46.196927+00:00",
+        "provenance": "manual",
+    }
+
+
+def test_other_tables_after_images_gain_no_provenance_column(tmp_path):
+    candidate = _candidate(_write_backup(tmp_path, _history(_restamp_rows(NBR_ID))))
+    others = [op for op in candidate["operations"] if op["table"] != "metric_history"]
+    assert {op["table"] for op in others} == {
+        "metric_definitions",
+        "metric_definitions_monthly",
+        "metric_history_monthly",
+    }
+    assert not any("provenance" in (op["after"] or {}) for op in others)
+
+
 def test_parent_and_alias_boundary_cases_cover_every_edge_day_of_their_reviewed_runs():
     """Guard for the parametrize above (tax_revenue 05-02 is a one-day run; the alias's
     first run lasts 23 days, so its 05-24/05-25 boundary is an extra edge)."""
