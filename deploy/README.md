@@ -67,6 +67,20 @@ step 2 amended 29 Sep 2026; AGENTS.md landmine 60).
    03:15 BDT retry, a catch-up fire on an install, or any manual run. If R1 cannot finish in
    time, stop `econdelta-aggregate.timer` and `econdelta-aggregate-retry.timer` until it has
    (landmine 5: starting a `Persistent=true` timer after a missed slot fires it at once).
+   Resume a paused timer with `sudo systemctl enable <timer>` then
+   `sudo systemctl start --job-mode=ignore-requirements <timer>`, never `enable --now`: every
+   EconDelta timer `Requires=` a service, so starting it starts the job (landmine 62).
+   Night-1 sequence, every overlapping writer paused (landmine 60; manifest runbook "Safety
+   contract" item 4): `python -m scripts.export_history --repair-snapshot DIR --r1-final-backup`
+   (a NEW `DIR`); then `python -m scripts.repair_refresh_before_images --manifest <reviewed plan
+   manifest.json> ... --backup-dir DIR ...` (exit 0, `0 refused`; record its counts and output
+   sha256); then `python -m scripts.repair_observation_history --plan --candidate
+   <refreshed-candidate.json> ...` (must print `Validated 2016 operations`; the owner then
+   approves that refreshed sha256 before anything is applied, landmine 65); then
+   `python -m scripts.repair_observation_history --apply <plan>/manifest.json ... --writers-paused`.
+   The refresh run replaces the recheck for a refreshed candidate (run against the same `DIR`,
+   the recheck always refuses it, exit 2, by design); `--reference-backup` is still never a
+   Night-1 pass.
    Before the new Brief's first fire the owner also applies the round-4 NBR exclusion
    (restamps dated after 2026-09-24, value-bound, the 2026-06-30 period row kept), built by
    `scripts/nbr_round4_candidates.py`; Day-2 sequence in the manifest runbook
