@@ -37,6 +37,34 @@ When something ships broken, when a methodology gap is exposed, or when a smoke 
 
 ## Entries (most recent first)
 
+## 2026-09-28 — The NBR year-to-date total was re-stamped with the run date every night
+
+**Trigger:** the R1 history scan and a controller check of the NBR card path during the data-reliability repair (owner decisions (d), (l), (m)).
+
+**What went wrong:** the producer re-derived `fiscal_nbr_collected_trn` from `tax_revenue` on every run and stamped the row with the RUN date, not the period the source states. `metric_history` gained a new dated row every night for the same figure: 140 rows each for the child, `tax_revenue` and its alias `nbr_fytd_collected_cr` (2026-05-02 to 2026-09-24). A frozen figure looked fresh, and The Brief's card read a date the source never stated.
+
+**Lesson:** a cumulative figure is dated by the period its source states; a write happens only when (period, value) is new, and no stated period means nothing is written.
+
+**Prevention:** R2 fix H5 (`utils/write_receipts.py` categories `period already recorded` / `no source period`; the child follows the parent's date); the R1 manifest excludes the 420 restamped rows (decisions (d), (l)); a round-4 exclusion covers restamps after 2026-09-24. AGENTS.md landmines 59 and 60.
+
+**Hotfix:** none in production yet; the fix ships with the coordinated release (producer first, R1 before its first write).
+
+**Cross-references:** evidence `fixH5-report.md`, `fixR1B-round1-report.md`, `fixR1B-round2-report.md` (The Brief's repair evidence folder); `docs/reviews/2026-09-25-history-repair-manifest.md`.
+
+## 2026-09-28 — A release-order rule built on a never-deployed hypothetical was reversed once measured
+
+**Trigger:** The Brief's task G2 (compatibility both ways) during the data-reliability repair.
+
+**What went wrong:** R2 fix 12 had ordered "Brief consumer before or with this producer", reasoning about a Brief version never deployed. Measured on the deployed Brief `a810fcb`: it ignores this producer's additive snapshot fields and does not break (not identical: G2 §8 measured a hidden Trade Gap card and first-night quarantine blanks); the new Brief on the OLD producer drops four cards; the new pair on unrepaired NBR history holds every publish.
+
+**Lesson:** derive a cross-repo release order from runs against the commit actually deployed, both ways round.
+
+**Prevention:** `tests/test_legacy_brief_reader_compat.py`; the measured order in `deploy/README.md` "Coordinated release order", pinned by `tests/test_release_order_runbook.py`.
+
+**Hotfix:** controller ruling 28 Sep 2026 (step 2 amended 29 Sep 2026): this producer first, The Brief last, roll back The Brief first.
+
+**Cross-references:** AGENTS.md landmine 60; evidence `fixG2-compat.md` (The Brief's repair evidence folder).
+
 ## 2026-08-23 — A test that certifies a fictional table shape hid a permanent deadlock at BB's fiscal-year roll (PR-C imports splice check, Opus review round 2, HIGH-1)
 
 **Trigger:** Opus review round 2 on PR-C (#126) replayed the imports monthly-append splice check (round-1 fix, this file's 2026-08-22 entry, part (a)) against BB's REAL fiscal-year-rollover table shape via a reviewer-authored simulation script, rather than trusting the round-1 test suite's own rolled-FY test.

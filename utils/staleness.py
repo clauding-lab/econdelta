@@ -359,6 +359,14 @@ def _send_report(stale: list[StaleMetric], *, notifier: Callable[..., Any]) -> N
 # run's write after this check has already run (see aggregate_latest.py) —
 # that failure mode has its own, separate Discord alert already, so it is
 # out of scope here rather than double-covered.
+#
+# Second edge (R2 fix H5, owner decision m): the NBR year-to-date family
+# (`tax_revenue`, its alias `nbr_fytd_collected_cr`, the child
+# `fiscal_nbr_collected_trn`) is present in `data` every run but is re-sent
+# only when its (period, value) is new, so for these ids "present" no longer
+# means "ingested_at advanced". Predicate (b) is unaffected: it reads `data`
+# and the dates in hand, and "period frozen while the pipeline keeps reading
+# it" is still exactly the situation it describes.
 
 
 @dataclass(frozen=True)

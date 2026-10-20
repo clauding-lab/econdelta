@@ -13,6 +13,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from utils.calendar import load_holidays
+from utils.monthly_evidence import source_monitor
 from utils.notifier import notify
 from utils.supabase_reader import SupabaseReadError, fetch_all_freshness_rows
 
@@ -98,6 +99,11 @@ def main() -> int:
             m.latest_as_of, m.age_days,
         )
 
+    source_checks = source_monitor(now=now)
+    for mid, state in source_checks.items():
+        logger.info("Monthly source %s: %s; poll=%s; period=%s", mid,
+                    state["source_status"], state["job_status"], state["latest_source_period"])
+
     is_heartbeat = today.weekday() == HEARTBEAT_WEEKDAY
     if should_send(report, is_heartbeat_day=is_heartbeat):
         # 2026-08-08 review R3: pass is_heartbeat_day through so the
@@ -105,6 +111,13 @@ def main() -> int:
         # calendar heartbeat day regardless of whether today ALSO has
         # breaches (the breach digest branch, not just the quiet one).
         level, title, message, fields = format_digest(report, is_heartbeat_day=is_heartbeat)
+        # Keep source publication lag / unsupported coverage separate from
+        # observed-data freshness and the service's run_logs liveness.
+        fields["Monthly source coverage"] = (
+            "REER: unsupported; NBR monthly chart: frozen manual writer; non-NBR/non-tax: owner-blocked. "
+            "Source-poll details in local monthly_evidence receipts and sentinel logs; "
+            "a recent poll does not prove a successful write or current data."
+        )
         notify(level, title, message, fields)
     else:
         logger.info("no breaches and not heartbeat day — staying silent (run_logs proves liveness)")

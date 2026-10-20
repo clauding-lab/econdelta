@@ -1,4 +1,8 @@
-"""ONE-TIME BACKFILL — the 8-tenor T-bill/T-bond yield ladder, official
+"""READ-ONLY LEGACY INSPECTION — writes disabled pending reviewed R1 dates.
+
+Historical documentation follows; --write now refuses without network access.
+
+ONE-TIME BACKFILL — the 8-tenor T-bill/T-bond yield ladder, official
 controller-computed values for 3 frozen monthly chart-series ids per tenor.
 
 *** NOT wired into any pipeline. NOT run in CI. NOT executed as part of the ***
@@ -302,8 +306,7 @@ def run(argv: list[str] | None = None) -> int:
     p.add_argument("--dry-run", action="store_true",
                     help="build rows; print a summary; NO Supabase writes (default)")
     p.add_argument("--write", action="store_true",
-                    help="perform the REAL Supabase write. Needs SUPABASE_URL + "
-                         "SUPABASE_SERVICE_ROLE_KEY in the environment. Owner-run only.")
+                    help="retained for compatibility; refuses writes pending reviewed R1 evidence.")
     p.add_argument("--verbose", "-v", action="store_true")
     args = p.parse_args(argv)
 
@@ -311,6 +314,13 @@ def run(argv: list[str] | None = None) -> int:
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+
+    if args.write:
+        print("REFUSED: this legacy backfill labels grouping-month keys as auction evidence. "
+              "Use the separately reviewed R1 repair manifest with exact source dates; "
+              "--dry-run remains available for historical inspection. No writes performed.",
+              file=sys.stderr)
+        return 2
 
     history_rows = build_history_rows()
     definition_rows = build_definition_rows()
@@ -320,47 +330,8 @@ def run(argv: list[str] | None = None) -> int:
         len(history_rows), len(definition_rows),
     )
 
-    if not args.write:
-        _print_dry_run(history_rows)
-        logger.info(
-            "--dry-run (default): no writes performed. Pass --write (with "
-            "SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY set) to write for real."
-        )
-        return 0
-
-    # Real write path — deliberately NOT exercised by this PR or by any test
-    # that asserts an actual Supabase call goes out.
-    #
-    # PYTHONPATH lesson (Phase 1 box incident): bootstrap sys.path with the
-    # repo root BEFORE the lazy `from utils... import`, mirroring
-    # scripts/build_catalog.py's own pattern -- Python puts this script's
-    # OWN directory on sys.path[0] when invoked as a plain file path
-    # (`python scripts/backfill_yield_ladder_monthly.py --write`), not the
-    # repo root, so `import utils` would otherwise raise ModuleNotFoundError
-    # unless the caller happens to have PYTHONPATH=. set. --dry-run never
-    # exercises this import at all, so this bug is invisible until --write.
-    if str(REPO_ROOT) not in sys.path:
-        sys.path.insert(0, str(REPO_ROOT))
-    from utils.supabase_writer import (
-        SupabaseWriteError,
-        upsert_metric_definitions_monthly,
-        upsert_metric_history_monthly,
-    )
-
-    # History rows BEFORE the definitions re-point (Phase 1's H1 lesson):
-    # definitions are metadata-only and must never gate whether the 24
-    # controller-approved values land.
-    try:
-        sent_hist = upsert_metric_history_monthly(history_rows)
-        sent_defs = upsert_metric_definitions_monthly(definition_rows)
-    except SupabaseWriteError as e:
-        logger.error("write failed: %s", e)
-        return 1
-
-    logger.info(
-        "upsert ok: %d history rows -> metric_history_monthly, %d definitions -> "
-        "metric_definitions_monthly", sent_hist, sent_defs,
-    )
+    _print_dry_run(history_rows)
+    logger.info("Read-only historical inspection: no writes; source_as_of requires reviewed R1 evidence.")
     return 0
 
 

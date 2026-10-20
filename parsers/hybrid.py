@@ -29,7 +29,7 @@ LLM_TEXT_CAP = 30000
 # in bill_bond_rates, policy_rate_slf_sdf, and interbank_repo_data.
 LLM_HTML_CAP = 90000
 
-_PAGE_HINT_RE = re.compile(r"pages?\s+(\d+)", re.IGNORECASE)
+_PAGE_HINT_RE = re.compile(r"pages?\s*(?:=\s*)?(\d+)", re.IGNORECASE)
 # Block-level noise tags whose contents are never useful to Sonnet.
 _HTML_NOISE_TAGS = ("style", "noscript")
 _NOISE_RE = re.compile(
@@ -186,12 +186,17 @@ def _llm_extract(*, indicator: dict, artifact: FetchResult) -> Any:
             page_hint=page_hint,
             indicator_id=indicator["id"],
         )
+        if len(text) > LLM_TEXT_CAP:
+            raise MaxCallError(
+                f"PDF evidence excerpt for {indicator['id']} is {len(text)} chars, "
+                f"over the {LLM_TEXT_CAP}-char cap; refusing to send a truncated table"
+            )
         prompt = template.format(
             indicator_name=indicator["name"],
             instruction=instruction,
             value_type=indicator["parse"]["value_type"],
             valid_range=indicator["parse"]["valid_range"],
-            pdf_text=text[:LLM_TEXT_CAP],
+            pdf_text=text,
         )
     else:
         raw = artifact.artifact_path.read_text()
@@ -211,6 +216,8 @@ def _build_snapshot(
     provenance: str, parse_strategy: str, sanity_note: str | None = None,
     previous_value: float | None = None, change_pct: float | None = None,
     source_as_of: "date | None" = None,
+    unit: str | None = None,
+    release_status: str = "unknown",
 ) -> dict:
     snapshot: dict = {
         "indicator_id": indicator["id"],
@@ -230,6 +237,9 @@ def _build_snapshot(
     }
     if source_as_of is not None:
         snapshot["source_as_of"] = source_as_of.isoformat()
+    if unit is not None:
+        snapshot["unit"] = unit
+    snapshot["release_status"] = release_status
     return snapshot
 
 
@@ -340,6 +350,8 @@ def parse_one(
     parser = get_parser(parse_block["deterministic"])
     v_det: Any = None
     det_source_as_of = None  # publication date recovered by the deterministic parser
+    det_unit = None
+    det_release_status = "unknown"
     try:
         det_result: ParseResult = parser.parse(artifact, instruction)
         # value can be a dict (e.g. call_money) — only validate scalar values
@@ -347,6 +359,8 @@ def parse_one(
             validate_value(value=det_result.value, value_type=value_type, valid_range=valid_range)
         v_det = det_result.value
         det_source_as_of = det_result.source_as_of
+        det_unit = det_result.unit
+        det_release_status = det_result.release_status
     except (ParseError, InvalidValueError, ValueError) as e:
         # ValueError: a deterministic parser's own number-cleaning helper
         # (e.g. _to_number) can raise bare ValueError on unparseable residue
@@ -368,7 +382,8 @@ def parse_one(
         if isinstance(v_det, dict):
             return _build_snapshot(indicator=indicator, artifact=artifact, value=v_det,
                                    provenance="deterministic", parse_strategy=parse_block["deterministic"],
-                                   source_as_of=det_source_as_of)
+                                   source_as_of=det_source_as_of, unit=det_unit,
+                                   release_status=det_release_status)
         # Sanity-check via Sonnet (scalar values only)
         try:
             check_value = float(v_det)
@@ -379,12 +394,14 @@ def parse_one(
             logger.warning("sanity-check failed for %s: %s — emitting deterministic anyway", indicator["id"], e)
             return _build_snapshot(indicator=indicator, artifact=artifact, value=v_det,
                                    provenance="deterministic", parse_strategy=parse_block["deterministic"],
-                                   source_as_of=det_source_as_of)
+                                   source_as_of=det_source_as_of, unit=det_unit,
+                                   release_status=det_release_status)
 
         if plausible:
             return _build_snapshot(indicator=indicator, artifact=artifact, value=v_det,
                                    provenance="deterministic", parse_strategy=parse_block["deterministic"],
-                                   sanity_note=note, source_as_of=det_source_as_of)
+                                   sanity_note=note, source_as_of=det_source_as_of, unit=det_unit,
+                                   release_status=det_release_status)
         if not has_llm_fallback:
             # No LLM configured for this indicator (e.g. current_account_balance,
             # where the extraction prompt was itself the source of a two-month
@@ -415,7 +432,8 @@ def parse_one(
             return _build_snapshot(indicator=indicator, artifact=artifact, value=v_det,
                                    provenance="deterministic", parse_strategy=parse_block["deterministic"],
                                    sanity_note=f"sanity flagged (no llm cross-check available): {note}",
-                                   source_as_of=det_source_as_of)
+                                   source_as_of=det_source_as_of, unit=det_unit,
+                                   release_status=det_release_status)
         # Disagreement: cross-check with extract
         try:
             extract = _llm_extract(indicator=indicator, artifact=artifact)
@@ -425,17 +443,20 @@ def parse_one(
                     return _build_snapshot(indicator=indicator, artifact=artifact, value=v_det,
                                            provenance="deterministic", parse_strategy=parse_block["deterministic"],
                                            sanity_note=f"sanity flagged but extract agreed; {note}",
-                                           source_as_of=det_source_as_of)
+                                           source_as_of=det_source_as_of, unit=det_unit,
+                                   release_status=det_release_status)
             return _build_snapshot(indicator=indicator, artifact=artifact, value=v_det,
                                    provenance="needs_review", parse_strategy=parse_block["deterministic"],
                                    sanity_note=f"det={v_det} llm={v_llm} note={note}",
-                                   source_as_of=det_source_as_of)
+                                   source_as_of=det_source_as_of, unit=det_unit,
+                                   release_status=det_release_status)
         except MaxCallError as e:
             logger.warning("llm_extract failed for %s: %s", indicator["id"], e)
             return _build_snapshot(indicator=indicator, artifact=artifact, value=v_det,
                                    provenance="needs_review", parse_strategy=parse_block["deterministic"],
                                    sanity_note=f"sanity flagged, extract errored: {e}",
-                                   source_as_of=det_source_as_of)
+                                   source_as_of=det_source_as_of, unit=det_unit,
+                                   release_status=det_release_status)
 
     # Deterministic parse failed outright. If no LLM is configured for this
     # indicator, there is no extraction fallback left to try — go straight to

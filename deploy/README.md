@@ -50,6 +50,40 @@ sudo bash deploy/install.sh   # re-install units if any changed (incl. service .
 sudo bash deploy/uninstall.sh
 ```
 
+## Coordinated release order (data-reliability repair, R2 + R3)
+
+**TLDR.** EconDelta ships first; The Brief ships last; a rollback starts with The Brief. The
+full step list, with the pause and the Brief-side commands, is in The Brief's runbook
+(`the-brief` repo, `deploy/README.md`, section "Coordinated release order"). The older
+"Brief consumer first" order (R2 fix 12) is superseded: it was derived from a never-deployed
+hypothetical and reversed once measured on the deployed Brief (controller ruling 28 Sep 2026,
+step 2 amended 29 Sep 2026; AGENTS.md landmine 60).
+
+1. **This producer first, including the H5 NBR dating fix.** Merge `econdelta#137` on the
+   release night before the 01:00 BDT `econdelta-gitpull` (or earlier). The pull takes `main`
+   only; the branch changes no unit, so no `install.sh` run is needed.
+2. **History repair R1 with exclusions (d) + (l), owner-applied**, after that merge (optional)
+   but BEFORE the new producer's first `metric_history` write: the 02:55 BDT aggregate, the
+   03:15 BDT retry, a catch-up fire on an install, or any manual run. If R1 cannot finish in
+   time, stop `econdelta-aggregate.timer` and `econdelta-aggregate-retry.timer` until it has
+   (landmine 5: starting a `Persistent=true` timer after a missed slot fires it at once).
+   Before the new Brief's first fire the owner also applies the round-4 NBR exclusion
+   (restamps dated after 2026-09-24, value-bound, the 2026-06-30 period row kept).
+3. **The Brief's migration 0006**, owner-applied through the Supabase SQL editor.
+4. **The new Brief, before its 08:00 BDT fire**, once this producer's first daily write has
+   landed (the Hetzner `latest.json` carries a `write_status` block); steps in `the-brief`
+   `deploy/README.md`.
+
+**Transition window** (The Brief's G2 §8, measured): while the deployed Brief `a810fcb` still
+runs on this producer, the new EPB exports rows hide its Trade Gap card while exports lead
+imports, and an Opus-review quarantine before the first new-format 02:55 BDT archive drops the
+rejected family (no carried-over number), so that issue shows no USD/BDT, gold, Brent or WTI
+value and a false DSE "Non-trading day" reason. Watch the first night after the merge. The
+full list, and what to do if a later step slips, is in The Brief's runbook.
+
+**Roll back the Brief first**, then this producer only if needed: the new Brief on the old
+producer drops the USD/BDT, gold, Brent and WTI cards.
+
 ## Schedule (UTC — Bangladesh = UTC+6)
 
 | Timer | UTC | BDT |

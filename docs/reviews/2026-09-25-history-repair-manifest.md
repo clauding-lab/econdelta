@@ -1,0 +1,111 @@
+# Reviewed-candidate history repair — 26 September 2026 BDT
+
+**Status: proposed exact operations; production approval and application outstanding.** Code and isolated rehearsal are separate from authorization to alter live history.
+
+Current candidate (round 3, regenerated from committed code, 29 September 2026 BDT) SHA-256: `12abc596fc5fa7a2e41be9968df1a4f9b2c6b585e8808b16266cd9771c699aa3`. It names EconDelta `ebeeec3` (the generator for owner decisions (d) and (l) is committed in `b3d341d`) and Brief `677f7c1`. Compared with the reviewed round-3 bytes (`573b322f…d31c`, which named the uncommitted `6595f6c` / `3a543df`), exactly three values differ: `code_commits.econdelta`, `code_commits.brief` and `generated_at`; all 2,016 operations are identical. Earlier rounds are listed under "Revision rounds" below. Private execution packages are retained in the cross-project repair workspace, not committed. The manifest contains the full 40-character commits, source hashes, complete before/after images, exact keys and dependency order.
+
+The proposal has **2,016 operations: 6 inserts, 55 updates and 1,955 exact-key removals** (round 1's 1,535 removals, plus 140 under owner decision (d) and 280 under owner decision (l); see "NBR restamps"). Four tables change. Eight other backed-up tables, including every published edition and its children, are unchanged. The initial 12-table backup has 92,109 rows; every file hash and unique key was checked and its actual PostgreSQL restore previously passed. It is nontransactional; R3 must take and reconcile a final paused-writer snapshot.
+
+## What the removals mean
+
+The 1,955 removals are **proposed exclusions from active history, not a claim that all 1,955 numbers are false**. Many legacy daily stamps do not carry recoverable source periods. Some could represent legitimate observations; this proposal deliberately retains only independently verified periods within the selected families. Approval therefore accepts reduced historical chart coverage. All removed rows remain unchanged in the hashed original export, and reverse operations restore their exact original images. There is no broad SQL predicate or whole-table delete.
+
+## Counts by exact series
+
+| Table / series | Insert | Update | Remove |
+|---|---:|---:|---:|
+| `metric_definitions` / `gdp` | 0 | 1 | 0 |
+| `metric_definitions` / `gdp_growth_fy_pct` | 1 | 0 | 0 |
+| `metric_definitions_monthly` / `net_reserves_bpm6_usd_bn_monthly` | 0 | 1 | 0 |
+| `metric_history` / `bank_borrowing_for_deficit_financing` | 0 | 2 | 35 |
+| `metric_history` / `banking_broad_money` | 0 | 3 | 137 |
+| `metric_history` / `banking_deposits` | 0 | 2 | 36 |
+| `metric_history` / `banking_excess_liquid` | 0 | 0 | 38 |
+| `metric_history` / `banking_money_multiplier` | 0 | 2 | 36 |
+| `metric_history` / `banking_reserve_money` | 0 | 3 | 137 |
+| `metric_history` / `broad_money` | 0 | 3 | 137 |
+| `metric_history` / `crr_utilisation_pct` | 1 | 1 | 109 |
+| `metric_history` / `currency_outside_bank` | 0 | 2 | 36 |
+| `metric_history` / `debt_gdp_ratio` | 0 | 0 | 29 |
+| `metric_history` / `debt_gdp_ratio_proj` | 0 | 0 | 6 |
+| `metric_history` / `deposits_held_with_bb_crr` | 0 | 2 | 36 |
+| `metric_history` / `deposits_of_the_system` | 0 | 2 | 36 |
+| `metric_history` / `domestic_borrowing_for_budget_deficit` | 0 | 2 | 35 |
+| `metric_history` / `excess_liquid_asset_total_minimum` | 0 | 0 | 38 |
+| `metric_history` / `fiscal_bank_borrow_trn` | 0 | 2 | 35 |
+| `metric_history` / `fiscal_foreign_borrow_trn` | 0 | 2 | 35 |
+| `metric_history` / `fiscal_govt_borrow_trn` | 0 | 2 | 35 |
+| `metric_history` / `fiscal_nbr_collected_trn` | 0 | 0 | 140 |
+| `metric_history` / `foreign_borrowing_for_budget_deficit` | 0 | 2 | 35 |
+| `metric_history` / `gdp` | 0 | 0 | 126 |
+| `metric_history` / `gdp_growth_fy_pct` | 2 | 0 | 0 |
+| `metric_history` / `money_multiplier` | 0 | 2 | 36 |
+| `metric_history` / `monthly_import_lc_opening` | 1 | 3 | 35 |
+| `metric_history` / `monthly_import_lc_settlement` | 1 | 3 | 35 |
+| `metric_history` / `nbr_fytd_collected_cr` | 0 | 0 | 140 |
+| `metric_history` / `non_bank_borrowing_for_deficit_financing` | 0 | 2 | 35 |
+| `metric_history` / `reserve_money` | 0 | 3 | 137 |
+| `metric_history` / `slr_utilisation_pct` | 0 | 0 | 110 |
+| `metric_history` / `tax_revenue` | 0 | 0 | 140 |
+| `metric_history_monthly` / `tbill_182d_yield_monthly` | 0 | 1 | 0 |
+| `metric_history_monthly` / `tbill_364d_yield_monthly` | 0 | 1 | 0 |
+| `metric_history_monthly` / `tbill_91d_yield_monthly` | 0 | 1 | 0 |
+| `metric_history_monthly` / `yield_10y_monthly` | 0 | 1 | 0 |
+| `metric_history_monthly` / `yield_15y_monthly` | 0 | 1 | 0 |
+| `metric_history_monthly` / `yield_20y_monthly` | 0 | 1 | 0 |
+| `metric_history_monthly` / `yield_2y_monthly` | 0 | 1 | 0 |
+| `metric_history_monthly` / `yield_5y_monthly` | 0 | 1 | 0 |
+
+## Source-supported corrections and unresolved decisions
+
+- **MEI banking:** June-MEI May readings are preserved at 31 May before occupied 30 June keys are replaced with July-MEI June readings. Deposits: 2,041,692.7 → 2,079,911.1 crore; currency outside banks: 349,374 → 336,375.2 crore; reserve money: 485,542.3 → 476,368.6 crore; deposits held with BB: 115,326.7 → 106,100.1 crore; multiplier: 4.92 → 5.07. The source held-with-BB row includes NBFCs; the ratio is not statutory compliance.
+- **WSEI money:** broad money and reserve money are 2,422,923.9 and 463,461.4 crore for 31 July. The July headings do not carry a P/R marker: these facts, their aliases and both July LC facts carry release status `unknown`. Their September daily stamps are excluded. Genuine May/June MEI observations remain separately dated; no cover date is used as a period.
+- **LC wrong-year repair:** 6,067.72/6,104.03 million USD belong to July 2025 and are explicitly inserted at 31 July 2025. May 2026 keeps the accepted June-MEI vintage 6,212.75/5,837.67. June becomes 6,198.59/7,116.88; July 2026 becomes the WSEI 6,901.7/6,279.3. July-MEI revisions of May to 6,422.17/5,864.42 remain an unresolved revision proposal, not silently accepted.
+- **Borrowing:** May is July–May FY26; June is the full FY26. Bank/nonbank/domestic/foreign June values are 165,538.20/−847.17/164,691.03/57,743.60 crore. The 118,000 budget target is not an observation. Bank, domestic and foreign aliases are recomputed in BDT trillion (crore ÷100,000), preserving negative nonbank repayment.
+- **Aliases and ratios:** five relevant banking aliases and three fiscal conversions are rebuilt from the same verified parent period. CRR-labeled balance/deposit ratios are 5.6486% for May and 5.1012% for June. No July ratio is manufactured. SLR and its excess-liquidity numerator/alias have no verified period in this package: their rows are proposed for exclusion and remain unavailable until evidence is recovered. This is a product availability decision still requiring approval.
+- **GDP:** verified FY25 revised 3.49% and FY26 provisional 4.14% move to `gdp_growth_fy_pct`, with fiscal years ending 30 June. The legacy `gdp` definition is deprecated; its 126 daily stamps remain only in backup. There is no inference of historical periods from counts or equal values.
+- **IMF/MoF:** 29 explicitly IMF-sourced mixed-namespace rows and six separately identified projection rows are archived/excluded by exact key. Future forecasts are retained as forecast evidence in backup; their numbers are not shifted into observed history. The raw historical IMF numerical document is absent, so no historical values are promoted under the new IMF ID. Five EconDelta/MoF candidate rows remain unchanged and unresolved; no claim is made that their dates are verified. The future-date sentinel exceptions remain until approved cleanup/read-back.
+- **BPM6:** only the monthly definition label/description changes to “FX reserves (BPM6 gross)”. Stable ID and all values stay unchanged. The preserved official BB reserves HTML and the accepted E4 semantic contract support this.
+- **Auction May:** eight source dates change from month-first placeholders to source **issue/settlement** dates, with identical cutoff yields and monthly buckets. The preserved BB source is a real capture from the original auction scraper commit. It does not establish the auction-held dates. The sixteen June/July candidates have only backup corroboration: they remain unchanged and unresolved. No one-day subtraction.
+- **CPI:** disputed provenance/values remain unchanged. A new trusted-source label does not retrospectively validate a disputed reading.
+- **EPB/NBR:** accepted EPB-via-BSS monthly history remains unchanged; official July/August workbooks are not speculatively spliced. Frozen NBR monthly archive remains intact. Other slow-series histories outside these selected families remain unresolved/out of scope for this bounded manifest.
+- **NBR restamps (owner decisions (d), 26 Sep, and (l), 28 Sep 2026 BDT):** EconDelta re-saved the standing fiscal-year NBR collection every capture day with that day as `as_of` (landmine 47), so these dates are capture days, not collection periods. The candidate removes exactly 140 rows each of `fiscal_nbr_collected_trn` (trillion, the ×0.00001 conversion child), `tax_revenue` (crore, the parent) and its plain alias `nbr_fytd_collected_cr`. All three have the same dates, 2026-05-02..2026-09-24, with six capture days absent (06-14, 06-15, 08-30, 08-31, 09-01, 09-09); every row is EconDelta-sourced with null provenance. Each id is bound to its own reviewed value on each date. Parent runs: 119,478.0 (05-02), 287,862.59 (05-03..06-01), 326,928.16 (06-02..06-28), 360,642.0 (06-29..09-05), 415,473.0 (09-06..09-24). The alias starts differently: 287,431.0 (05-02..05-24), then 287,862.59 (05-25..06-01), then the same three later runs. The child equals the parent ×0.00001 to two decimals (1.19/2.88/3.27/3.61/4.15). The generator refuses any other backup shape: an extra or missing day, a moved value, another source or dated provenance. A recaptured snapshot therefore needs a new owner decision. None of these ids has a verified source fact, so the removals have no prerequisites. The card shows the last properly dated figure or "unavailable". The retired news corroborators `nbr_fytd_collected_dailystar` and `nbr_fytd_collected_tbs` (24 rows each, deprecated, `alias_of` `tax_revenue`) are in neither decision and stay unchanged. So do the other analogous restamp families listed for a separate owner decision.
+- **NBR release order (must hold at apply time; R1B round 1, 29 Sep 2026 BDT):** the reviewed window contains real month-end keys. The new producer (source-period dating plus fix H5) writes each NBR id at the period its source states, and on the 25 Sep input that is FY26 = `2026-06-30` (tax_revenue and alias 415,473.0; child 4.15). Its first aggregate write therefore lands on the reviewed restamp key `(id, 2026-06-30)`, whose reviewed value is 360,642.0 / 3.61, and replaces that row. If the source states July FY27 (`2026-07-31`), it also lands on a reviewed key. After that, the reviewed before-image no longer matches. The engine's whole-batch pre-check refuses the entire manifest before any write: it fails safe, with no partial removal and no data loss. Regenerating from a recapture refuses too. Consequences:
+  1. Apply decisions (d)+(l) **before the new producer's first `metric_history` write**. That means any aggregate run: the scheduled 02:55 BDT fire, the 03:15 retry, a deploy catch-up fire or a manual run. Applied then, the producer's period row is a fresh insert, and the history ends with exactly one properly dated row per id.
+  2. If the new producer has already written, the reviewed list cannot be applied as is. Any replacement list must **keep** the producer's rows at their source period (06-30, and 07-31 if written). It may exclude only capture-date restamps, with each key bound to its reviewed restamp value. It must never be "the reviewed keys plus everything recaptured". It also needs a new owner decision.
+  3. **Verified release blocker (R1B round 2, 29 Sep 2026 BDT): items 1–2 are not enough for the new Brief.** The deployed producer keeps adding a capture-date restamp of all three ids on each capture day after 2026-09-24 (landmine 47), until the new producer replaces it; the backup shows it did so on 140 of the 146 days up to 09-24. The reviewed list does not cover those rows. Each one is newer than the producer's 06-30 period row, so the Brief's NBR card reads it (for example 4.15 dated 2026-09-25) while the accepted observation says 4.15 dated 2026-06-30. The new Brief then **HOLDs** (`fiscal_nbr_collected_trn: builder and accepted observation disagree`) on every fire, with no end: the new producer re-sends nothing once its period is recorded, so the restamp stays the newest row. It fails safe (no wrong number is published), but following items 1–2 alone leads to a HOLD on the new Brief's first 08:00 BDT fire. Remedy, before the new Brief's first fire: a **further owner-reviewed exclusion** of exactly those post-24-Sep capture-date restamps (from 2026-09-25 to the last capture day of the deployed producer), taken from the paused-writer recapture with each key bound to its value, as for (d)+(l). It must **keep** the producer's period row: deleting that row too leaves the card blank and still HOLDs. Until that decision exists, the release is blocked. Pinned in the Brief by `tests/test_r1_nbr_post_window_restamp_blocker.py` (real builders and readiness on the contract's real first night; the post-window rows are labelled synthetic).
+
+  Items 1–2 are pinned by `tests/test_r1_nbr_exclusion_release_order.py`, which runs the real first night on the shared contract's real 25 Sep input.
+- **Published Briefs:** no existing editorial record is rewritten. The B1 crash/previous-edition visibility blocker remains R3-owned.
+
+## Safety contract and operator sequence
+
+1. Keep the original backup, source files and reviewed manifest immutable. Verify the manifest hash and every referenced file. Paths are part of the reviewed bytes: copying evidence to different absolute paths requires a newly reviewed manifest hash. Do not edit paths after approval.
+2. `python -m scripts.history_repair_candidates --backup-dir PATH --source-root PATH --target supabase:ssbliukchgibjcjohibi --econdelta-commit FULL_SHA --brief-commit FULL_SHA --output candidate.json` only builds a proposal from the verified twelve-table snapshot. It cannot connect to a database.
+3. `python -m scripts.repair_observation_history --plan --candidate candidate.json --target TARGET --expected-sha256 HASH --out-dir NEW_DIRECTORY` validates all references and writes a reviewable manifest; it is read-only.
+4. Before any production action: separately approve exact operations/definitions/exclusions, deploy repaired producers/consumer (but apply the NBR decisions (d)+(l) before the new producer's first history write, and a further owner-reviewed exclusion of the post-24-Sep NBR restamps before the new Brief's first fire; see "NBR release order", item 3), resolve R3 identity/visibility and other preconditions, pause every overlapping writer including direct writers/media/Mac sync/Brief publication, take final backup and recheck complete before-images. Offset paging can omit records during concurrent deletes; keyset paging can miss inserts below its cursor, and separate table reads are not one transaction. Pause writers before the final export and verify counts, unique keys and parent/child integrity against the frozen database. Routine concurrent backups require a transactionally consistent snapshot mechanism. Changed before-images require a fresh proposal/review, not a force flag.
+5. `--apply MANIFEST --target TARGET --expected-sha256 HASH --out-dir RECEIPT_DIRECTORY --writers-paused` applies only exact reviewed keys. Production credentials come only from the approved environment. The exact project HTTPS hostname must match `SUPABASE_URL`. Never run two repair sessions with different receipt directories. Keep writers paused throughout: REST GET/PATCH does not provide a cross-request transaction.
+6. Reuse the SAME manifest and receipt directory after interruption. An after-image without this session’s durable pre-write intent is a conflict. The receipt file is private, atomically replaced and flushed to disk before each mutation and after full-row read-back. Already-confirmed operations are checked but not rewritten.
+7. `--restore RECEIPTS --target TARGET --expected-sha256 RECEIPT_HASH --out-dir PATH --writers-paused` freezes reverse operations, restores in reverse order and refuses a current row that differs from the expected after-image. It never overwrites a newer legitimate update. Reuse the same receipt hash to resume an interrupted restore; the separate `.restore.json` records progress. After restore begins, apply-resume is refused.
+
+The Docker target has a separate reviewed hash and must explicitly name the existing container/database. It refuses a container with network access, exposed ports or a PostgreSQL network listener. It locks and compares each exact row inside a database transaction, preserving JSONB types. This is a rehearsal transport, not production infrastructure recovery.
+
+## Verification boundary
+
+Focused tests before rehearsal: EconDelta 37 passed, Brief exporter 15 passed. Tests cover server caps, wrong target/hash, full before-image conflict, occupied destination, duplicate operations/keys, missing evidence/backups, whole-batch preflight, crash after commit, resume, already-applied operations, Boolean/number and nested JSON distinctions, interrupted restore and refusing rollback after a newer update. Initial actual restore proof is already approved. R1 actual mutation/rollback results and final hashes are recorded in the private task report; final full-suite matrix belongs to R2. No production changes, model calls, email, Discord, pushes, merges or deployments were performed.
+
+The first candidate and its receipts remain immutable under the original hash in the private workspace. The revised candidate changes exactly six after-images, solely their release-status provenance; code references and the manifest generation timestamp are updated. Proposed row ingestion timestamps retain the initial snapshot proposal stamp, so unrelated after-images remain byte-for-byte comparable. A recorded exact delta binds the full first-candidate mechanical rehearsal to a separately hashed six-operation revised-image rehearsal; the final baseline comparison must still pass. Neither candidate is approved for production.
+
+## Revision rounds
+
+Each round keeps every earlier operation byte-identical and in the same relative order. Earlier candidate bytes are never modified. A recorded delta proof binds each round to the previous one. Every isolated rehearsal ran on the network-less Docker target. It started from and returned to the exact twelve-table baseline (92,109 rows): typed bidirectional comparison of every table, with a read-only negative control that fails while the delta is applied.
+
+| Round | Candidate SHA-256 | Operations | Change vs previous round | Isolated delta rehearsal |
+|---|---|---:|---|---|
+| Initial | `70ff6cce…d615ae` | 1,596 | — | Docker package `ab91b3bf…2ebc`: full apply, interrupted apply/resume, newer-update refusal, interrupted restore/resume, baseline recovered |
+| 1 | `f8f8fcf6…5e56` | 1,596 | Six WSEI July after-images: release status provisional → unknown | Six-operation package `ee857009…63d0`: apply, inspect, idempotent re-apply, whole-DB delta compare, restore, baseline recovered |
+| 2 | `6229c489…47ce` | 1,736 | +140 `fiscal_nbr_collected_trn` removals (decision (d)), contiguous after the other history removals | 140-operation package `7a2f04cc…bff52`: same steps, all passed, baseline recovered |
+| 3 | `573b322f…d31c` | 2,016 | +280 removals (decision (l)): `tax_revenue` then `nbr_fytd_collected_cr`, contiguous right after the decision-(d) block; top-level change only `generated_at` | 280-operation package `c8632826…d44c`: apply (280 confirmed), inspect, idempotent re-apply (receipt unchanged), whole-DB delta compare, restore (280 confirmed, exact reverse order), baseline recovered |
+| 3, committed | `12abc596…9aa3` | 2,016 | Regenerated from committed code: only `code_commits` (EconDelta `ebeeec3`, Brief `677f7c1`) and `generated_at` differ; every operation byte-identical to round 3 | Not re-rehearsed (no operation changed); the round-3 rehearsal applies |
+
+The offline exact-image dry-run of the full round-3 candidate confirmed all 2,016 operations. Its daily history holds 19,023 rows, 280 fewer than round 2, and nothing else differs. None of these rounds approves production application. That still needs the whole final list approved at release, a fresh paused-writer backup and the R3 preconditions above.

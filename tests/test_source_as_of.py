@@ -25,7 +25,7 @@ import parsers.dam_ticker  # noqa: F401 — registers dam_ticker parser
 import parsers.html_footer_ticker  # noqa: F401 — registers html_footer_ticker parser
 import parsers.pdf_component  # noqa: F401 — registers pdf_component parser
 from fetchers.base import FetchResult
-from parsers.base import ParseResult
+from parsers.base import ParseError, ParseResult
 from parsers.registry import get_parser
 from utils.supabase_writer import _rows_from_data, upsert_metric_history
 
@@ -168,12 +168,12 @@ class TestDamTickerSourceAsOf:
         result = parser.parse(artifact, instruction="চিনি (দেশী)")
         assert result.source_as_of == date(2026, 5, 4)
 
-    def test_falls_back_to_none_when_no_date_header(self, tmp_path: Path):
-        """Page without a date header yields source_as_of=None (not a crash)."""
+    def test_rejects_page_without_actual_report_date(self, tmp_path: Path):
+        """Undated ticker rows cannot be promoted as current observations."""
         artifact = _make_dam_html(tmp_path, "", _DAM_TICKER)
         parser = get_parser("dam_ticker")
-        result = parser.parse(artifact, instruction="চিনি (দেশী)")
-        assert result.source_as_of is None
+        with pytest.raises(ParseError, match="actual report date"):
+            parser.parse(artifact, instruction="চিনি (দেশী)")
 
     def test_value_extraction_unaffected_by_date(self, tmp_path: Path):
         """Midpoint math is unchanged after adding date extraction."""

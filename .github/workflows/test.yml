@@ -48,3 +48,11 @@ jobs:
 
       - name: Test (pytest)
         run: pytest -q
+
+      # The PWA must render old and observation-enriched latest.json identically; no workflow ran pwa/tests before.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Test PWA (node --test)
+        run: node --test pwa/tests/*.test.mjs

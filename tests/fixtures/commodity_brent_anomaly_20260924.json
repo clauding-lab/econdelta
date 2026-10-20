@@ -1,0 +1,18 @@
+{
+  "ticker": "BZ=F",
+  "quote_date": "2026-09-24",
+  "quoted_price_usd_per_barrel": 106.95,
+  "provider_previous_close": 97.22,
+  "accepted_prior_metric_history": {
+    "as_of": "2026-09-23",
+    "value": 98.32
+  },
+  "configured_anomaly_threshold": 0.08,
+  "observed_change_vs_accepted_prior": 0.08777461350772946,
+  "independent_but_not_exact_corroboration": {
+    "source": "Reuters report republished by AOL",
+    "session_date": "2026-09-24",
+    "brent_settlement_usd_per_barrel": 106.6,
+    "does_not_match_exact_instrument_quote": true
+  }
+}

@@ -50,6 +50,90 @@ There is also a **cold local archive** at
 serialised once per successful aggregate. This is your fallback if
 Supabase ever goes away or needs to be rebuilt; see [§9 Backfill].
 
+**Held days leave an operations receipt, not a new snapshot.** When the
+Opus review hard-rejects a run, `data/latest.json` keeps the previous
+accepted snapshot byte-for-byte, so its `updated_at` still shows that
+older capture time and a reader sees its true age. The independent monthly
+appenders still run, and this attempt's outcome (daily `skipped`, plus the
+per-leg monthly `ok`/`failed`/`skipped` receipt) is written atomically to
+`data/latest.attempt.json`. That sidecar is for operators on ExonVPS only:
+it is not part of this contract, The Brief does not read it, and the
+five-minute Hetzner pull transfers `latest.json` only. If the sidecar
+cannot be written, the run still exits 1, `latest.json` is untouched, and
+the same outcome is logged at ERROR instead; an older sidecar, if present,
+is left as it was and is dated by its own `attempted_at`.
+
+**`write_status` is a validated contract (`utils/schema.py::WriteStatus`).**
+It is absent (or `null`) only in snapshots from pre-receipt producers; that
+means "unconfirmed", never "ok". When present it has `daily` and `monthly`
+receipts and, from R2 fix 10, `media_overrides`. Every receipt has `status`
+exactly `ok` (written and confirmed by readback), `failed` (a write, read or
+readback failed or went unconfirmed) or `skipped` (nothing needed writing), a
+timezone-aware `attempted_at`, and optionally `reason`, `confirmed_rows`,
+`failures`, `skips` and nested `legs`. A leg's failure always shows in its
+parent's status. `daily` describes the main `metric_history` write only; the
+approved-press override re-assertion that follows it has its own
+`media_overrides` receipt (no exact readback exists for override rows, so a
+sent override is `failed`/unconfirmed, never `ok`). The producer validates the
+receipt before writing and refuses to write one that breaks the contract.
+
+**NBR fiscal-year-to-date rows (R2 fix H5, owner decision m).** `tax_revenue`
+(BB WSEI "Tax Revenue (NBR)"), its alias `nbr_fytd_collected_cr` and its
+trillion child `fiscal_nbr_collected_trn` are dated by the period the source
+itself states (the child always carries the parent's date) and are sent to
+`metric_history` only when that exact `(metric_id, period)` does not already
+hold the same value written by the daily writer (source `EconDelta`); a row on
+file under another source, e.g. an approved press override BB has since
+superseded, is replaced by the producer's own. Each id is judged on its own row.
+The daily receipt then lists a `skips` entry per id left
+out: `period already recorded` (same value already on file for that period;
+nothing re-sent) or `no source period` (the source stated no period; nothing
+dated or written). Both leave the daily `status` unchanged. If the table cannot
+be read first, the dated rows are sent as before (same key, never a new date).
+
+**Upstream CPI/M2 source-poll liveness (R2 fix 5).** Besides the three scraper
+sources, `sources_status` carries `cpi_upstream_poll` (cpi_12m_avg_monthly,
+cpi_p2p_food_monthly, cpi_p2p_nonfood_monthly) and `m2_upstream_poll`
+(m2_growth_yoy_monthly), built from the local source-poll receipts
+(`utils/monthly_evidence.source_monitor`) after the monthly appenders run. A
+family is `ok` only when every metric has a typed `upstream-source` receipt
+checked within the existing 26-hour job-check window; an older poll is `stale`;
+a database-reread-only, untyped, missing or unreadable receipt is `missing`.
+`error` names the gap and the metric ids. The CPI/M2 monthly legs derive from
+our own daily table, so their successful database reread is never liveness.
+
+*Upstream-poll receipts (R2 fix H3).* The only job that polls BB's CPI/M2 pages
+is the daily fetch stage (`fetch_all`, 01:10 BDT): `general_inflation`,
+`food_inflation`, `non_food_inflation` and `m2_growth_yoy_pct`. Each of those
+fetches now writes `data/upstream_polls/<source id>.json` (`utils/upstream_poll.py`),
+a directory the monthly legs' `data/monthly_evidence/<metric_id>.json` rereads
+never write. A receipt holds `status` (`ok` = fetched and the page's own period
+read; `failed` = the fetch raised; `unknown` = fetched but no period could be
+read, e.g. a bot-challenge page), a timezone-aware `checked_at`, the
+`latest_source_vintage` the page states (read without a model call: the
+deterministic parser's date, or for the MEI PDF the same report date the parse
+stage stamps), `reason` (exception type only) and `last_success_at`. Where a
+metric has a poll receipt it decides that metric: `failed` makes the family
+`failed`; `unknown`, an unreadable or a future-dated receipt reads `missing`; a
+receipt older than the family's accepted poll cadence (26 hours: one daily
+fetch plus slack) reads `stale` ("stale poll"). A live, in-cadence poll is `ok`
+only when our own table already holds the month the page states: the aggregate
+compares `latest_source_vintage` with the monthly leg's database-reread period
+(`latest_database_period`) by month. A page ahead of it reads `stale` ("source
+states a newer period than we have recorded (page …, recorded …)"), because a
+CPI/M2 leg's "no newer database vintage" is then our pipeline lagging the
+source, not BB's publication lag; no recorded month to compare reads `missing`.
+A damaged receipt (not UTF-8, not JSON, nested too deep) reads `missing` and
+never crashes the aggregate. `last_success`/`age_hours` are
+the family's oldest successful poll, filled only when every member has one.
+A metric with no poll receipt falls back to the E6 row above (so a producer
+whose fetch has not yet run reads exactly as before). These two entries do not raise the
+aggregate's "sources not OK" alert; The Brief reports them as a degraded
+(log-only) reason. The Brief requires both keys: a snapshot that lacks one
+(an older producer during a deploy, or a regression that drops it) reads that
+family as `missing` (liveness not reported), never as polled. Pinned by the
+shared `upstream_liveness_contract` fixture.
+
 ## 2. Connecting
 
 ### Project URL
@@ -155,6 +239,11 @@ The value type per indicator is in the catalog. Decoder:
 | `amount_usd_mn` | USD in millions | `2890` for USD 2.89bn equivalent |
 | `ratio` | Plain ratio | `5.16` for money multiplier |
 | `count` | Integer count | `123` for #-of-banks |
+
+GDP growth is `gdp_growth_fy_pct`, measured in percent and observed once per
+Bangladesh fiscal year. The WSEI's FY26P value `4.14` represents the year
+ending 2026-06-30; its provisional marker remains visible in source metadata.
+There is no monetary GDP series under the old ambiguous `gdp` key.
 
 ## 4. Indicator catalog
 
@@ -535,10 +624,23 @@ new default.
 | quarterly | 165 days | |
 | fiscal_year | 400 days | |
 
-**Future `as_of` is excluded from "latest".** `debt_gdp_ratio` carries 6 IMF
-**projection** rows out to `2031-12-31` (verified 2026-07-09; latest *real*
-vintage is `2026-06-05`). Any "latest" read must filter `as_of <= current_date`
-or it will read a value from the future.
+**Fiscal debt series are separate by source and meaning.** `debt_gdp_ratio` is
+the MoF Debt Bulletin's latest public-debt ratio. IMF DataMapper's
+general-government gross debt/GDP history uses
+`imf_general_govt_debt_pct_gdp`; each year is stamped at Bangladesh's fiscal
+year end (30 June), and an incomplete fiscal year is not written. The IMF's
+full response is kept in `data/archive/imf_debt_gdp/` with its UTC retrieval
+time so estimates and projections remain available as source evidence. The
+series is not independently audited by this pipeline.
+
+**Existing mixed history still needs the reviewed R1 repair.** The prior
+projection split was verified on 2026-07-10, but the fresh full-table backup
+captured 2026-09-25 again contained IMF rows, including future years, under
+`debt_gdp_ratio` (and a separate projection series). This code change stops
+new IMF writes to the MoF key; it does not rewrite existing database rows.
+Until the exact R1 manifest is applied and read back, consumers must continue
+to exclude future `as_of` values from "latest" and must treat the old
+`debt_gdp_ratio` history as mixed-source legacy data.
 
 ### 10.2 The surface: `v_metric_freshness`
 
@@ -552,9 +654,13 @@ from this **one view** instead of hand-rolling staleness. The freshness sentinel
 > `pg_get_viewdef` (the `v_metric_freshness` definition is byte-identical to Block
 > 2), the `grace_days` seeding (Block 1 tiers all present), the deprecation flags
 > (Block 3, on every legacy id that has a definition row), the anon-policy set
-> (Block 4 — one anon SELECT policy per history table, duplicates gone), and the
-> projection split (Block 5 — `debt_gdp_ratio` has 0 future rows,
-> `debt_gdp_ratio_proj` holds the 6). Tracked in `supabase/migrations/0012_freshness_contract_e31.sql`.
+> (Block 4 — one anon SELECT policy per history table, duplicates gone). The
+> 2026-07-10 projection split moved the then-existing future rows, but the
+> 2026-09-25 backup found that the legacy IMF writer had repopulated mixed
+> `debt_gdp_ratio` history. E4 separates future writes; the one-time history
+> reconciliation is tracked in the cross-project R1 repair plan and remains
+> unapplied. The historical verification below does not describe current row
+> contents.
 > These are DDL/data changes for Adnan's SQL editor only (no programmatic path —
 > the DB is shared with The Brief; `db push` can't reconcile it). Each block is
 > idempotent, so re-running is a safe no-op — but nothing here needs re-applying.
@@ -680,14 +786,10 @@ select tablename, count(*) as anon_select_policies
  group by tablename;   -- expect 1 and 1
 ```
 
-**Block 5 (optional) — split the IMF projections off `debt_gdp_ratio`** so no
-"latest" read can ever touch a future vintage (the view already filters them, so
-this is cleanliness, not correctness):
-
-```sql
-update metric_history set metric_id = 'debt_gdp_ratio_proj'
- where metric_id = 'debt_gdp_ratio' and as_of > current_date;
-```
+The old Block 5 SQL moved future-stamped IMF rows to
+`debt_gdp_ratio_proj`. It is historical, one-time SQL and is not a substitute
+for the reviewed R1 manifest: it cannot distinguish MoF observations from IMF
+rows or reconcile the complete before-images.
 
 **Verification (run after applying):**
 

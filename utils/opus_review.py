@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import re
 import subprocess
@@ -19,6 +20,8 @@ from collections.abc import Iterable, Mapping
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+from utils.observations import WRITER_CONFIRMATION_IDS
 
 logger = logging.getLogger("opus_review")
 
@@ -110,6 +113,52 @@ def _extract_json_object(text: str) -> dict[str, Any] | None:
         except json.JSONDecodeError:
             return None
     return None
+
+
+def _skipped_verdict(reason: str) -> dict[str, Any]:
+    return {"status": "ok", "reason": f"review_skipped: {reason}", "skipped": True}
+
+
+def _decode_verdict_shape(value: object) -> dict[str, Any]:
+    """Validate reviewer output without turning malformed rejects into approval."""
+    if not isinstance(value, dict):
+        return _skipped_verdict("invalid_verdict_shape")
+    status = value.get("status")
+    if not isinstance(status, str) or status not in {"ok", "reject"}:
+        return _skipped_verdict("invalid_verdict_shape")
+    reason = value.get("reason")
+    missing = value.get("missing")
+    anomalies = value.get("anomalies")
+    confidence = value.get("confidence")
+    shape_ok = (
+        isinstance(reason, str)
+        and isinstance(missing, list)
+        and all(isinstance(item, str) and item for item in missing)
+        and isinstance(anomalies, list)
+        and all(
+            isinstance(item, dict)
+            and isinstance(item.get("indicator"), str)
+            and bool(item["indicator"])
+            for item in anomalies
+        )
+        and isinstance(confidence, (int, float))
+        and not isinstance(confidence, bool)
+        and math.isfinite(confidence)
+        and 0 <= confidence <= 1
+    )
+    if shape_ok:
+        return {**value, "reason": reason, "missing": missing, "anomalies": anomalies}
+    if status == "reject":
+        # Preserve an explicit rejection with an unmappable id so aggregation
+        # hard-holds rather than guessing what the malformed result intended.
+        return {
+            "status": "reject",
+            "reason": "review rejection has unmappable fields",
+            "missing": [""],
+            "anomalies": [],
+            "unmappable": True,
+        }
+    return _skipped_verdict("invalid_verdict_shape")
 
 
 def review_data(
@@ -204,14 +253,9 @@ def review_data(
         logger.warning("opus review output not parseable: %s", result.stdout[:300])
         return {"status": "ok", "reason": "review_skipped: malformed_output", "skipped": True}
 
-    # Normalise required keys
-    verdict.setdefault("status", "ok")
-    verdict.setdefault("reason", "")
-    verdict.setdefault("missing", [])
-    verdict.setdefault("anomalies", [])
-    if verdict["status"] not in ("ok", "reject"):
-        logger.warning("opus review returned unexpected status %r — treating as ok", verdict["status"])
-        verdict["status"] = "ok"
+    verdict = _decode_verdict_shape(verdict)
+    if verdict.get("skipped"):
+        logger.warning("opus review verdict skipped: %s", verdict["reason"])
     return verdict
 
 
@@ -265,9 +309,78 @@ def load_history(archive_dir: Path, days: int = 5) -> list[dict[str, Any]]:
             for iid, entry in block.items():
                 if isinstance(entry, dict) and entry.get("source_as_of"):
                     as_of[iid] = str(entry["source_as_of"])
+        observations = blob.get("observations")
+        if not isinstance(observations, dict) or not observations:
+            observations = {}
+            # Pre-E1 archives can be decoded only where the individual domain
+            # snapshot has a genuine source_as_of matching its own scalar.
+            updated_at = blob.get("updated_at")
+            for block in (blob.get("domains") or {}).values():
+                if not isinstance(block, dict):
+                    continue
+                for iid, entry in block.items():
+                    if not isinstance(iid, str) or not isinstance(entry, dict):
+                        continue
+                    source_date = entry.get("source_as_of")
+                    value = entry.get("value")
+                    data = blob.get("data")
+                    if (
+                        not isinstance(source_date, str)
+                        or not source_date
+                        or not isinstance(data, dict)
+                        or iid not in data
+                    ):
+                        continue
+                    if data.get(iid) != value:
+                        continue
+                    raw_quality = entry.get("quality", "verified")
+                    if (
+                        not isinstance(raw_quality, str)
+                        or raw_quality not in {"verified", "held"}
+                    ):
+                        continue
+                    raw_basis = entry.get("date_basis")
+                    if raw_basis is not None and (
+                        not isinstance(raw_basis, str)
+                        or raw_basis not in {"observation", "writer_confirmation"}
+                    ):
+                        continue
+                    if iid in WRITER_CONFIRMATION_IDS:
+                        # These rows confirm that a standing rate was re-read;
+                        # their date is never the MPC decision date.
+                        date_basis = "writer_confirmation"
+                    elif raw_basis is None:
+                        date_basis = "observation"
+                    else:
+                        date_basis = raw_basis
+                    evidence = entry.get("evidence") or entry.get("_artifact_sha256") or (
+                        f"Recovered from dated archive domain snapshot for {iid}"
+                    )
+                    raw_release_status = entry.get("release_status", "unknown")
+                    release_status = (
+                        raw_release_status
+                        if isinstance(raw_release_status, str)
+                        and raw_release_status in {"final", "provisional", "unknown"}
+                        else "unknown"
+                    )
+                    observations[iid] = {
+                        "metric_id": iid,
+                        "value": value,
+                        "as_of": str(source_date),
+                        "unit": entry.get("unit") or "unknown",
+                        "source": entry.get("source") or iid,
+                        "source_url": entry.get("source_url"),
+                        "captured_at": entry.get("scraped_at") or updated_at,
+                        "quality": raw_quality,
+                        "date_basis": date_basis,
+                        "evidence": str(evidence),
+                        "dependencies": [],
+                        "release_status": release_status,
+                    }
         out.append({
             "updated_at": blob.get("updated_at"),
             "data": blob.get("data", {}),
             "source_as_of": as_of,
+            "observations": observations,
         })
     return out

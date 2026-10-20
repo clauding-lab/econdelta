@@ -9,6 +9,8 @@ import os
 import re
 import sys
 from calendar import monthrange
+from collections.abc import Callable
+from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -16,10 +18,29 @@ from typing import Any
 from pydantic import ValidationError
 
 from fetchers.dated_form import DEFAULT_MAX_LOOKBACK_DAYS
+from utils import write_receipts as wr
 from utils.alert_dedup import should_alert_today
 from utils.anomaly import check_corridor_coherence
 from utils.calendar import last_trading_close, load_holidays
+from utils.monthly_evidence import source_monitor, upstream_poll_status
+from utils.monthly_lag import accepted_lag_days as _accepted_lag_days
+from utils.monthly_lag import note_source_leg as _note_source_leg
+from utils.monthly_lag import record_official_lag as _record_official_lag
 from utils.notifier import notify
+from utils.observations import (
+    BRIEF_ALIASES,
+    BRIEF_CONVERSIONS,
+    MAX_QUARANTINE_FIELDS,
+    RESERVE_UTIL_DERIVED,
+    Observation,
+    eligible,
+    expand_aliases,
+    finite_number,
+    from_snapshot,
+    quarantine_observations,
+    select_observation,
+    serialize_observations,
+)
 from utils.opus_review import archive_latest, load_history, review_data
 from utils.schema import (
     Alert,
@@ -31,8 +52,18 @@ from utils.schema import (
     FreshnessSummary,
     LatestBundle,
     SourceStatus,
+    WriteStatus,
 )
 from utils.staleness import check_value_staleness, check_watchlist_staleness
+from utils.upstream_poll import DIRECTORY_NAME as UPSTREAM_POLL_DIRECTORY
+from utils.upstream_poll import read_polls
+from utils.write_receipts import (
+    combine_monthly,
+    declare_legs,
+    monthly_attempt,
+    record_failure,
+    record_skip,
+)
 
 REPO_ROOT = Path(__file__).resolve().parent
 DATA_DIR = REPO_ROOT / "data"
@@ -124,9 +155,6 @@ FY_RESET_GRACE_MONTHS = frozenset({7, 8, 9, 10})
 # against last FY's 48.38 is indistinguishable from a real reset: it is a drop,
 # in an early-FY month, on a cumulative series. See landmine 57.
 RESET_PLAUSIBILITY_BAND = (0.02, 0.45)
-# Granular Opus reject: quarantine up to this many flagged fields; more ⇒ hard reject.
-MAX_QUARANTINE_FIELDS = 5
-
 # A stale fallback (today's snapshot is bad, so we republish the last good one)
 # is normal for a day or two — a source is late, the parser missed once. Past
 # this many days it is not lateness, it is a broken fetcher wearing the costume
@@ -162,20 +190,6 @@ DATE_FORM_STALE_GRACE_DAYS = 4
 STALE_FALLBACK_ALERT_STATE_PATH = REPO_ROOT / "data" / "stale_fallback_alert_state.json"
 
 logger = logging.getLogger("aggregate_latest")
-
-# Derived reserve-utilisation ratios (S2). Computed at runtime from the
-# already-scraped BB MEI scalars below — EconDelta has NO scraped maintenance-%
-# cell, so these are minted in `_build_v3_blocks` and land in metric_history
-# under their own ids. The exact statutory CRR/SLR bases are policy constants
-# that shift, so each ratio is labelled by what it ACTUALLY divides (no
-# hardcoded statutory rate): the held/excess balance expressed as a % of total
-# system deposits, NOT the regulated maintenance ratio.
-RESERVE_UTIL_DERIVED: dict[str, tuple[str, str]] = {
-    # derived_id -> (numerator_id, denominator_id)
-    "crr_utilisation_pct": ("deposits_held_with_bb_crr", "deposits_of_the_system"),
-    "slr_utilisation_pct": ("excess_liquid_asset_total_minimum", "deposits_of_the_system"),
-}
-
 
 SCRAPER_SPEC = {
     # key -> (subdir, schema_class, sources.json key for URL lookup)
@@ -569,6 +583,82 @@ def _cumulative_alias_parents(base_ids: set[str]) -> dict[str, str]:
     return out
 
 
+# R2 fix H5 (owner decision m, 28 Sep 2026; E/VISION.md load-bearing semantics): the NBR
+# fiscal-year-to-date total and every id The Brief reads it under. Derived, never hand-listed.
+NBR_FYTD_SOURCE_ID = "tax_revenue"
+NBR_FYTD_IDS: tuple[str, ...] = (
+    NBR_FYTD_SOURCE_ID, *sorted(_cumulative_alias_parents({NBR_FYTD_SOURCE_ID})))
+
+
+def _unrecorded_nbr_fytd(
+    data: dict[str, Any],
+    observations: dict[str, Observation],
+    *,
+    today: date,
+    reader: Callable[..., list[dict[str, Any]]] | None = None,
+) -> tuple[dict[str, Any], list[dict[str, str]]]:
+    """The daily write's data without NBR FYTD rows already on file, and why each was left out.
+
+    Each NBR row is dated by the source's own stated period (its observation). A row whose
+    exact (metric_id, period) already holds the same value in metric_history, written by this
+    daily writer, is not re-sent; a new period, a new value for a recorded period, or a row on
+    file under another source (e.g. an approved press override BB has since superseded) is. A
+    figure whose source states no period is never dated, so nothing is written for it and the
+    receipt says so. When the table cannot be read, nothing is presumed recorded: the dated rows
+    go out as before (same key, no new row). Returns a new dict; ``data`` is not modified.
+    """
+    skips: list[dict[str, str]] = []
+    dated: dict[tuple[str, str], Any] = {}
+    for mid in NBR_FYTD_IDS:
+        obs, value = observations.get(mid), data.get(mid)
+        if obs is None or not finite_number(value) or obs.value != value:
+            continue
+        if obs.as_of is None:
+            skips.append(dict(category=wr.NO_SOURCE_PERIOD,
+                              detail=f"{mid}: the source states no period for {value}; nothing written"))
+        elif eligible(obs, today=today):
+            dated[(mid, obs.as_of.isoformat())] = value
+    if not dated:
+        return dict(data), skips
+    if reader is None:
+        from utils.supabase_reader import get_metric_history_at
+
+        reader = get_metric_history_at
+    try:
+        stored = {(row["metric_id"], str(row["as_of"])[:10]): row for row in reader(list(dated))}
+    except Exception as e:  # noqa: BLE001 — an unreadable table must never block the daily write
+        logger.warning("NBR FYTD: could not read recorded periods (%s); sending dated rows", type(e).__name__)
+        return dict(data), skips
+    recorded = [(key, value) for key, value in dated.items() if _is_own_row(stored.get(key), value)]
+    skips.extend(dict(category=wr.PERIOD_ALREADY_RECORDED,
+                      detail=f"{mid}: {value} for {day} is already in metric_history; not re-sent")
+                 for (mid, day), value in recorded)
+    left_out = {mid for (mid, _), _ in recorded}
+    return {mid: value for mid, value in data.items() if mid not in left_out}, skips
+
+
+def _is_own_row(row: dict[str, Any] | None, value: Any) -> bool:
+    """True only for a stored row this daily writer wrote with exactly ``value`` (fix H5 round 1).
+
+    A row under any other source (an approved press override, a manual fix) or with no source is
+    not "already recorded" by this writer, so the producer's own row is sent over it.
+    """
+    from utils.supabase_writer import _DEFAULT_SOURCE
+
+    return (row is not None and row.get("source") == _DEFAULT_SOURCE
+            and finite_number(row.get("value")) and float(row["value"]) == float(value))
+
+
+def _daily_receipt(status: str, attempted_at: str, reason: str,
+                   skips: list[dict[str, str]]) -> dict[str, Any]:
+    """The daily stage's receipt; rows it deliberately left out (fix H5) are itemised and named."""
+    if not skips:
+        return {"status": status, "attempted_at": attempted_at, "reason": reason}
+    named = "; ".join(f"{skip['category']}: {skip['detail']}" for skip in skips)
+    return {"status": status, "attempted_at": attempted_at, "reason": f"{reason}; {named}",
+            "skips": [dict(skip) for skip in skips]}
+
+
 def _drop_expected_fy_resets(
     flagged: list[str],
     data: dict[str, Any],
@@ -673,54 +763,22 @@ def _drop_expected_fy_resets(
     return still, excused, evidence
 
 
+def _fully_excused_fy_reject(
+    raw_flagged_count: int, flagged: list[str], fy_excused: list[str]
+) -> bool:
+    """Only an observed reject fully explained by dated FY evidence may pass."""
+    return raw_flagged_count > 0 and not flagged and bool(fy_excused)
+
+
 def _quarantine_flagged(
-    data: dict[str, Any],
+    current: dict[str, Observation],
     flagged_ids: list[str],
     history: list[dict[str, Any]],
     breadth_count: int | None = None,
-) -> tuple[dict[str, Any], list[str], bool]:
-    """Quarantine Opus-flagged fields instead of rejecting the whole snapshot.
-
-    Returns (cleaned_data, quarantined_ids, hard_reject).
-    hard_reject is True when the verdict is untrustworthy or too broad:
-      * any flagged id is not present in `data`, or
-      * more than MAX_QUARANTINE_FIELDS ids are flagged.
-    Otherwise each flagged id is replaced with its most-recent good value from
-    `history` (newest-last list of archived `.data` dicts); if no historical
-    value exists, the field is dropped.
-
-    ``breadth_count`` is how many fields the reviewer ACTUALLY flagged, which is
-    not always how many are left in ``flagged_ids``. The fiscal-year override
-    removes ids from that list before this function sees it, and the breadth
-    gate is a statement about how broken the run looks — "the reviewer distrusts
-    eight fields" stays true whether or not two of them were later explained.
-    Without this, excusing ids could pull a 7-field reject under the 5-field
-    ceiling and convert a refusal-to-publish into a publish carrying five stale
-    substitutions (landmine 57). Defaults to ``len(present)`` so every caller
-    that has nothing to distinguish keeps the original behaviour.
-    """
-    present = [fid for fid in flagged_ids if fid in data]
-    if len(present) != len(flagged_ids):
-        return data, [], True   # unmappable flagged id ⇒ don't trust the verdict
-    breadth = len(present) if breadth_count is None else breadth_count
-    if breadth > MAX_QUARANTINE_FIELDS:
-        return data, [], True   # too broadly broken to publish
-
-    cleaned = dict(data)
-    quarantined: list[str] = []
-    for fid in present:
-        last_good = None
-        for snap in reversed(history):  # newest-last ⇒ reversed = newest-first
-            v = (snap.get("data") or {}).get(fid)
-            if isinstance(v, (int, float)) and not isinstance(v, bool):
-                last_good = v
-                break
-        if last_good is not None:
-            cleaned[fid] = last_good
-        else:
-            cleaned.pop(fid, None)
-        quarantined.append(fid)
-    return cleaned, quarantined, False
+) -> tuple[dict[str, Observation], list[str], bool]:
+    """Quarantine rejected fields using dated observations and source evidence."""
+    breadth = len(flagged_ids) if breadth_count is None else breadth_count
+    return quarantine_observations(current, flagged_ids, history, breadth_count=breadth)
 
 
 def _compute_reserve_utilisation(data_additions: dict[str, Any]) -> None:
@@ -975,10 +1033,7 @@ def _build_v3_blocks(
                 )
             )
 
-    # Derived reserve-utilisation ratios (S2): minted from the level scalars
-    # loaded above, BEFORE the writer's scalar-only filter, so they persist to
-    # metric_history under their own ids. Null/zero-denominator safe.
-    _compute_reserve_utilisation(data_additions)
+    # Ratios are derived later, after complete dated observations are selected.
 
     freshness = FreshnessSummary(
         indicators_total=indicators_total,
@@ -995,6 +1050,118 @@ def _build_v3_blocks(
         },
     )
     return data_additions, domains, freshness, alerts
+
+
+def _build_observations(
+    snapshots: dict, domains: dict, sources_status: dict, *, now: datetime,
+    holidays: set[date], yield_values: dict, yield_dates: dict,
+) -> dict[str, Observation]:
+    """Adapt each source independently, then select records before deriving children.
+
+    Sentinel vintage rules determine preference, not scraper capture age. The latter
+    still independently marks a dead source held. No new staleness policy is added.
+    """
+    from sentinel.freshness import is_breach
+
+    candidates: dict[str, list[Observation]] = {}
+
+    def add(obs: Observation, cadence: str, *, source_stale: bool = False) -> None:
+        if obs.quality == "verified" and obs.as_of is not None:
+            if source_stale or is_breach(obs.as_of, cadence, now.date(), holidays):
+                obs = replace(obs, quality="held")
+        candidates.setdefault(obs.metric_id, []).append(obs)
+
+    for source, snapshot in snapshots.items():
+        if snapshot is None:
+            continue
+        # Values and dates come from this ONE snapshot, never a merged scalar map.
+        values = flatten_data({source: snapshot})
+        dates = _build_tier1_source_as_of_map({source: snapshot}, bb_forex_ok=True)
+        stale = sources_status.get(source) is None or sources_status[source].status != "ok"
+        for mid, value in values.items():
+            if not finite_number(value):
+                continue
+            unit, url, cadence = "unknown", None, "daily"
+            if source == "bb_forex":
+                reserve = mid in {"gross_reserves_usd_bn", "import_cover_months"}
+                unit = "USD billion" if mid == "gross_reserves_usd_bn" else "months" if reserve else "BDT"
+                block = snapshot.reserves if reserve else snapshot.rates
+                url = block.source_url
+                cadence = "monthly" if reserve else "daily"
+            elif source == "dse_market":
+                url = snapshot.source_url
+                unit = "%" if mid.endswith("pct") else "BDT crore" if mid == "turnover_crore" else "index" if mid in {"dsex", "ds30", "dses", "dsex_change"} else "count"
+            elif source == "commodity_prices":
+                for key, quote in snapshot.prices.items():
+                    if mid == f"{key}_{quote.currency.lower()}_{quote.unit.replace(' ', '_')}":
+                        unit, url = f"{quote.currency}/{quote.unit}", None
+                        # A sibling's maximum quote date is not this quote's date.
+                        dates[mid] = quote.quote_date
+            obs = Observation(mid, value, dates.get(mid), unit, source, url,
+                snapshot.scraped_at, "verified" if dates.get(mid) else "unavailable",
+                "observation" if dates.get(mid) else "unknown", f"{source} snapshot field {mid}")
+            add(obs, cadence, source_stale=stale)
+            alias = {"usd_bdt_mid": "usd_bdt_exchange_rate",
+                     "gross_reserves_usd_bn": "fx_reserve_gross_and_bpm6"}.get(mid)
+            if alias:
+                add(replace(obs, metric_id=alias, dependencies=(mid,)), cadence, source_stale=stale)
+
+    registry = {item["id"]: item for item in _load_v3_registry()}
+    for indicators in domains.values():
+        for mid, snapshot in indicators.items():
+            config = registry.get(mid, {})
+            adapted = {"value_type": config.get("parse", {}).get("value_type"), **snapshot}
+            # Fan out one source at a time; equal numbers in other sources never
+            # provide a period. Each child inherits this parent's evidence.
+            values = {mid: snapshot.get("value")}
+            _flatten_dict_indicators(values)
+            for child, value in values.items():
+                if isinstance(value, (dict, str, list)):
+                    continue
+                obs = from_snapshot(child, {**adapted, "value": value}, captured_at=now)
+                if child != mid:
+                    obs = replace(obs, dependencies=(mid,))
+                add(obs, snapshot.get("cadence") or config.get("cadence", "unknown"))
+
+    for mid, value in yield_values.items():
+        obs = Observation(mid, value, yield_dates.get(mid), "%", "auction_results", None,
+            now, "verified", "observation", "Latest accepted auction cutoff")
+        # Auction results are the canonical source for this set of retired ids.
+        candidates[mid] = []
+        add(obs, "monthly" if mid.startswith("tbond_") else "weekly")
+    selected = {}
+    for mid, options in candidates.items():
+        selected[mid] = select_observation(options, today=now.date()) or replace(
+            options[0], quality="unavailable"
+        )
+    return expand_aliases(selected)
+
+
+def _project_observations(data: dict, domains: dict, observations: dict[str, Observation]) -> None:
+    """Project values and metadata together; preserve unrelated legacy context."""
+    for mid in set(BRIEF_ALIASES) | set(BRIEF_CONVERSIONS) | set(RESERVE_UTIL_DERIVED):
+        data.pop(mid, None)
+    for mid, obs in observations.items():
+        data[mid] = obs.value
+    for indicators in domains.values():
+        for mid, snapshot in list(indicators.items()):
+            obs = observations.get(mid)
+            if obs is None:
+                continue
+            # Preserve domain context, but not evidence/deltas from the losing
+            # source or an undated quarantine substitution.
+            if (obs.source != snapshot.get("source", mid)
+                    or obs.value != snapshot.get("value") or obs.quality == "unavailable"):
+                snapshot = {key: value for key, value in snapshot.items() if key not in {
+                    "_artifact_sha256", "_parse_strategy", "_provenance", "sanity_note",
+                    "previous_value", "change_pct", "_stale_from",
+                }}
+            indicators[mid] = {**snapshot, "value": obs.value,
+                "source_as_of": obs.as_of.isoformat() if obs.as_of else None,
+                "source": obs.source, "source_url": obs.source_url,
+                "scraped_at": obs.captured_at.isoformat(), "quality": obs.quality,
+                "date_basis": obs.date_basis, "evidence": obs.evidence,
+                "release_status": obs.release_status}
 
 
 def _notify_long_stale_fallbacks(
@@ -1255,9 +1422,13 @@ def _build_tier1_source_as_of_map(
     if dse is not None:
         # MEDIUM-7 (2026-08-22 round-1 review): corrected -- the previous
         # version of this comment described PRE-fix/date-integrity-monitoring
-        # behaviour that no longer exists. scrapers/dse_market.py now parses
-        # the SOURCE page's own "TODAY'S SHARE MARKET : YYYY-MM-DD" trading
-        # date and stamps DseSnapshot.date with it -- never date.today(), and
+        # behaviour that no longer exists. scrapers/dse_market.py now takes
+        # the trading date from the source's own `session.sessionDate` in
+        # the /api/live/market JSON (#139; it replaced the old HTML page's
+        # "TODAY'S SHARE MARKET" text), and only when the session is closed
+        # (isOpen false, phase "closed" -- an open or pre-open session is
+        # refused, never dated). It stamps DseSnapshot.date with that
+        # session date -- never date.today(), and
         # there is no longer a non-trading "write a trading_day=False marker
         # dated today" path at all (a non-trading/already-seen session is a
         # pure no-op now: nothing new is written). What still distinguishes a
@@ -1294,19 +1465,15 @@ def _build_tier1_source_as_of_map(
         # boundary that scraped_at's UTC calendar date can land a day behind
         # either the quote date or the intended local reporting day.
         #
-        # L1 (2026-08-22 round-1 review): prefer each commodity's OWN
-        # `cp.quote_date` over the snapshot-wide max when it's available --
-        # brent/WTI/gold virtually always agree, but on the rare run where
-        # one ticker's quote genuinely lags the others, this stamps THAT
-        # metric with its own true date instead of borrowing a sibling
-        # ticker's (possibly later) one. Falls back to the snapshot-wide
-        # `commodity_date` only for a ticker whose own quote_date is None
-        # (its history() call failed this run) -- never leaves a metric
-        # entirely undated when the snapshot itself has SOME usable date.
-        commodity_date = commodities.date
+        # L1 (2026-08-22 round-1 review): use each commodity's OWN
+        # `cp.quote_date`. If that ticker has no quote date, leave its
+        # observation undated; another ticker's later quote must not make
+        # this value appear current, including when an anomaly quarantines
+        # the shared bundle.
         for key, cp in commodities.prices.items():
             unit_suffix = f"{cp.currency.lower()}_{cp.unit.replace(' ', '_')}"
-            result[f"{key}_{unit_suffix}"] = cp.quote_date or commodity_date
+            if cp.quote_date is not None:
+                result[f"{key}_{unit_suffix}"] = cp.quote_date
 
     return result
 
@@ -1318,61 +1485,222 @@ def _apply_media_overrides(
     writer=None,
     reader=None,
     set_status=None,
-) -> None:
+    problems: list[str] | None = None,
+    sent_rows: list[dict] | None = None,
+) -> dict[str, list]:
     """Re-assert approved media overrides into metric_history AFTER the normal
     upsert, so a human-approved press value wins until BB's pipeline supersedes
     it (spec D6). EconDelta stays the sole writer; the override write reuses
-    _apply_brief_aliases so it reaches the brief keys. Best-effort."""
-    from datetime import date as _date
+    _apply_brief_aliases so it reaches the brief keys. Best-effort: a failure on
+    one row is recorded and the next row still runs.
 
-    from media_screen.supersede import is_superseded
+    Returns ``{"written": [metric ids sent], "failures": [receipt failures]}``
+    for the snapshot's ``media_overrides`` receipt (R2 fix 10). When ``problems``
+    is given, each row-level failure also adds one operator-alert line to it
+    (metric id, failed step, exception type; R2 fix 10b). When ``sent_rows`` is
+    given, every metric_history row a press value was sent as is added to it, so
+    the caller can read those exact keys back (R2 fix H2).
+    """
     from utils.supabase_reader import get_active_media_review
-    from utils.supabase_writer import (
-        SupabaseWriteError,
-        set_media_review_status,
-        upsert_metric_history,
-    )
+    from utils.supabase_writer import set_media_review_status, upsert_metric_history
 
     writer = writer or upsert_metric_history
     reader = reader or get_active_media_review
     set_status = set_status or set_media_review_status
+    outcome: dict[str, list] = {"written": [], "failures": []}
 
     try:
         rows = reader()
     except Exception as e:  # noqa: BLE001 — overrides must never break aggregate
         logger.warning("media overrides: could not read active rows: %s", e)
-        return
+        outcome["failures"].append(dict(operation="read", category=wr.DATABASE_READ_FAILED,
+                                        detail=f"media_review ({type(e).__name__})"))
+        return outcome
 
+    alert_lines = problems if problems is not None else []
     for r in rows:
-        mid = r["metric_id"]
-        press_as_of = _date.fromisoformat(str(r["press_as_of"])[:10])
-        automated_value = data.get(mid)
-        automated_value = float(automated_value) if isinstance(automated_value, (int, float)) else None
-        parsed_baseline = float(r["parsed_value"]) if r.get("parsed_value") is not None else None
-        if is_superseded(
-            kind=r["kind"],
-            press_as_of=press_as_of,
-            parsed_baseline=parsed_baseline,
-            automated_value=automated_value,
-            automated_as_of=source_as_of_map.get(mid),
-        ):
-            set_status(r["id"], "superseded")
-            logger.info("media override %s (%s @ %s) superseded by BB", r["id"], mid, press_as_of)
-            continue
-        override_data = {mid: float(r["press_value"])}
-        _apply_brief_aliases(override_data)
+        mid = r.get("metric_id", "unknown metric") if isinstance(r, dict) else "unknown metric"
+        label = mid if isinstance(mid, str) else "unknown metric"
         try:
-            writer(
-                data=override_data,
-                as_of=press_as_of,
-                source=f"media-approved:{r.get('source_outlet') or 'press'}",
-            )
-        except SupabaseWriteError as e:
-            logger.warning("media override write failed for %s: %s", mid, e)
+            rows_sent, review_status = _apply_one_media_override(r, data, source_as_of_map, writer=writer)
+        except Exception as e:  # noqa: BLE001 — one bad row must not stop the rest or the snapshot
+            logger.warning("media override for %s not applied: %s", mid, e)
+            failure = _media_override_failure(e, f"{mid} ({type(e).__name__})")
+            outcome["failures"].append(failure)
+            step = "press value write failed" if failure["operation"] == "write" else "media_review row not applied"
+            alert_lines.append(f"{label}: {step} ({type(e).__name__})")
             continue
-        if r["status"] == "approved":
-            set_status(r["id"], "applied", applied=True)
-        logger.info("media override applied: %s = %s @ %s", mid, r["press_value"], press_as_of)
+        sent = bool(rows_sent)
+        if sent:  # recorded before the status PATCH, so a PATCH failure cannot unsay the send
+            outcome["written"].append(mid)
+            if sent_rows is not None:
+                sent_rows.extend(rows_sent)
+        if review_status is not None:
+            try:
+                if review_status == "applied":
+                    set_status(r["id"], review_status, applied=True)
+                else:
+                    set_status(r["id"], review_status)
+            except Exception as e:  # noqa: BLE001 — the press value's fate is already recorded above
+                logger.warning("media override %s: media_review status update to %s failed: %s",
+                               mid, review_status, e)
+                outcome["failures"].append(_media_override_failure(
+                    e, f"{mid} media_review status update ({type(e).__name__})"))
+                fate = "press value sent" if sent else "superseded by BB, no press value sent"
+                alert_lines.append(f"{label}: {fate}; media_review status update to {review_status} "
+                                   f"failed ({type(e).__name__})")
+    return outcome
+
+
+def _media_override_failure(e: Exception, detail: str) -> dict[str, str]:
+    """A database write error is a write failure; anything else is unhandled."""
+    from utils.supabase_writer import SupabaseWriteError
+
+    is_write = isinstance(e, SupabaseWriteError)
+    return dict(operation="write" if is_write else "unknown",
+                category=wr.DATABASE_WRITE_FAILED if is_write else wr.UNHANDLED_EXCEPTION, detail=detail)
+
+
+def _apply_one_media_override(r: dict, data: dict[str, Any], source_as_of_map: dict[str, date], *,
+                              writer) -> tuple[list[dict], str | None]:
+    """Supersede or re-assert one active override.
+
+    Returns (the metric_history rows the press value was sent as -- empty when nothing
+    was sent --, media_review status to set next or None). The caller makes the status
+    PATCH, so its failure is never mistaken for a failed metric write.
+    """
+    from datetime import date as _date
+
+    from media_screen.supersede import is_superseded
+
+    mid = r["metric_id"]
+    press_as_of = _date.fromisoformat(str(r["press_as_of"])[:10])
+    automated_value = data.get(mid)
+    automated_value = float(automated_value) if isinstance(automated_value, (int, float)) else None
+    parsed_baseline = float(r["parsed_value"]) if r.get("parsed_value") is not None else None
+    if is_superseded(
+        kind=r["kind"],
+        press_as_of=press_as_of,
+        parsed_baseline=parsed_baseline,
+        automated_value=automated_value,
+        automated_as_of=source_as_of_map.get(mid),
+    ):
+        logger.info("media override %s (%s @ %s) superseded by BB", r["id"], mid, press_as_of)
+        return [], "superseded"
+    override_data = {mid: float(r["press_value"])}
+    _apply_brief_aliases(override_data)
+    source = f"media-approved:{r.get('source_outlet') or 'press'}"
+    writer(
+        data=override_data,
+        as_of=press_as_of,
+        source=source,
+    )
+    logger.info("media override applied: %s = %s @ %s", mid, r["press_value"], press_as_of)
+    rows = [dict(override=mid, metric_id=key, as_of=press_as_of.isoformat(), value=value, source=source)
+            for key, value in override_data.items()
+            if isinstance(value, (int, float)) and not isinstance(value, bool)]
+    return rows, "applied" if r["status"] == "approved" else None
+
+
+def _media_override_receipt(data: dict[str, Any], source_as_of_map: dict[str, date]) -> dict:
+    """The override stage's own receipt; never charged to the daily write (R2 fix 10).
+
+    Every press row sent is read back by its exact (metric_id, as_of) key, all in one
+    request (R2 fix H2). ``ok`` only when every sent row reads back with the value and
+    source written; nothing to send is a skip.
+
+    Any failed step -- including a readback that disproves a sent value, finds it
+    missing or cannot read it -- sends ONE grouped operator alert for the run (owner
+    decision k). A confirmed override never alerts (decision j).
+    """
+    attempted_at = datetime.now(timezone.utc).isoformat()
+    problems: list[str] = []
+    sent_rows: list[dict] = []
+    try:
+        outcome = _apply_media_overrides(data, source_as_of_map, problems=problems, sent_rows=sent_rows)
+        failures = list(outcome["failures"])
+    except Exception as e:  # noqa: BLE001 — overrides must never stop the snapshot write
+        logger.warning("media overrides failed: %s", e)
+        failures = [dict(operation="unknown", category=wr.UNHANDLED_EXCEPTION, detail=type(e).__name__)]
+        problems.append(f"press override step stopped early ({type(e).__name__})")
+    confirmed = None
+    if sent_rows:
+        confirmed, readback_failures, readback_problems = _read_back_media_overrides(sent_rows)
+        failures, problems = [*failures, *readback_failures], [*problems, *readback_problems]
+    _notify_media_override_problems(problems)
+    parts = [f"{f['operation']} failed ({f['category']}): {f['detail']}" for f in failures]
+    if confirmed:
+        parts.append(f"{confirmed} row(s) written and confirmed by exact readback")
+    receipt = dict(status="failed" if failures else "ok" if confirmed else "skipped", attempted_at=attempted_at,
+                   reason="; ".join(parts) or "no active approved override needed writing", failures=failures)
+    return receipt if confirmed is None else {**receipt, "confirmed_rows": confirmed}
+
+
+def _read_back_media_overrides(rows: list[dict]) -> tuple[int, list[dict], list[str]]:
+    """Read the sent press rows back by exact (metric_id, as_of) key in ONE request (R2 fix H2).
+
+    Returns (rows confirmed, receipt failures, operator-alert lines). A row is confirmed
+    only when the stored value and source equal what was sent; a different one is a
+    readback mismatch, an absent key is readback missing, and a reader error confirms
+    nothing. Alert lines name the override metric, the stored keys and exception types only.
+    """
+    from utils.supabase_reader import get_metric_history_at
+
+    sent = {(r["metric_id"], r["as_of"]): r for r in rows}  # the same key sent twice: last write wins
+    try:
+        stored = get_metric_history_at(list(sent))
+    except Exception as e:  # noqa: BLE001 — an unreadable table is unconfirmed, never ok
+        logger.warning("media overrides: exact readback failed (%s)", type(e).__name__)
+        ids = ", ".join(sorted({mid for mid, _ in sent}))
+        overrides = dict.fromkeys(r["override"] for r in rows)
+        return 0, [dict(operation="readback", category=wr.READBACK_UNAVAILABLE, detail=f"{ids} ({type(e).__name__})")], \
+            [f"{o}: press value sent; readback failed ({type(e).__name__})" for o in overrides]
+    found = {(s.get("metric_id"), str(s.get("as_of"))[:10]): s for s in stored if isinstance(s, dict)}
+    failed: dict[str, dict[str, list[str]]] = {}
+    failures: list[dict] = []
+    for key in sorted(sent):
+        category = _press_row_readback(sent[key], found.get(key))
+        if category is not None:
+            failures.append(dict(operation="readback", category=category, detail=f"{key[0]} {key[1]}"))
+            failed.setdefault(sent[key]["override"], {}).setdefault(category, []).append(f"{key[0]} {key[1]}")
+    if failures:
+        logger.warning("media overrides: %d press row(s) not confirmed by exact readback", len(failures))
+    lines = [f"{o}: press value sent; {category} ({', '.join(keys)})"
+             for o in dict.fromkeys(r["override"] for r in rows) if o in failed
+             for category, keys in failed[o].items()]
+    return len(sent) - len(failures), failures, lines
+
+
+def _press_row_readback(sent: dict, stored: dict | None) -> str | None:
+    """None when the stored row is exactly the press row sent, else the failure category."""
+    if stored is None:
+        return wr.READBACK_MISSING
+    value = stored.get("value")
+    same_value = isinstance(value, (int, float)) and not isinstance(value, bool) \
+        and float(value) == float(sent["value"])
+    return None if same_value and stored.get("source") == sent["source"] else wr.READBACK_MISMATCH
+
+
+MEDIA_OVERRIDE_ALERT_TITLE = "aggregate — press override step failed"
+
+
+def _notify_media_override_problems(problems: list[str]) -> None:
+    """ONE grouped operator alert for this run's press-override step problems (owner decision k).
+
+    Reuses the notify() path and "error" level this step's alert used before R2 fix 10,
+    with truthful wording: metric id, failed step and exception type only, never raw
+    error text or row payloads. A failed alert is logged and changes nothing else.
+    """
+    if not problems:
+        return
+    message = "Approved press override step problems this run:\n" + "\n".join(f"- {p}" for p in problems)
+    try:
+        delivered = notify("error", MEDIA_OVERRIDE_ALERT_TITLE, message)
+    except Exception as e:  # noqa: BLE001 — an alert failure must never stop the snapshot write
+        logger.warning("press override alert not sent (%s)", type(e).__name__)
+        return
+    if delivered is False:
+        logger.warning("press override alert not sent (the notifier reported it was not delivered)")
 
 
 # ============================================================================
@@ -1392,6 +1720,10 @@ def _apply_media_overrides(
 
 RESERVES_MONTHLY_GROSS_ID = "gross_reserves_usd_bn_monthly"
 RESERVES_MONTHLY_BPM6_ID = "net_reserves_bpm6_usd_bn_monthly"
+RESERVES_MONTHLY_BPM6_LABEL = "FX reserves (BPM6 gross)"
+RESERVES_MONTHLY_BPM6_DESCRIPTION = (
+    "Gross foreign exchange reserves reported by Bangladesh Bank under the IMF BPM6 methodology."
+)
 RESERVES_MONTHLY_SOURCE = "bb_forex"
 RESERVES_MONTHLY_SOURCE_URL = "https://www.bb.org.bd/en/index.php/econdata/intreserve"
 # Mirrors scrapers.bb_forex._BPM6_GROSS_RATIO_MIN/MAX -- see that module for
@@ -1437,16 +1769,24 @@ def _reserves_monthly_definitions() -> list[dict]:
         },
         {
             "metric_id": RESERVES_MONTHLY_BPM6_ID,
-            "display_name": "FX reserves (BPM6/net)",
+            "display_name": RESERVES_MONTHLY_BPM6_LABEL,
             "unit": "USD bn",
             "source_url": RESERVES_MONTHLY_SOURCE_URL,
             "source_attribution": "Bangladesh Bank",
             "domain": "external",
-            "description": "Foreign exchange reserves per IMF BPM6 methodology.",
+            "description": RESERVES_MONTHLY_BPM6_DESCRIPTION,
             "notes": "Sparse — BB began reporting BPM6 ~2021; nulls for earlier months.",
             "grace_days": _RESERVES_MONTHLY_GRACE_DAYS,
         },
     ]
+
+
+def _withhold_reserves(guard: str) -> int:
+    """A cross-column invariant refused both rows: logged as before and, since R2 fix H4, put in
+    the receipt verbatim ("withheld by validation") instead of an unexplained zero-row run."""
+    logger.warning("reserves monthly split: %s", guard)
+    record_skip("reserves", wr.WITHHELD_BY_VALIDATION, guard)
+    return 0
 
 
 def _write_reserves_monthly_split(reserves: ForexReserves | None) -> int:
@@ -1473,6 +1813,7 @@ def _write_reserves_monthly_split(reserves: ForexReserves | None) -> int:
     """
     if reserves is None:
         logger.warning("reserves monthly split: forex.reserves is None -- nothing to write")
+        record_skip("reserves", wr.NOT_ATTEMPTED, "the bb_forex snapshot carries no reserves reading")
         return 0
 
     gross = reserves.gross_reserves_usd_bn
@@ -1487,21 +1828,14 @@ def _write_reserves_monthly_split(reserves: ForexReserves | None) -> int:
             reserves.reserves_date.isoformat(), RESERVES_MONTHLY_GROSS_ID, RESERVES_MONTHLY_BPM6_ID,
         )
     elif bpm6 >= gross:
-        logger.warning(
-            "reserves monthly split: bpm6 (%.4f) >= gross (%.4f) for %s -- "
-            "refusing BOTH monthly writes (column-identification failure)",
-            bpm6, gross, reserves.reserves_date.isoformat(),
-        )
-        return 0
+        return _withhold_reserves(
+            f"bpm6 ({bpm6:.4f}) >= gross ({gross:.4f}) for {reserves.reserves_date.isoformat()} -- "
+            "refusing BOTH monthly writes (column-identification failure)")
     elif not (_RESERVES_MONTHLY_RATIO_MIN <= bpm6 / gross <= _RESERVES_MONTHLY_RATIO_MAX):
-        logger.warning(
-            "reserves monthly split: bpm6/gross ratio %.4f for %s is outside "
-            "[%.2f, %.2f] -- refusing BOTH monthly writes (magnitude/unit "
-            "corruption, not a column swap)",
-            bpm6 / gross, reserves.reserves_date.isoformat(),
-            _RESERVES_MONTHLY_RATIO_MIN, _RESERVES_MONTHLY_RATIO_MAX,
-        )
-        return 0
+        return _withhold_reserves(
+            f"bpm6/gross ratio {bpm6 / gross:.4f} for {reserves.reserves_date.isoformat()} is outside "
+            f"[{_RESERVES_MONTHLY_RATIO_MIN:.2f}, {_RESERVES_MONTHLY_RATIO_MAX:.2f}] -- refusing BOTH "
+            "monthly writes (magnitude/unit corruption, not a column swap)")
 
     from utils.supabase_writer import (
         upsert_metric_definitions_monthly,
@@ -2520,6 +2854,52 @@ def _m2_monthly_append_rows(
     }], reasons
 
 
+# Persistence-receipt leg of every metric the macro appender writes (R2 fix 8):
+# a read/write/readback outcome is charged to the child series it belongs to.
+_MACRO_MONTHLY_LEG_OF: dict[str, str] = {
+    **{monthly_id: "cpi" for monthly_id in _CPI_DAILY_TO_MONTHLY.values()},
+    _REMITTANCE_MONTHLY_ID: "remittance",
+    _IMPORTS_MONTHLY_ID: "imports",
+    _M2_MONTHLY_ID: "m2",
+}
+_STAGE_DERIVE: tuple[str, str, str] = ("derive", wr.DERIVATION_FAILED, "candidate derivation")
+
+
+def _stage_read(what: str) -> tuple[str, str, str]:
+    return ("read", wr.DATABASE_READ_FAILED, what)
+
+
+def _record_stage_failure(leg: str, stage: tuple[str, str, str], exc: Exception) -> None:
+    operation, category, what = stage
+    record_failure(leg, operation, category, f"{what} ({type(exc).__name__})")
+
+
+def _note_derived_leg(leg: str, candidates: list[dict], new_rows: list[dict],
+                      reasons: list[str]) -> None:
+    """Validation refusals verbatim; a valid candidate already stored = no newer database vintage.
+
+    These legs read our own daily table, never BB's listing, so an already-recorded candidate
+    proves only that the database holds nothing newer -- not whether BB has published."""
+    for reason in reasons:
+        record_skip(leg, wr.WITHHELD_BY_VALIDATION, reason)
+    fresh = {(row["metric_id"], row["as_of"]) for row in new_rows}
+    for row in candidates:
+        if (row["metric_id"], row["as_of"]) not in fresh:
+            record_skip(leg, wr.NO_NEWER_DATABASE_VINTAGE,
+                        f"{row['metric_id']} {row['as_of']} already recorded "
+                        f"(latest source vintage {row['source_as_of']})")
+
+
+# _accepted_lag_days, _record_official_lag and _note_source_leg live in utils/monthly_lag.py
+# (R2 fix H4) so the EPB exports writer shares them; imported above under these names.
+
+
+def _rows_back_to(floor: date, today: date) -> int:
+    """A newest-first read limit that always reaches ``floor``: one day-1 row per month
+    since the floor (landmine 50(a)), plus the reader's default 36 as headroom."""
+    return 36 + (today.year - floor.year) * 12 + today.month - floor.month + 1
+
+
 def _write_macro_monthly_append(today: date | None = None) -> int:
     """Live appender for the CPI trio + remittance + imports + M2 growth
     chart-feeding monthly series (2026-08-08 incident, landmine 50; imports
@@ -2544,31 +2924,45 @@ def _write_macro_monthly_append(today: date | None = None) -> int:
     # No SupabaseReadError import here on purpose (review R1, 2026-08-08
     # re-review): both sub-path try/excepts below catch a broad `Exception`
     # rather than that one type, so nothing in this function names it.
+    from utils.monthly_evidence import audit_candidates
     from utils.supabase_reader import get_metric_history, get_metric_history_monthly
     from utils.supabase_writer import upsert_metric_history_monthly
 
     rows_to_write: list[dict] = []
     skip_reasons: list[str] = []
+    declare_legs(*dict.fromkeys(_MACRO_MONTHLY_LEG_OF.values()))
 
     # --- (a) CPI trio, derived from our own daily metric_history -----------
+    stage = _stage_read("daily CPI observations (metric_history)")
     try:
         general = _latest_value_as_of(get_metric_history("general_inflation", days=1))
         food = _latest_value_as_of(get_metric_history("food_inflation", days=1))
         nonfood = _latest_value_as_of(get_metric_history("non_food_inflation", days=1))
         p2p = _latest_value_as_of(get_metric_history("point_to_point_inflation", days=1))
+        stage = _stage_read("existing CPI trio rows (metric_history_monthly)")
         existing_cpi: set[tuple[str, date]] = set()
+        existing_cpi_rows: list[dict] = []
         for monthly_id in _CPI_DAILY_TO_MONTHLY.values():
             for row in get_metric_history_monthly(monthly_id):
+                existing_cpi_rows.append({**row, "metric_id": monthly_id})
                 as_of = _parse_monthly_row_date(row.get("as_of"))
                 if as_of is not None:
                     existing_cpi.add((monthly_id, as_of))
+        stage = _STAGE_DERIVE
         cpi_rows, cpi_reasons = _cpi_monthly_append_rows(
             general_row=general, food_row=food, nonfood_row=nonfood, p2p_row=p2p,
-            existing_pairs=existing_cpi, today=today,
+            existing_pairs=set(), today=today,
         )
-        rows_to_write.extend(cpi_rows)
+        audit_candidates(cpi_rows, existing_cpi_rows, today=today,
+                         source_url="daily metric_history CPI observations",
+                         evidence_kind="database-observations")
+        new_cpi = [row for row in cpi_rows
+                   if (row["metric_id"], date.fromisoformat(row["as_of"])) not in existing_cpi]
+        rows_to_write.extend(new_cpi)
         skip_reasons.extend(cpi_reasons)
+        _note_derived_leg("cpi", cpi_rows, new_cpi, cpi_reasons)
     except Exception as e:  # noqa: BLE001 -- 2026-08-08 review M1: requests'
+        _record_stage_failure("cpi", stage, e)
         # JSONDecodeError (a 200-with-HTML-body PostgREST/CDN incident)
         # escapes utils.supabase_reader._get uncaught -- it is NOT a
         # SupabaseReadError, so narrowing this except to that one type lets
@@ -2607,8 +3001,15 @@ def _write_macro_monthly_append(today: date | None = None) -> int:
     # cleanly above. The M4-specific "remittance read failed" message is
     # unchanged; only the caught exception TYPE is broadened.
     try:
-        existing_remit_rows = get_metric_history_monthly(_REMITTANCE_MONTHLY_ID)
+        # Sized to reach back to the append floor: BB's page lists whole fiscal years, so a
+        # fixed newest-36 window would, from ~2029, stop seeing the floor months and the
+        # "append-only" check would re-write backfilled official values (landmine 50(b)).
+        existing_remit_rows = get_metric_history_monthly(
+            _REMITTANCE_MONTHLY_ID, limit=_rows_back_to(_REMITTANCE_APPEND_FROM, today))
     except Exception as e:  # noqa: BLE001 -- review R1: must not let ANY
+        record_failure("remittance", "read", wr.DATABASE_READ_FAILED,
+                       f"existing {_REMITTANCE_MONTHLY_ID} rows (metric_history_monthly) "
+                       f"({type(e).__name__})")
         # exception here escape and discard the CPI trio's already-computed
         # rows_to_write (see comment above).
         logger.warning("macro monthly append: remittance existing-rows read failed: %s", e)
@@ -2631,15 +3032,22 @@ def _write_macro_monthly_append(today: date | None = None) -> int:
 
         prev_month_start = _previous_month_start(today)
         if prev_month_start in existing_remit:
+            _record_official_lag("remittance", _REMITTANCE_MONTHLY_ID,
+                                 f"previous month {prev_month_start} already recorded; source not re-fetched",
+                                 max(existing_remit))
             logger.info(
                 "macro monthly append: remittance %s already present -- "
                 "skipping the live fetch this run (review M6)", prev_month_start,
             )
         else:
+            source_failure = wr.SOURCE_FETCH_FAILED
             try:
                 html = _fetch_remittance_html()
+                source_failure = wr.SOURCE_PARSE_FAILED
                 parsed = parse_remittance_table(html)
             except Exception as e:  # noqa: BLE001 -- fetch/parse must never crash the daily run
+                record_failure("remittance", "read", source_failure,
+                               f"BB wage-remittance page ({type(e).__name__})")
                 logger.warning("macro monthly append: remittance fetch/parse failed: %s", e)
                 skip_reasons.append(f"remittance: fetch/parse failed ({type(e).__name__}: {e})")
                 notify(
@@ -2650,11 +3058,19 @@ def _write_macro_monthly_append(today: date | None = None) -> int:
                     f"this run. {type(e).__name__}: {e}",
                 )
             else:
+                remit_candidates, _ = _select_new_remittance_rows(
+                    parsed, existing_as_of=set(), today=today)
+                audit_candidates(remit_candidates, existing_remit_rows, today=today,
+                                 source_url=_REMITTANCE_URL, evidence_kind="upstream-source")
                 remit_rows, remit_reasons = _select_new_remittance_rows(
                     parsed, existing_as_of=existing_remit, today=today,
                 )
                 rows_to_write.extend(remit_rows)
                 skip_reasons.extend(remit_reasons)
+                _note_source_leg("remittance", remit_rows, remit_reasons,
+                                 source="BB wage-remittance page", metric_id=_REMITTANCE_MONTHLY_ID,
+                                 listed=[m for m, _ in parsed],
+                                 recorded=existing_remit, wanted=prev_month_start)
                 if not remit_rows and not remit_reasons:
                     # 2026-08-08 review H3: the parse succeeded and returned
                     # SOME rows, but none were new and none were flagged
@@ -2684,6 +3100,9 @@ def _write_macro_monthly_append(today: date | None = None) -> int:
     try:
         existing_import_rows = get_metric_history_monthly(_IMPORTS_MONTHLY_ID)
     except Exception as e:  # noqa: BLE001 -- same R1/M1 reasoning as the CPI/remittance sub-paths above
+        record_failure("imports", "read", wr.DATABASE_READ_FAILED,
+                       f"existing {_IMPORTS_MONTHLY_ID} rows (metric_history_monthly) "
+                       f"({type(e).__name__})")
         logger.warning("macro monthly append: imports existing-rows read failed: %s", e)
         skip_reasons.append(f"imports: existing-rows read failed ({type(e).__name__}: {e})")
         notify(
@@ -2715,16 +3134,22 @@ def _write_macro_monthly_append(today: date | None = None) -> int:
         # but it's the same no-op-when-caught-up saving on the days it does.
         prev_month_start = _previous_month_start(today)
         if prev_month_start in existing_imports:
+            _record_official_lag("imports", _IMPORTS_MONTHLY_ID,
+                                 f"previous month {prev_month_start} already recorded; source not re-fetched",
+                                 max(existing_imports))
             logger.info(
                 "macro monthly append: imports %s already present -- "
                 "skipping the PDF fetch this run (mirrors remittance's M6)",
                 prev_month_start,
             )
         else:
+            source_failure = wr.SOURCE_FETCH_FAILED
             try:
                 pdf_path = _fetch_imports_mei_pdf()
+                source_failure = wr.SOURCE_PARSE_FAILED
                 parsed_imports, revised_imports = parse_imports_c_and_f_table(pdf_path)
             except Exception as e:  # noqa: BLE001 -- fetch/parse must never crash the daily run
+                record_failure("imports", "read", source_failure, f"BB MEI PDF ({type(e).__name__})")
                 logger.warning("macro monthly append: imports fetch/parse failed: %s", e)
                 skip_reasons.append(f"imports: fetch/parse failed ({type(e).__name__}: {e})")
                 notify(
@@ -2734,12 +3159,20 @@ def _write_macro_monthly_append(today: date | None = None) -> int:
                     f"imports chart-feeding series skipped this run. {type(e).__name__}: {e}",
                 )
             else:
+                # Preserve both genuine source revisions and accepted history.
+                # Revised comparator columns are review evidence only, never writes.
+                import_candidates, _ = _select_new_imports_rows(
+                    sorted({**revised_imports, **dict(parsed_imports)}.items()),
+                    existing_as_of=set(), today=today)
+                audit_candidates(import_candidates, existing_import_rows, today=today,
+                                 source_url=str(pdf_path), evidence_kind="upstream-source")
                 pdf_imports = dict(parsed_imports)
                 # HIGH-1 (Opus review round 2): pass the revised (R) column
                 # too, as the splice check's fallback anchor source for the
                 # BB fiscal-year-roll window (see _imports_splice_check).
                 splice_problem = _imports_splice_check(pdf_imports, existing_imports, revised_imports)
                 if splice_problem is not None:
+                    record_skip("imports", wr.WITHHELD_BY_VALIDATION, splice_problem)
                     logger.warning("macro monthly append: %s", splice_problem)
                     skip_reasons.append(splice_problem)
                     notify(
@@ -2753,21 +3186,36 @@ def _write_macro_monthly_append(today: date | None = None) -> int:
                     )
                     rows_to_write.extend(import_rows)
                     skip_reasons.extend(import_reasons)
+                    _note_source_leg("imports", import_rows, import_reasons,
+                                     source="BB MEI PDF", metric_id=_IMPORTS_MONTHLY_ID,
+                                     listed=[m for m, _ in parsed_imports],
+                                     recorded=existing_imports, wanted=prev_month_start)
 
     # --- (d) M2 growth, derived from our own daily metric_history ----------
+    stage = _stage_read(f"daily {_M2_DAILY_ID} observation (metric_history)")
     try:
         m2 = _latest_value_as_of(get_metric_history(_M2_DAILY_ID, days=1))
+        stage = _stage_read(f"existing {_M2_MONTHLY_ID} rows (metric_history_monthly)")
         existing_m2: set[tuple[str, date]] = set()
-        for row in get_metric_history_monthly(_M2_MONTHLY_ID):
+        existing_m2_rows = get_metric_history_monthly(_M2_MONTHLY_ID)
+        for row in existing_m2_rows:
             as_of = _parse_monthly_row_date(row.get("as_of"))
             if as_of is not None:
                 existing_m2.add((_M2_MONTHLY_ID, as_of))
+        stage = _STAGE_DERIVE
         m2_rows, m2_reasons = _m2_monthly_append_rows(
-            m2_row=m2, existing_pairs=existing_m2, today=today,
+            m2_row=m2, existing_pairs=set(), today=today,
         )
-        rows_to_write.extend(m2_rows)
+        audit_candidates(m2_rows, existing_m2_rows, today=today,
+                         source_url="daily metric_history M2 observations",
+                         evidence_kind="database-observations")
+        new_m2 = [row for row in m2_rows
+                  if (row["metric_id"], date.fromisoformat(row["as_of"])) not in existing_m2]
+        rows_to_write.extend(new_m2)
         skip_reasons.extend(m2_reasons)
+        _note_derived_leg("m2", m2_rows, new_m2, m2_reasons)
     except Exception as e:  # noqa: BLE001 -- same R1/M1 reasoning as the CPI trio sub-path above
+        _record_stage_failure("m2", stage, e)
         logger.warning("macro monthly append: M2 read failed: %s", e)
         skip_reasons.append(f"M2: read failed ({type(e).__name__}: {e})")
         notify(
@@ -2953,8 +3401,8 @@ def _yield_ladder_rows_for_month(
     this exact month.
 
     ``refresh=True`` relaxes Stage 2: "already written" must not mean
-    "final". A pair is still dropped when its stored value already EQUALS
-    the freshly derived one (so an ordinary day writes nothing at all and
+    "final". A pair is still dropped when its stored value AND auction date equal
+    the freshly derived observation (so an ordinary day writes nothing at all and
     ``ingested_at`` doesn't churn), but a CHANGED value is re-emitted and
     the upsert updates it in place. ``existing_values`` supplies the stored
     numbers for that comparison; it is ignored entirely when ``refresh`` is
@@ -3061,8 +3509,11 @@ def _yield_ladder_rows_for_month(
             if not refresh:
                 continue  # append-only: already have this tenor for this month
             prior = stored.get((monthly_id, month_start))
-            if prior is not None and prior == values[tenor]:
-                continue  # unchanged since the last run -- no write
+            prior_source = stored_source.get((monthly_id, month_start))
+            if prior_source is not None and prior_source > auction_dates[tenor]:
+                continue  # degraded source history cannot move either leg backwards
+            if prior == values[tenor] and prior_source == auction_dates[tenor]:
+                continue  # identical reading AND evidence -- no write
             if require_newer_source:
                 # Closed month: only ever move a rung FORWARD onto a later
                 # auction. No stored date, or one that is not strictly older
@@ -3078,6 +3529,92 @@ def _yield_ladder_rows_for_month(
             "source_as_of": auction_dates[tenor].isoformat(),
         })
     return rows, []
+
+
+def _newest_listed_auctions(auction_rows: list[dict], through: date) -> dict[str, date]:
+    """Each ladder tenor's newest usable auction_results row (a dated, numeric cutoff) on or
+    before ``through`` -- the rows the derivation for a month ending then can draw on."""
+    newest: dict[str, date] = {}
+    for row in auction_rows:
+        tenor, day = row.get("tenor"), _parse_monthly_row_date(row.get("auction_date"))
+        if tenor not in _YIELD_TENOR_TO_MONTHLY_ID or day is None or day > through:
+            continue
+        try:
+            float(row["cutoff"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if day > newest.get(tenor, date.min):
+            newest[tenor] = day
+    return newest
+
+
+def _yield_rungs_ahead_of_listing(auction_rows: list[dict],
+                                  existing_source_as_of: dict[tuple[str, date], date],
+                                  cutoffs: dict[date, date]) -> list[str]:
+    """Recorded rungs of the months this writer maintains (month start -> the day its
+    derivation reads through) dated by an auction newer than any auction_results still lists
+    up to that day: the refresh guard keeps such a rung, and lag cannot explain it."""
+    ahead = []
+    for month, through in cutoffs.items():
+        listed = _newest_listed_auctions(auction_rows, through)
+        for tenor, monthly_id in _YIELD_TENOR_TO_MONTHLY_ID.items():
+            recorded = existing_source_as_of.get((monthly_id, month))
+            if recorded is not None and (tenor not in listed or listed[tenor] < recorded):
+                ahead.append(f"{monthly_id} for {month:%Y-%m} recorded through {recorded} "
+                             f"(newest listed: {listed.get(tenor, 'none')})")
+    return ahead
+
+
+def _yield_rungs_held_by_forward_guard(auction_rows: list[dict], month_start: date, month_end: date,
+                                       existing: set[tuple[str, date]],
+                                       existing_values: dict[tuple[str, date], float],
+                                       existing_source_as_of: dict[tuple[str, date], date],
+                                       written: list[dict]) -> list[str]:
+    """Completed-month rungs the forward-only guard (``require_newer_source``) kept although the
+    same refresh without that guard would rewrite them (R2 fix H4 round 1): the recorded rung has
+    no auction date, or auction_results lists a different cutoff for the very auction it is dated
+    by. Receipt only -- re-derives in memory, never changes what is written."""
+    unguarded, _ = _yield_ladder_rows_for_month(
+        auction_rows, month_start=month_start, month_end=month_end, existing_pairs=existing,
+        existing_values=existing_values, existing_source_as_of=existing_source_as_of, refresh=True)
+    held = []
+    for row in (r for r in unguarded if r not in written):
+        key = (row["metric_id"], month_start)
+        recorded = existing_source_as_of.get(key)
+        held.append(f"{row['metric_id']} for {month_start:%Y-%m} stored "
+                    f"{existing_values.get(key, 'an unreadable value')} "
+                    f"{f'dated {recorded}' if recorded else 'with no auction date'}, "
+                    f"auction_results lists {row['value']} dated {row['source_as_of']}")
+    return held
+
+
+def _note_yield_leg(auction_rows: list[dict], existing: set[tuple[str, date]],
+                    existing_source_as_of: dict[tuple[str, date], date], rows: list[dict],
+                    reasons: list[str], cutoffs: dict[date, date], held: list[str]) -> None:
+    """Why the ladder did not move a rung (R2 fix H4). Guard refusals verbatim (all-or-nothing)
+    or described (the completed month's forward-only guard); a recorded rung the listing has gone
+    behind is a source gone backwards. These are reported even when the other month wrote rows
+    (controller ruling (2)). Otherwise, when no rung moved, the table holds no newer auction:
+    publication lag, stated with the newest recorded month and the ladder's accepted lag window."""
+    for reason in reasons:
+        record_skip("yield", wr.WITHHELD_BY_VALIDATION, reason)
+    if held:
+        record_skip("yield", wr.WITHHELD_BY_VALIDATION,
+                    "completed-month forward-only guard (landmine 54: a closed month's rung moves "
+                    "only onto a strictly later auction) kept the recorded rung: " + "; ".join(held))
+    ahead = _yield_rungs_ahead_of_listing(auction_rows, existing_source_as_of, cutoffs)
+    if ahead:
+        record_skip("yield", wr.SOURCE_OLDER_THAN_RECORDS,
+                    "auction_results lists nothing at or after the auction a recorded rung is "
+                    "dated by: " + "; ".join(ahead))
+    if rows or reasons or held or ahead:
+        return
+    listed = _newest_listed_auctions(auction_rows, max(cutoffs.values()))
+    _record_official_lag(
+        "yield", min(_YIELD_TENOR_TO_MONTHLY_ID.values(), key=_accepted_lag_days),
+        "auction_results lists no auction that moves a recorded rung "
+        f"(newest listed auction {max(listed.values(), default='none')})",
+        max((month for _, month in existing), default=None))
 
 
 def _write_yield_ladder_monthly_append(today: date | None = None) -> int:
@@ -3109,7 +3646,7 @@ def _write_yield_ladder_monthly_append(today: date | None = None) -> int:
     The open-month leg does mean the read now happens on EVERY run rather
     than only on the days a completed month was still unwritten (the L3
     note below). Writes stay rare regardless: the refresh path emits a row
-    only when a tenor's derived value actually DIFFERS from the stored one,
+    only when a tenor's derived value or auction date differs from the stored one,
     so a day with no new auction writes nothing.
 
     Pure DB reads only -- no Playwright, no live HTTP fetch (unlike the
@@ -3166,6 +3703,8 @@ def _write_yield_ladder_monthly_append(today: date | None = None) -> int:
                 except (KeyError, TypeError, ValueError):
                     continue
     except Exception as e:  # noqa: BLE001 -- R1/M1 lesson: broad on purpose,
+        record_failure("yield", "read", wr.DATABASE_READ_FAILED,
+                       f"existing yield-ladder rows (metric_history_monthly) ({type(e).__name__})")
         # a JSONDecodeError-class failure here must not escape and crash
         # the caller (or block the CPI/remittance legs, which run as fully
         # separate function calls regardless of what happens here).
@@ -3185,6 +3724,8 @@ def _write_yield_ladder_monthly_append(today: date | None = None) -> int:
         # full-history re-read -- see this function's docstring.
         auction_rows = get_auction_results_through(today)
     except Exception as e:  # noqa: BLE001 -- same reasoning as above.
+        record_failure("yield", "read", wr.DATABASE_READ_FAILED,
+                       f"auction_results through {today} ({type(e).__name__})")
         logger.warning("yield ladder append: auction_results read failed: %s", e)
         notify(
             "warning",
@@ -3232,6 +3773,9 @@ def _write_yield_ladder_monthly_append(today: date | None = None) -> int:
     )
     rows.extend(prev_rows)
     reasons.extend(prev_reasons)
+    held = _yield_rungs_held_by_forward_guard(
+        auction_rows, prev_month_start, prev_month_end, existing, existing_values,
+        existing_source_as_of, prev_rows)
 
     # Leg 2 -- the open month, refreshed every run. Its all-or-nothing
     # derivation and staleness floor are the completed month's, unchanged;
@@ -3250,6 +3794,7 @@ def _write_yield_ladder_monthly_append(today: date | None = None) -> int:
             month_end=today,
             existing_pairs=existing,
             existing_values=existing_values,
+            existing_source_as_of=existing_source_as_of,
             refresh=True,
         )
         rows.extend(open_rows)
@@ -3268,6 +3813,8 @@ def _write_yield_ladder_monthly_append(today: date | None = None) -> int:
             "aggregate — macro monthly append: yield ladder incomplete",
             "; ".join(reasons),
         )
+    _note_yield_leg(auction_rows, existing, existing_source_as_of, rows, reasons,
+                    cutoffs={prev_month_start: prev_month_end, open_month_start: today}, held=held)
 
     if not rows:
         return 0
@@ -3396,103 +3943,6 @@ def _derive_daily_yields_from_auctions(
 # specific naming convention per section (`macro_*`, `remit_*`, `fiscal_*`,
 # `banking_*`, `food_*`); EconDelta keeps its own indicator IDs authoritative.
 # Pure 1:1 aliases (no unit conversion) live here.
-BRIEF_ALIASES: dict[str, str] = {
-    # macro
-    "macro_cpi_food":      "food_inflation",
-    "macro_cpi_headline":  "general_inflation",
-    "macro_cpi_nonfood":   "non_food_inflation",
-    # YoY % credit growth — repointed PR-C (build-brief item 4) to BB's live
-    # econdata/monetarysurvey HTML page ("Claims on Private Sector (DMBs)"),
-    # not derived from the absolute private_sector_credit BDT-crore value.
-    #
-    # OWNER DECISION FLAG (2026-08-22, PR-C): June 2026 has a genuine
-    # conflict between BB's own machine-readable table and unanimous press
-    # coverage of the same concept. BB's econdata/monetarysurvey table
-    # ("Claims on Private Sector (DMBs)" YoY column) reads 4.53%; every
-    # press outlet quoted BB's own ADJUSTED headline figure of 4.47% for
-    # the same month. This PR ships 4.53% (the BB table -- machine-
-    # readable, matches the series' own prior-month trajectory: Mar 4.72,
-    # Apr 4.75, May 4.98) as the live value, per the source scout's
-    # recommendation. Do NOT average the two, and do NOT silently swap to
-    # 4.47% without a fresh sign-off -- this is a data-source judgment
-    # call on a number The Brief publishes as "private credit growth", not
-    # an engineering decision. See AGENT_LEARNINGS.md/AGENTS.md landmine 52
-    # for the fuller writeup.
-    "macro_credit_growth": "private_sector_credit_yoy_pct",
-    # remittance — bn→mn unit conversion is in BRIEF_CONVERSIONS below.
-    # fiscal — crore→trillion conversions are in BRIEF_CONVERSIONS below.
-    # NBR FYTD canonical: tax_revenue from the BB PDF (deterministic parse,
-    # 5% anomaly threshold). News corroborators (nbr_fytd_collected_tbs,
-    # nbr_fytd_collected_dailystar) retired 2026-05-25 — both tag-listing
-    # pages drifted onto articles covering different fiscal-year windows,
-    # so the cross-check flapped.
-    "nbr_fytd_collected_cr":    "tax_revenue",
-    # banking primitives
-    "banking_broad_money":      "broad_money",
-    "banking_reserve_money":    "reserve_money",
-    "banking_money_multiplier": "money_multiplier",
-    "banking_excess_liquid":    "excess_liquid_asset_total_minimum",
-    "banking_deposits":         "deposits_of_the_system",
-    "banking_call_money_rate":  "call_money_rate",
-    # banking ratios (FSAR — quarterly)
-    "banking_npl_pct":          "gross_npl_ratio",
-    "banking_car_pct":          "banking_sector_crar",
-    # money market — yield headline (daily)
-    "tbill_91d_yield_pct":      "bill_bond_rates",
-    "gsec_next_auction_cr":     "gsec_auction",
-    # money market — brief metric_id forms (the brief's tbond builder
-    # uses ``tbond_tbill_91d``; brief's nbr/dam builders use ``dam_*``)
-    "tbond_tbill_91d":          "bill_bond_rates",
-    # multi-tenor T-Bill / T-Bond yields — feed §07 yield curve chart
-    "tbond_tbill_182d":         "tbill_182d_yield",
-    "tbond_tbill_364d":         "tbill_364d_yield",
-    "tbond_bond_5y":            "tbond_5y_yield",
-    "tbond_bond_10y":           "tbond_10y_yield",
-    # DAM retail food prices (daily, BDT/kg or BDT/4-pcs for eggs)
-    "food_rice_coarse_bdt":     "food_rice_coarse",
-    "food_atta_packet_bdt":     "food_atta_packet",
-    "food_egg_red_bdt":         "food_egg_red",
-    "food_chicken_farm_bdt":    "food_chicken_farm",
-    "food_oil_soybean_bdt":     "food_oil_soybean",
-    "food_onion_local_bdt":     "food_onion_local",
-    "food_lentil_moong_bdt":    "food_lentil_moong",
-    "food_sugar_local_bdt":     "food_sugar_local",
-    # DAM retail food prices — brief metric_id forms (`dam_*`)
-    "dam_rice_coarse":          "food_rice_coarse",
-    "dam_lentil":               "food_lentil_moong",
-    "dam_oil":                  "food_oil_soybean",
-    "dam_sugar":                "food_sugar_local",
-    "dam_onion":                "food_onion_local",
-    "dam_egg":                  "food_egg_red",
-    "dam_chicken":              "food_chicken_farm",
-    "dam_flour":                "food_atta_packet",
-}
-
-# Aliases that need a unit conversion (source unit → brief unit).
-# Format: brief_key → (source_key, multiplier).
-BRIEF_CONVERSIONS: dict[str, tuple[str, float]] = {
-    # T-Bill / T-Bond outstanding: gsom reports BDT million; brief expects
-    # BDT crore (1 crore = 10 million → multiplier 0.1).
-    "tbill_outstanding_cr": ("treasury_bill_outstanding", 0.1),
-    "tbond_outstanding_cr": ("treasury_bond_outstanding", 0.1),
-    # Fiscal: EconDelta indicators are BDT crore, brief renders BDT trillion.
-    # 1 trillion BDT = 100,000 crore → multiplier 0.00001.
-    "fiscal_nbr_collected_trn":  ("tax_revenue", 0.00001),
-    "fiscal_govt_borrow_trn":    ("domestic_borrowing_for_budget_deficit", 0.00001),
-    "fiscal_foreign_borrow_trn": ("foreign_borrowing_for_budget_deficit", 0.00001),
-    "fiscal_bank_borrow_trn":    ("bank_borrowing_for_deficit_financing", 0.00001),
-    "fiscal_nsc_outstanding":    ("nsc_outstanding", 0.00001),
-    # Remittance: EconDelta source is USD billion, brief renders USD million.
-    # 1 billion = 1,000 million → multiplier 1000.
-    "remit_monthly_mn": ("monthly_remittance", 1000.0),
-    "remit_fy_mn":      ("fy_remittance", 1000.0),
-    # NBR component decomposition (Phase 3.2): articles report BDT crore,
-    # brief's §12 expects BDT bn. 1 bn = 100 crore → multiplier 0.01.
-    "nbr_vat_bn":       ("nbr_vat_collected_cr", 0.01),
-    "nbr_it_bn":        ("nbr_it_collected_cr", 0.01),
-    "nbr_customs_bn":   ("nbr_customs_collected_cr", 0.01),
-}
-
 # The four metric_history ids minted from the ``money_market_ref_rate``
 # indicator's dict value (DOMMR/BOFR Overnight + 1W). Must stay identical to
 # parsers/html_money_market_ref_rate._SERIES_KEYS — a drift-guard test
@@ -3690,6 +4140,22 @@ def _titleize(metric_id: str) -> str:
 # `_build_v3_blocks`. Keyed by metric_id for idempotent merging.
 DERIVED_DEFINITION_SEEDS: list[dict] = [
     {
+        "metric_id": "imf_general_govt_debt_pct_gdp",
+        "label": "IMF general-government debt/GDP",
+        "short_label": "IMF debt/GDP",
+        "unit": "percent",
+        "domain": "government_finance",
+        "cadence": "fiscal_year",
+        "description": (
+            "IMF DataMapper GGXWDG_NGDP series: general-government gross debt as a "
+            "percentage of GDP. IMF estimates or projections where designated by the "
+            "IMF; these observations are not audited actuals. Bangladesh fiscal years "
+            "end on 30 June."
+        ),
+        "source": "IMF DataMapper (WEO; estimates/projections where applicable)",
+        "source_url": "https://www.imf.org/external/datamapper/api/v1/GGXWDG_NGDP",
+    },
+    {
         "metric_id": "crr_utilisation_pct",
         "label": "CRR balance as % of system deposits",
         "short_label": None,
@@ -3834,6 +4300,7 @@ def _build_definition_seeds(sources_v3_cfg: dict) -> list[dict]:
     return seeds
 
 
+
 def write_latest(bundle: LatestBundle) -> None:
     """Atomic write: .tmp -> os.replace."""
     DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -3844,92 +4311,69 @@ def write_latest(bundle: LatestBundle) -> None:
     os.replace(tmp_path, LATEST_PATH)
 
 
-def _run_chart_feeding_monthly_appenders() -> None:
-    """Run the two chart-feeding metric_history_monthly appenders.
+def _write_held_attempt_receipt(receipt: dict) -> None:
+    """Record a held (hard-rejected) daily attempt in `latest.attempt.json`.
 
-    Extracted from ``main()`` on 2026-08-31 so it can be called from BOTH the
-    happy path and the Opus ``hard_reject`` path (landmine 53). Neither leg
-    reads this run's ``bundle``/``data``: the yield ladder promotes rows out of
-    ``auction_results`` (written by econdelta-auction.service) and the macro
-    leg reads the CPI trio back out of ``metric_history``. So an Opus verdict
-    about today's export/treasury numbers has no bearing on whether these two
-    are correct, and must not stop them running.
+    An operations receipt only: The Brief neither reads nor syncs it, and it is
+    never a capture -- `latest.json` keeps the previous accepted snapshot
+    byte-for-byte, so consumers see that capture's true (older) `updated_at`.
 
-    Every failure is contained and notified per-leg — this function never
-    raises, so a caller can invoke it immediately before its own ``return``
-    without changing that return value.
+    Contained, never raised: the run already exits 1 for the held day, and an
+    escaping error here would swap that for a traceback and lose this run's
+    independent monthly outcome -- including failures (e.g. an unconfirmed
+    readback) that no alert carries. On failure the outcome goes to the log at
+    ERROR, the temp file is removed, and any older receipt is left as it was
+    (its own `attempted_at` dates it). The receipt is validated against the same
+    `WriteStatus` contract as latest.json (R2 fix 10); a receipt that breaks it is
+    one of those contained failures, never written.
     """
-    # Macro monthly LIVE APPENDER (2026-08-08 frozen-charts incident,
-    # landmine 50) -- CPI trio + remittance chart-feeding series. Own
-    # try/except (mirrors D5 in main()): a failure here must notify with its
-    # OWN distinct message, not get conflated with the daily
-    # metric_history failure or the reserves-split failure -- three
-    # different tables/paths, three different responder actions. Gated
-    # the same way as the daily metric_history write (not tied to
-    # bb_forex_ok -- this appender is independent of bb_forex) and called
-    # AFTER it on the happy path so a CPI value that changed THIS run is
-    # already persisted to the daily table before the appender reads it back.
-    if os.environ.get("ECONDELTA_SKIP_SUPABASE") != "1":
+    receipt_path = LATEST_PATH.with_suffix(".attempt.json")
+    tmp = receipt_path.with_suffix(".json.tmp")
+    try:
+        receipt_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp.write_text(json.dumps(WriteStatus.model_validate(receipt).model_dump(mode="json")))
+        os.replace(tmp, receipt_path)
+    except (OSError, TypeError, ValueError) as exc:
         try:
-            macro_rows = _write_macro_monthly_append()
-            if macro_rows:
-                logger.info(
-                    "upserted %d row(s) to Supabase metric_history_monthly "
-                    "(macro monthly append: CPI trio + remittance)", macro_rows,
-                )
-        except Exception as e:  # noqa: BLE001 -- 2026-08-08 review M1/L4b:
-            # defense-in-depth final backstop. _write_macro_monthly_append's
-            # own sub-path try/excepts already contain every known failure
-            # mode (CPI read, remittance existing-rows read, remittance
-            # fetch/parse) -- by construction, only the final
-            # upsert_metric_history_monthly call (SupabaseWriteError) should
-            # ever reach here. Broadened from that single type to Exception
-            # so a future refactor that accidentally lets something else
-            # escape still can't crash the whole daily aggregate run.
-            logger.warning(
-                "macro monthly append failed: %s — continuing with local "
-                "archive only", e,
-            )
-            notify(
-                "error",
-                "aggregate — macro monthly append write failed",
-                "metric_history_monthly upsert (CPI trio / remittance appender) "
-                "failed; The Brief's inflation/remittance charts will serve "
-                f"stale data until the next successful run. {type(e).__name__}: {e}",
-            )
+            tmp.unlink(missing_ok=True)
+        except OSError as cleanup_exc:
+            logger.warning("could not remove %s: %s", tmp, cleanup_exc)
+        logger.error(
+            "held-day receipt %s not written (%s: %s); an older receipt, if any, is "
+            "not this run's. latest.json unchanged; this run's outcome: %s",
+            receipt_path, type(exc).__name__, exc, json.dumps(receipt, default=str),
+        )
 
-    # Yield-ladder LIVE APPENDER (Phase 2, landmine 51) -- the 8-tenor
-    # T-bill/T-bond curve, promoted from auction_results. Own try/except
-    # (mirrors the macro-append block above and D5 in main()): a fully
-    # SEPARATE function call with its own upsert, so a failure here can
-    # never prevent the CPI/remittance legs above from having already
-    # reached THEIR upsert (they already did, by the time this block
-    # runs), and a failure THERE could never have prevented this leg
-    # from running either -- each leg's try/except fully contains its
-    # own failures before the next leg's call even starts.
-    if os.environ.get("ECONDELTA_SKIP_SUPABASE") != "1":
-        try:
-            yield_rows = _write_yield_ladder_monthly_append()
-            if yield_rows:
-                logger.info(
-                    "upserted %d row(s) to Supabase metric_history_monthly "
-                    "(yield ladder append, Phase 2)", yield_rows,
-                )
-        except Exception as e:  # noqa: BLE001 -- same R1/M1 reasoning as
-            # the macro-append call site above: by construction only the
-            # final upsert_metric_history_monthly call should reach here,
-            # but broadened to Exception as a defense-in-depth backstop.
-            logger.warning(
-                "yield ladder append failed: %s — continuing with local "
-                "archive only", e,
-            )
-            notify(
-                "error",
-                "aggregate — yield ladder append write failed",
-                "metric_history_monthly upsert (yield ladder appender, Phase 2) "
-                "failed; The Brief's yield-curve chart will serve stale data "
-                f"until the next successful run. {type(e).__name__}: {e}",
-            )
+
+def _run_chart_feeding_monthly_appenders() -> dict:
+    """Independent legs run even when the daily review holds."""
+    from utils.epb_monthly import write_exports_monthly
+
+    parts = {}
+    for name, writer, leg_of in (("macro", _write_macro_monthly_append, _MACRO_MONTHLY_LEG_OF),
+                                 ("yield", _write_yield_ladder_monthly_append, None),
+                                 ("exports", write_exports_monthly, None)):
+        with monthly_attempt(name, leg_of) as receipt:
+            if os.environ.get("ECONDELTA_SKIP_SUPABASE") == "1":
+                receipt.skip_leg(None, wr.NOT_ATTEMPTED, "database writes disabled")
+            else:
+                _run_monthly_writer(name, writer, receipt)
+        parts[name] = receipt.result()
+    return combine_monthly(parts)
+
+
+def _run_monthly_writer(name: str, writer: Callable[[], int], receipt: wr.MonthlyReceipt) -> None:
+    """Contain one appender; an exception a leg hook already charged is not charged twice."""
+    try:
+        count = writer()
+        if count and not receipt.confirmed_rows and not receipt.failures:
+            receipt.fail_leg(None, "readback", wr.WRITE_UNCONFIRMED,
+                             f"writer reported {count} row(s) but no exact readback ran")
+    except Exception as exc:
+        receipt.fail_unrecorded(None, exc)
+        logger.warning("%s monthly append failed: %s", name, exc)
+        notify("error", "aggregate — " + ("yield ladder append" if name == "yield" else f"{name} monthly append") + " write failed",
+               f"Existing history preserved; {type(exc).__name__}")
 
 
 def main() -> int:
@@ -3971,31 +4415,9 @@ def main() -> int:
 
     _notify_long_stale_fallbacks(alerts)
 
-    # Forex-source aliases AFTER the v3 merge: the parse-stage versions of these
-    # indicators come from BB PDFs and frequently fail (Akamai TSPD challenge,
-    # PDF format drift) — leaving 0.0 in data_additions which would shadow the
-    # working bb_forex.py-direct scrape. Apply the alias here so it wins.
-    #
-    # Freshness-gated: only overwrite when bb_forex's OWN status is "ok". A
-    # stale direct scrape shouldn't clobber the v3 registry's own (possibly
-    # fresher) independent parse of the same concept just because the direct
-    # scrape is usually more reliable. When stale, whatever the v3 pipeline
-    # produced is left as-is — and the underlying usd_bdt_mid /
-    # gross_reserves_usd_bn keys (set unconditionally by flatten_data above)
-    # still flow regardless, now honestly dated via
-    # _build_tier1_source_as_of_map, which is the actual point of this guard.
-    #
-    # bb_forex_ok is reused below (Supabase write block) as the SAME gate for
-    # _build_tier1_source_as_of_map's alias dates — the date must follow the
-    # (gated) value, or a fresh v3 value can end up wearing bb_forex's stale
-    # date (review round 1, item 1).
     forex = snapshots.get("bb_forex")
     forex_status = sources_status.get("bb_forex")
     bb_forex_ok = forex_status is not None and forex_status.status == "ok"
-    if forex is not None and bb_forex_ok:
-        data["usd_bdt_exchange_rate"] = forex.rates.usd_bdt_mid
-        if forex.reserves is not None:
-            data["fx_reserve_gross_and_bpm6"] = forex.reserves.gross_reserves_usd_bn
 
     # Daily yield-curve DERIVATION from auction_results (landmine 49's two-
     # column trap, PR-C build-brief item 3) -- must run BEFORE
@@ -4006,6 +4428,7 @@ def main() -> int:
     # Supabase-touching enrichment in this module (tests/conftest.py
     # defaults that env var to "1", so the whole test suite never makes a
     # real auction_results read unless a test explicitly opts in).
+    yield_values = {}
     if os.environ.get("ECONDELTA_SKIP_SUPABASE") != "1":
         yield_values, yield_source_as_of = _derive_daily_yields_from_auctions(today=now.date())
         data.update(yield_values)
@@ -4014,23 +4437,11 @@ def main() -> int:
 
     _apply_brief_aliases(data)
 
-    # H3 (Opus review round 1, 2026-08-23): propagate the derived yields'
-    # real auction dates to their brief-facing alias/conversion keys too
-    # (tbond_bond_10y, tbond_tbill_182d, tbill_91d_yield_pct, ...) -- values
-    # already flow to these keys via _apply_brief_aliases above, but their
-    # DATES did not: neither key is a v3-registry id or a Tier-1 flatten
-    # key, so _build_source_as_of_map/_build_tier1_source_as_of_map below
-    # never see them, and upsert_metric_history's as_of=today fallback would
-    # forge a run-date stamp on top of an honestly-dated base id -- one
-    # alias hop away from the exact unbounded-carry-forward risk landmine
-    # 51 exists to prevent (an alias's as_of silently advancing to "today"
-    # every run regardless of how stale the real auction actually is).
-    for brief_key, econ_key in BRIEF_ALIASES.items():
-        if econ_key in yield_source_as_of:
-            yield_source_as_of[brief_key] = yield_source_as_of[econ_key]
-    for brief_key, (src_key, _mult) in BRIEF_CONVERSIONS.items():
-        if src_key in yield_source_as_of:
-            yield_source_as_of[brief_key] = yield_source_as_of[src_key]
+    observations = _build_observations(
+        snapshots, domains, sources_status, now=now, holidays=holidays,
+        yield_values=yield_values, yield_dates=yield_source_as_of,
+    )
+    _project_observations(data, domains, observations)
 
     # Cross-metric health check (E1.4): the BB policy corridor's three legs
     # (SDF floor / repo / SLF ceiling) are each parsed independently, so no
@@ -4047,9 +4458,8 @@ def main() -> int:
     # value-only stillness alarm below has never needed this; the watchlist
     # check below it does, since predicates (a)/(b) are as_of-aware).
     source_as_of_map = {
-        **_build_tier1_source_as_of_map(snapshots, bb_forex_ok=bb_forex_ok),
-        **_build_source_as_of_map(domains),
-        **yield_source_as_of,
+        mid: obs.as_of for mid, obs in observations.items()
+        if eligible(obs, today=now.date())
     }
 
     # Stillness alarm: the threshold checks above all ask "did this value move
@@ -4094,6 +4504,7 @@ def main() -> int:
             updated_at=now,
             sources_status=sources_status,
             data=data,
+            observations=serialize_observations(observations),
             domains=domains,
             freshness=freshness,
             alerts=alerts,
@@ -4143,7 +4554,9 @@ def main() -> int:
             elif status == "reject":
                 missing = verdict.get("missing", []) or []
                 anomalies = verdict.get("anomalies", []) or []
-                flagged = [a.get("indicator") for a in anomalies if a.get("indicator")]
+                # Keep empty ids visible: the review decoder marks those as an
+                # explicit but unmappable rejection, which must fail closed.
+                flagged = [a.get("indicator") for a in anomalies if isinstance(a, dict)]
                 # sorted, not set-order: this list is logged, notified and used
                 # to decide breadth, and a run's alert should read the same way
                 # twice (landmine 57).
@@ -4166,7 +4579,10 @@ def main() -> int:
                         "reset, not an anomaly | evidence: %s | reason: %s",
                         len(fy_excused), fy_excused, "; ".join(fy_evidence), reason,
                     )
-                if not flagged:
+                fully_excused = _fully_excused_fy_reject(
+                    raw_flagged_count, flagged, fy_excused
+                )
+                if fully_excused:
                     logger.warning(
                         "opus review reject fully explained by the fiscal-year "
                         "reset (%s) — publishing today's data unchanged | reason: %s",
@@ -4186,10 +4602,26 @@ def main() -> int:
                 # every single one, which is the real 1 July case (all seven
                 # cumulative series reset the same night) and publishes clean
                 # with zero substitutions. See _quarantine_flagged.
-                cleaned, quarantined, hard_reject = _quarantine_flagged(
-                    data, flagged, history,
-                    breadth_count=raw_flagged_count if flagged else 0,
-                )
+                if not flagged and not fully_excused:
+                    # An explicit reject with no safely mappable field cannot
+                    # be interpreted as a clean fiscal reset.
+                    cleaned, quarantined, hard_reject = dict(data), [], True
+                else:
+                    accepted_observations, quarantined, hard_reject = _quarantine_flagged(
+                        observations, flagged, history,
+                        breadth_count=raw_flagged_count if flagged else 0,
+                    )
+                    cleaned = dict(data)
+                    if not hard_reject:
+                        removed = set(observations) - set(accepted_observations)
+                        for mid in removed:
+                            cleaned.pop(mid, None)
+                        for mid, obs in accepted_observations.items():
+                            cleaned[mid] = obs.value
+                        for indicators in domains.values():
+                            for mid in removed:
+                                indicators.pop(mid, None)
+                        observations = accepted_observations
                 if hard_reject:
                     logger.error(
                         "opus review REJECTED (hard): %s | missing=%s | anomalies=%d "
@@ -4220,7 +4652,14 @@ def main() -> int:
                     # 2026's rung went missing for exactly this reason and had to
                     # be written by hand. The function contains and notifies its
                     # own failures, so this cannot change the `return 1` below.
-                    _run_chart_feeding_monthly_appenders()
+                    monthly_status = _run_chart_feeding_monthly_appenders()
+                    # Keep the last accepted snapshot byte-for-byte. The rejected
+                    # attempt has its own receipt and never masquerades as a capture.
+                    _write_held_attempt_receipt({
+                        "daily": {"status": "skipped", "attempted_at": now.isoformat(),
+                                  "reason": "daily review held; previous accepted snapshot retained"},
+                        "monthly": monthly_status,
+                    })
                     return 1
                 # Granular path: quarantine the flagged fields, publish the rest.
                 # `quarantined` can legitimately be empty now — the fiscal-year
@@ -4237,14 +4676,19 @@ def main() -> int:
                         "warning",
                         "EconDelta published with fields quarantined",
                         f"reason: {reason}\nquarantined: {quarantined}\n"
-                        f"these fields use last-good values; the rest published fresh.",
+                        "dated last-known observations are held where available; "
+                        "a rejected family without dated history is omitted.",
                     )
                 data = cleaned
+                _project_observations(data, domains, observations)
+                source_as_of_map = {mid: obs.as_of for mid, obs in observations.items()
+                                    if eligible(obs, today=now.date())}
                 bundle = LatestBundle(
                     schema_version="3.0",
                     updated_at=now,
                     sources_status=sources_status,
                     data=data,
+                    observations=serialize_observations(observations),
                     domains=domains,
                     freshness=freshness,
                     alerts=alerts,
@@ -4252,12 +4696,12 @@ def main() -> int:
             else:
                 logger.info("opus review OK: %s (confidence=%s)", reason, verdict.get("confidence"))
 
-    write_latest(bundle)
-    # Archive a daily copy for tomorrow's Opus review. Same-day runs overwrite,
-    # so the LAST successful aggregate of the day is what tomorrow compares against.
-    archived = archive_latest(LATEST_PATH, ARCHIVE_DIR)
-    if archived is not None:
-        logger.info("archived to %s", archived.name)
+    daily_status = {"status": "skipped", "attempted_at": now.isoformat(),
+                    "reason": "database writes disabled"}
+    override_status = {"status": "skipped", "attempted_at": now.isoformat(),
+                       "reason": "database writes disabled"}
+    monthly_status = None
+    reserves_status = None
 
     # Seed metric_definitions for any new indicators (idempotent).
     from utils.supabase_writer import upsert_metric_definitions_seed
@@ -4278,23 +4722,14 @@ def main() -> int:
                 upsert_metric_history,
                 verify_landed_count,
             )
-            # source_as_of_map is built earlier in main() now (immediately
-            # before the stillness/watchlist staleness checks, which need it
-            # too) — reused here unchanged. Slow-cadence metrics (quarterly
-            # FSAR, monthly news) carry source_as_of from the parser so
-            # metric_history.as_of reflects the true publication date rather
-            # than today's run date — fixing the freshness-pill lie. Merged
-            # from the Tier-1 map (bb_forex/dse_market/commodity_prices —
-            # SCRAPER_SPEC, which never enters the v3 `domains` dict and so
-            # could never get an override here otherwise) and the v3 map;
-            # Tier-1 keys and v3 registry keys should never collide (the two
-            # pipelines cover disjoint indicator ids), but if sources-v3.json
-            # ever grows an entry that shadows a Tier-1 flatten_data key, the
-            # v3-recovered date (parsed from the source document's own text)
-            # wins — it was merged LAST when this map was built.
+            # Both values and per-metric dates are projections of the selected
+            # complete observations. The writer independently enforces eligibility.
             # Explicit write timestamp so the E2.2 landed-count read-back counts
             # exactly this upsert's rows.
             write_ts = datetime.now(timezone.utc)
+            # R2 fix H5 (owner decision m): an NBR FYTD figure already on file for its own
+            # period is not re-sent; one without a stated period is never dated.
+            daily_data, nbr_skips = _unrecorded_nbr_fytd(data, observations, today=now.date())
             # No provenance= here on purpose: this one call flattens the WHOLE
             # snapshot — deterministic Tier-1 flatten, config-driven regex/table
             # parsers, AND the LLM-extraction fallback (hybrid.parse_one) all
@@ -4305,8 +4740,8 @@ def main() -> int:
             # need parse_all/aggregate to carry the tag alongside each value,
             # analogous to source_as_of_map above), not something to fake now.
             n_rows = upsert_metric_history(
-                data=data, as_of=now.date(), source_as_of_map=source_as_of_map,
-                ingested_at=write_ts,
+                data=daily_data, as_of=now.date(), source_as_of_map=source_as_of_map,
+                ingested_at=write_ts, observations=observations,
             )
             logger.info(
                 "upserted %d rows to Supabase metric_history (as_of=%s, overrides=%d)",
@@ -4316,10 +4751,19 @@ def main() -> int:
             # persistence (landmine 22). Re-query BEFORE media overrides so the
             # count is this upsert's rows only. Aggregate is the sole writer in
             # its 07:00 window, so an unscoped ingested_at>= count is exact.
-            verify_landed_count(n_rows, since=write_ts, source_label="aggregate")
-            _apply_media_overrides(data, source_as_of_map)
+            confirmed = verify_landed_count(n_rows, since=write_ts, source_label="aggregate",
+                                            metric_ids=list(source_as_of_map))
+            daily_status = _daily_receipt("ok" if confirmed is True else "failed", write_ts.isoformat(),
+                                          "rows confirmed" if confirmed is True else "daily readback unconfirmed",
+                                          nbr_skips)
+            # Own receipt (R2 fix 10): an override problem is never charged to, and
+            # never hidden by, the daily write confirmed above.
+            override_status = _media_override_receipt(data, source_as_of_map)
 
         except SupabaseWriteError as e:
+            daily_status = _daily_receipt("failed", write_ts.isoformat(), type(e).__name__, nbr_skips)
+            override_status = {"status": "skipped", "attempted_at": write_ts.isoformat(),
+                               "reason": f"{wr.NOT_ATTEMPTED}: the daily write failed"}
             logger.warning(
                 "Supabase write failed: %s — continuing with local archive only", e,
             )
@@ -4346,7 +4790,12 @@ def main() -> int:
             from utils.supabase_writer import SupabaseWriteError
 
             try:
-                monthly_rows = _write_reserves_monthly_split(forex.reserves)
+                with monthly_attempt("reserves") as receipt:
+                    monthly_rows = _write_reserves_monthly_split(forex.reserves)
+                    if monthly_rows and not receipt.confirmed_rows and not receipt.failures:
+                        receipt.fail_leg(None, "readback", wr.WRITE_UNCONFIRMED,
+                                         f"writer reported {monthly_rows} row(s) but no exact readback ran")
+                    reserves_status = receipt.result()
                 if monthly_rows:
                     logger.info(
                         "upserted %d row(s) to Supabase metric_history_monthly "
@@ -4364,6 +4813,8 @@ def main() -> int:
                         "bb_forex being fresh -- see the warning above for why",
                     )
             except SupabaseWriteError as e:
+                receipt.fail_unrecorded(None, e)  # e.g. the definitions upsert, not the rows
+                reserves_status = receipt.result()
                 logger.warning(
                     "Supabase monthly-namespace write failed: %s — continuing "
                     "with local archive only", e,
@@ -4383,7 +4834,31 @@ def main() -> int:
         # metric_history write above, so a CPI value that changed THIS run is
         # already persisted to the daily table before the macro leg reads it
         # back.
-        _run_chart_feeding_monthly_appenders()
+        monthly_status = _run_chart_feeding_monthly_appenders()
+
+    if monthly_status is None:
+        monthly_status = {"status": "skipped", "attempted_at": now.isoformat(),
+                          "reason": "database writes disabled"}
+    if reserves_status is not None:
+        monthly_status = combine_monthly({"chart_appenders": monthly_status, "reserves": reserves_status})
+    # Validated before writing (R2 fix 10): a receipt that breaks the contract raises
+    # here, and the last accepted latest.json stays exactly as it was.
+    write_status = WriteStatus.model_validate(
+        {"daily": daily_status, "monthly": monthly_status, "media_overrides": override_status})
+    # R2 fix 5: upstream CPI/M2 source-poll liveness from the E6 receipts, read after the
+    # monthly legs' database rereads, which can never stand in for it. Reported to The
+    # Brief only: kept out of `sources_status` below, so it raises no new alert (decision j).
+    # R2 fix H3: the fetch stage's own upstream-poll receipts (their own directory, never the
+    # monthly legs' database rereads) decide each metric; E6's rows cover a missing receipt.
+    polls = read_polls(DATA_DIR / UPSTREAM_POLL_DIRECTORY, now=now)
+    upstream = {key: SourceStatus(**entry) for key, entry in
+                upstream_poll_status(source_monitor(now=now), polls=polls, now=now).items()}
+    bundle = bundle.model_copy(update={"write_status": write_status,
+                                       "sources_status": {**sources_status, **upstream}})
+    write_latest(bundle)
+    archived = archive_latest(LATEST_PATH, ARCHIVE_DIR)
+    if archived is not None:
+        logger.info("archived to %s", archived.name)
 
     summary = " ".join(
         f"{k}={s.status}({s.age_hours}h)" if s.age_hours is not None else f"{k}={s.status}"

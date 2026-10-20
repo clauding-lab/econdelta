@@ -87,6 +87,42 @@ def _run(tmp_path, monkeypatch, *, good_age_days: int):
     return data_additions, alerts
 
 
+@pytest.mark.parametrize(
+    "run_day",
+    [date(2024, 2, 15), date(2032, 11, 20)],
+)
+def test_last_good_uses_explicit_reference_day(tmp_path, monkeypatch, run_day):
+    data_dir = tmp_path / "data"
+    good_day = datetime.combine(run_day - timedelta(days=60), datetime.min.time(), timezone.utc)
+    indicator_dir = data_dir / INDICATOR
+    indicator_dir.mkdir(parents=True)
+    (indicator_dir / f"{good_day:%Y-%m-%d}.json").write_text(
+        json.dumps(_snapshot(good_day, 2_070_000.0))
+    )
+    monkeypatch.setattr(agg, "DATA_DIR", data_dir)
+
+    result = agg._load_last_good_snapshot(INDICATOR, today=run_day)
+
+    assert result is not None
+    assert result["_stale_from"] == good_day.date().isoformat()
+    assert agg._load_last_good_snapshot(
+        INDICATOR, today=run_day + timedelta(days=1)
+    ) is None
+
+
+@pytest.mark.parametrize("run_day", [date(2024, 2, 15), date(2032, 11, 20)])
+def test_build_uses_its_run_day_for_stale_fallback(tmp_path, monkeypatch, run_day):
+    now = datetime.combine(run_day, datetime.min.time(), timezone.utc)
+    data_dir = tmp_path / "data"
+    _write_history(data_dir, now=now, good_age_days=60)
+    monkeypatch.setattr(agg, "SOURCES_V3_PATH", _registry(tmp_path))
+    monkeypatch.setattr(agg, "DATA_DIR", data_dir)
+
+    data_additions, _domains, _freshness, _alerts = agg._build_v3_blocks(now)
+
+    assert data_additions[INDICATOR] == 2_070_000.0
+
+
 NOW = datetime(2026, 9, 3, 20, 55, tzinfo=timezone.utc)
 
 

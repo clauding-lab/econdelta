@@ -226,3 +226,35 @@ def test_fanned_sector_keys_inherit_parent_date():
 
 def test_undated_sector_heat_no_longer_silently_exempt():
     assert "dse_sector_heat" not in agg._NEVER_DATED_PARSE_STRATEGIES
+
+
+def test_observation_path_dates_fanned_sector_keys_with_the_session_date():
+    """Merge of #139 into the repair branch: production dates metrics through
+    ``_build_observations`` (the repair's source-period model), not through
+    ``_build_source_as_of_map``. The fanned ``dse_sector_heat_<sector>``
+    children must inherit the parent's session date there too, become
+    eligible, and never wear the run date (02:55 BDT Fri 2 Oct)."""
+    from utils.observations import eligible
+
+    now = datetime(2026, 10, 1, 20, 55, tzinfo=timezone.utc)
+    domains = {
+        "equities": {
+            "dse_sector_heat": {
+                "value": {"Banks": -0.08, "IT": -0.28},
+                "cadence": "daily",
+                "source_as_of": "2026-10-01",
+                "_parse_strategy": "dse_sector_heat",
+                "_provenance": "deterministic",
+                "scraped_at": "2026-10-01T19:40:00+00:00",
+            },
+        },
+    }
+    observations = agg._build_observations(
+        {}, domains, {}, now=now, holidays=set(), yield_values={}, yield_dates={},
+    )
+    for key in ("dse_sector_heat_banks", "dse_sector_heat_it"):
+        obs = observations[key]
+        assert obs.as_of == date(2026, 10, 1), key
+        assert obs.quality == "verified", key
+        assert eligible(obs, today=now.date()), key
+        assert obs.dependencies == ("dse_sector_heat",), key

@@ -161,33 +161,13 @@ class TestDryRunCLI:
             mock_session_cls.assert_not_called()
         assert exit_code == 0
 
-    def test_write_path_writes_history_before_definitions(self):
-        from unittest.mock import MagicMock
-
-        manager = MagicMock()
-        with patch(
-            "utils.supabase_writer.upsert_metric_history_monthly", return_value=24
-        ) as mock_hist, patch(
-            "utils.supabase_writer.upsert_metric_definitions_monthly", return_value=8
-        ) as mock_defs:
-            manager.attach_mock(mock_hist, "history")
-            manager.attach_mock(mock_defs, "definitions")
-            exit_code = run(["--write"])
-        assert exit_code == 0
-        call_order = [c[0] for c in manager.mock_calls]
-        assert call_order.index("history") < call_order.index("definitions")
-        written_rows = mock_hist.call_args[0][0]
-        assert len(written_rows) == 24
-
-    def test_write_path_returns_1_on_supabase_write_error(self):
-        from utils.supabase_writer import SupabaseWriteError
-
-        with patch(
-            "utils.supabase_writer.upsert_metric_history_monthly",
-            side_effect=SupabaseWriteError("boom"),
-        ):
-            exit_code = run(["--write"])
-        assert exit_code == 1
+    def test_write_refuses_history_and_definition_mutations(self):
+        with patch("utils.supabase_writer.upsert_metric_history_monthly") as history, patch(
+            "utils.supabase_writer.upsert_metric_definitions_monthly"
+        ) as definitions:
+            assert run(["--write"]) == 2
+        history.assert_not_called()
+        definitions.assert_not_called()
 
 
 class TestWritePathPythonPathRegression:
@@ -227,11 +207,8 @@ class TestWritePathPythonPathRegression:
         assert "ModuleNotFoundError" not in result.stderr, (
             f"PYTHONPATH regression: {result.stderr}"
         )
-        # Expected failure mode WITHOUT real credentials: a clean
-        # SupabaseWriteError -> return 1. Proves the import succeeded and
-        # execution reached the credential-resolution step.
-        assert result.returncode == 1, result.stderr
-        assert "SUPABASE_URL" in result.stderr or "SupabaseWriteError" in result.stderr
+        assert result.returncode == 2, result.stderr
+        assert "R1" in result.stderr
 
     def test_dry_run_flag_also_works_without_pythonpath(self):
         """Sanity companion: --dry-run never exercised the buggy import
@@ -251,3 +228,10 @@ class TestWritePathPythonPathRegression:
         )
         assert result.returncode == 0, result.stderr
         assert "ModuleNotFoundError" not in result.stderr
+
+
+def test_legacy_write_refuses_to_recreate_false_month_first_evidence(capsys):
+    with patch("utils.supabase_writer.upsert_metric_history_monthly", return_value=24) as write:
+        assert run(["--write"]) == 2
+    write.assert_not_called()
+    assert "R1" in capsys.readouterr().err
