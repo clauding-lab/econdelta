@@ -32,7 +32,8 @@ create a second cert dir; both this module and ``utils/ca_bundle.py`` read it,
 one file = one rotation point):
   fetchers/ca/sectigo_r36.pem — "Sectigo Public Server Authentication CA DV R36",
   issued by Root R46 (already in certifi), valid through 2036-03-21. Completes the
-  chain for mof.gov.bd (urllib path, host-scoped here) AND www.dse.com.bd /
+  chain for mof.gov.bd and epb.gov.bd (urllib path, host-scoped here; epb.gov.bd
+  confirmed on ExonVPS 2026-10-21: URLError without it, HTTP 200 with it) AND www.dse.com.bd /
   dsebd.org (requests path, via utils/ca_bundle). When it eventually rotates,
   those fetches fail again with CERTIFICATE_VERIFY_FAILED until the new
   intermediate is re-vendored here (fetch it from the leaf's AIA "CA Issuers"
@@ -49,6 +50,7 @@ _CA_DIR = Path(__file__).resolve().parent / "ca"
 # host-suffix -> vendored intermediate PEM that completes that host's chain.
 _HOST_INTERMEDIATES: dict[str, str] = {
     "mof.gov.bd": "sectigo_r36.pem",
+    "epb.gov.bd": "sectigo_r36.pem",
 }
 
 
