@@ -68,7 +68,43 @@ class Round4Review:
 
 ROUND4_FIRST_DAY = "2026-09-25"  # = NBR_RESTAMP_WINDOW[1] + 1 day
 ROUND4_IDS = (NBR_RESTAMP_ID, *NBR_PARENT_RESTAMP_RUNS)  # child, parent, alias
-REVIEWED: Round4Review | None = None  # PLACEHOLDER until the Day-2 review
+# Day-2 review, Wed 21 Oct 2026: transcribed byte-for-byte from `--draft` on the writer-paused
+# recapture (15:06:57 BDT) and the Night-1 snapshot; signed in the release ledger's round4/review.md.
+REVIEWED = Round4Review(
+    last_capture_day="2026-10-19",
+    missing_days=frozenset({"2026-09-29", "2026-09-30"}),
+    runs={
+        "fiscal_nbr_collected_trn": (
+            (4.15, "2026-09-25", "2026-10-19"),
+        ),
+        "tax_revenue": (
+            (415473.0, "2026-09-25", "2026-10-19"),
+        ),
+        "nbr_fytd_collected_cr": (
+            (415473.0, "2026-09-25", "2026-10-19"),
+        ),
+    },
+    alias_quirks={
+        "nbr_fytd_collected_cr": (
+        ),
+    },
+    acknowledged_month_end_days=frozenset(),
+    keep_period_rows={
+        "fiscal_nbr_collected_trn": (
+            ("2026-06-30", 4.15),
+        ),
+        "tax_revenue": (
+            ("2026-06-30", 415473.0),
+        ),
+        "nbr_fytd_collected_cr": (
+            ("2026-06-30", 415473.0),
+        ),
+    },
+    recapture_sha256="09fef55f4c8088de4d14be8dd430cc93cd14cac277ac4bba1ff5cc90c5f25b46",
+    night1_sha256="8d0da087615e345090454ae6b6ea2ac805c299fb6879844f07846e3be26e8c9d",
+    recapture_manifest_sha256="8bb4129edd97981bcc3fadb08ecb08e9f901b3c31bc37556f00749eaad9da640",
+    night1_manifest_sha256="435f00e5b24677010bcece62643e9b37458e9c3f965e07d767530d578fe7c8d2",
+)
 
 
 # Owner decision D2 (2 Oct 2026). Wording PENDING OWNER CONFIRMATION (round-4 design OQ6): it

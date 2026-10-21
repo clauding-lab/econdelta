@@ -220,16 +220,28 @@ def _main_build(world: World, git: Callable[[list[str]], tuple[int, str]] | None
 # --- T1, T2: the committed placeholder and the first day -----------------------------------
 
 
-def test_the_committed_review_is_a_placeholder_and_build_refuses(tmp_path, capsys):
-    world = _world(tmp_path)
-    output = tmp_path / "candidate.json"
+def test_the_committed_review_passes_its_transcription_checks_and_binds_the_reviewed_hashes():
+    review = r4.REVIEWED
 
-    code = _main_build(world, None, output=output)  # the real local git is never reached
-
-    assert r4.REVIEWED is None
-    assert code == 1
-    assert "round-4 review is a placeholder" in capsys.readouterr().out
-    assert not output.exists()
+    assert review is not None
+    assert r4.transcription_problems(review) == []
+    # The Day-2 recapture (Wed 21 Oct 15:06:57 BDT) and the pre-R1 Night-1 snapshot (run-sheet S-7).
+    assert (review.recapture_sha256, review.recapture_manifest_sha256) == (
+        "09fef55f4c8088de4d14be8dd430cc93cd14cac277ac4bba1ff5cc90c5f25b46",
+        "8bb4129edd97981bcc3fadb08ecb08e9f901b3c31bc37556f00749eaad9da640",
+    )
+    assert (review.night1_sha256, review.night1_manifest_sha256) == (
+        "8d0da087615e345090454ae6b6ea2ac805c299fb6879844f07846e3be26e8c9d",
+        "435f00e5b24677010bcece62643e9b37458e9c3f965e07d767530d578fe7c8d2",
+    )
+    # 23 capture days (25 Sep..19 Oct less 29 and 30 Sep) x 3 ids = 69 exclusions; the
+    # producer's 30 Jun period rows are kept.
+    assert len(r4.capture_days(review)) * len(ROUND4_IDS) == 69
+    assert review.keep_period_rows == {
+        "fiscal_nbr_collected_trn": (("2026-06-30", 4.15),),
+        "tax_revenue": (("2026-06-30", 415473.0),),
+        "nbr_fytd_collected_cr": (("2026-06-30", 415473.0),),
+    }
 
 
 def test_round4_first_day_is_the_day_after_the_reviewed_r1_window():
