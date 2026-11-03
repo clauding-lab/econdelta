@@ -33,6 +33,10 @@ METRIC_ID = "exports_usd_mn_monthly"
 SOURCE = "epb_goods_summary"
 NS = {"s": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
 MONTHS = {name.lower(): i for i, name in enumerate(calendar.month_name) if name}
+# EPB abbreviates in headers ("July-Oct."); accept the standard short forms so a
+# "Sept. 2026" column is read, not silently dropped (each edition carries only
+# its two latest months, so a dropped month never comes back).
+MONTHS |= {name[:3]: i for name, i in list(MONTHS.items())} | {"sept": 9}
 
 
 class _Links(HTMLParser):
@@ -123,6 +127,47 @@ def _cells(archive: zipfile.ZipFile, name: str, strings: list[str]) -> dict[str,
     return cells
 
 
+def _monthly_column(label: str, fy_start: int) -> date | None:
+    """Map one single-month header to its data month, or None if it is not one.
+
+    EPB has used two labels for the same column:
+    - fiscal-year style, "Export Performance for August 2026-27" (Jul-Aug 2026-27 edition);
+    - calendar-year style, "Export Performance for October 2026" (Jul-Oct 2026-27 edition).
+    Each edition also carries the same month a year earlier as a comparator
+    ("... August 2025-26" / "... October 2025"); that column is skipped, never
+    read. Any other year contradicts the summary period and fails closed.
+    Abbreviations ("Sept.", "Oct") are read; an unknown single word fails closed.
+    Cumulative "July-Oct. 2026-27" headers never match (hyphenated name).
+    """
+    fiscal = re.fullmatch(
+        r"Export Performance for ([A-Za-z]+)[.,]? (20\d{2})-(\d{2}|20\d{2})", label, re.I
+    )
+    calendar_style = re.fullmatch(
+        r"Export Performance for ([A-Za-z]+)[.,]? (20\d{2})", label, re.I
+    )
+    if fiscal:
+        name, start = fiscal[1], int(fiscal[2])
+        if start != fy_start:
+            return None  # same month of the previous fiscal year: comparator only
+        if int(fiscal[3]) % 100 != (fy_start + 1) % 100:
+            raise ValueError("EPB column fiscal year contradicts summary period")
+    elif calendar_style:
+        name = calendar_style[1]
+    else:
+        return None
+    month = MONTHS.get(name.lower())
+    if month is None:
+        raise ValueError("EPB monthly column month is unknown")
+    expected_year = fy_start if month >= 7 else fy_start + 1
+    if calendar_style:
+        year = int(calendar_style[2])
+        if year == expected_year - 1:
+            return None  # same month of the previous fiscal year: comparator only
+        if year != expected_year:
+            raise ValueError("EPB calendar-year column contradicts summary period")
+    return date(expected_year, month, 1)
+
+
 def parse_exports_workbook(content: bytes) -> list[tuple[date, float]]:
     """Return current-FY single-month goods totals from a verified Summary Sheet."""
     observations: dict[date, float] = {}
@@ -147,10 +192,18 @@ def parse_exports_workbook(content: bytes) -> list[tuple[date, float]]:
                 and "manufactured commodities" in text
             ):
                 raise ValueError("EPB summary goods basis/unit is unverified")
-            period = re.search(r"period:\s*july(?:[-–][a-z]+)?\s+(20\d{2})-(20\d{2})", text)
-            if not period or int(period[2]) != int(period[1]) + 1:
+            period = re.search(
+                r"period:\s*july(?:[-–]([a-z]+)\.?)?\s+(20\d{2})-(20\d{2})", text
+            )
+            if not period or int(period[3]) != int(period[2]) + 1:
                 raise ValueError("EPB summary fiscal period is unverified")
-            fy_start = int(period[1])
+            fy_start = int(period[2])
+            end_month = MONTHS.get(period[1] or "july")
+            if end_month is None:
+                raise ValueError("EPB summary period end month is unknown")
+            first = date(fy_start, 7, 1)
+            last = date(fy_start if end_month >= 7 else fy_start + 1, end_month, 1)
+            sheet_months: set[date] = set()
             totals = [
                 ref
                 for ref, val in cells.items()
@@ -160,17 +213,13 @@ def parse_exports_workbook(content: bytes) -> list[tuple[date, float]]:
                 raise ValueError("EPB summary has ambiguous goods total")
             total_row = re.search(r"\d+$", totals[0])[0]
             for ref, label in cells.items():
-                match = re.fullmatch(
-                    r"Export Performance for ([A-Za-z]+) (20\d{2})-(\d{2}|20\d{2})", label, re.I
-                )
-                if not match or int(match[2]) != fy_start:
+                observation = _monthly_column(label, fy_start)
+                if observation is None:
                     continue  # never cumulative July-Aug or prior-FY comparator
-                if int(match[3]) % 100 != (fy_start + 1) % 100:
-                    raise ValueError("EPB column fiscal year contradicts summary period")
-                month = MONTHS.get(match[1].lower())
-                if month is None:
-                    raise ValueError("EPB monthly column month is unknown")
-                observation = date(fy_start if month >= 7 else fy_start + 1, month, 1)
+                if not first <= observation <= last:
+                    # A mislabel would store one month's value under another, for good.
+                    raise ValueError("EPB monthly column lies outside the summary period")
+                sheet_months.add(observation)
                 column = re.match(r"[A-Z]+", ref)[0]
                 value = float(cells[column + total_row])
                 if not math.isfinite(value) or not 0 < value < 100_000:
@@ -178,6 +227,8 @@ def parse_exports_workbook(content: bytes) -> list[tuple[date, float]]:
                 if observation in observations and observations[observation] != value:
                     raise ValueError("EPB summary has conflicting monthly totals")
                 observations[observation] = value
+            if last not in sheet_months:
+                raise ValueError("EPB summary lacks a column for its period end month")
     if not observations:
         raise ValueError("No verified EPB goods summary monthly columns")
     return sorted(observations.items())
