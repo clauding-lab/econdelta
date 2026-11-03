@@ -17,6 +17,78 @@ def test_real_workbook_selects_current_fy_single_month_goods_values():
     assert rows == [(date(2026, 7, 1), 4727.45), (date(2026, 8, 1), 4429.45)]
 
 
+def test_calendar_year_month_labels_select_current_fy_months_not_prior_year_comparator():
+    # EPB's Jul-Oct 2026-27 edition (posted 2 Nov 2026) labels single months
+    # "Export Performance for October 2026" instead of "... October 2026-27".
+    # Its "October 2025" column is last year's comparator and must be skipped.
+    rows = module().parse_exports_workbook((FIXTURES / "epb-jul-oct-2026.xlsx").read_bytes())
+    assert rows == [(date(2026, 9, 1), 3937.23), (date(2026, 10, 1), 3991.77)]
+    assert date(2025, 10, 1) not in dict(rows)
+
+
+def _relabel(workbook: bytes, old: bytes, new: bytes) -> bytes:
+    import io
+    import zipfile
+    out = io.BytesIO()
+    with zipfile.ZipFile(io.BytesIO(workbook)) as original, zipfile.ZipFile(out, "w") as changed:
+        for name in original.namelist():
+            content = original.read(name)
+            if name in {"xl/sharedStrings.xml", "xl/worksheets/sheet1.xml"}:
+                content = content.replace(old, new)
+            changed.writestr(name, content)
+    return out.getvalue()
+
+
+@pytest.mark.parametrize("label", [b"October 2027", b"October 2024", b"September 2028"])
+def test_calendar_year_label_outside_fy_or_comparator_year_fails_closed(label):
+    workbook = (FIXTURES / "epb-jul-oct-2026.xlsx").read_bytes()
+    # Only the single-month column header ("... for October 2026"), never the
+    # "Period: July-October 2026-2027" line or the "% Change" headers.
+    target = b"for September 2026" if label.startswith(b"September") else b"for October 2026"
+    changed = _relabel(workbook, target, b"for " + label)
+    with pytest.raises(ValueError, match="contradicts"):
+        module().parse_exports_workbook(changed)
+
+
+@pytest.mark.parametrize("label", [b"Sept. 2026", b"Sept 2026", b"Sep 2026", b"September, 2026"])
+def test_abbreviated_calendar_month_label_is_read_not_dropped(label):
+    workbook = (FIXTURES / "epb-jul-oct-2026.xlsx").read_bytes()
+    changed = _relabel(workbook, b"for September 2026", b"for " + label)
+    rows = module().parse_exports_workbook(changed)
+    assert rows == [(date(2026, 9, 1), 3937.23), (date(2026, 10, 1), 3991.77)]
+
+
+def test_unknown_calendar_month_word_fails_closed_instead_of_dropping_the_month():
+    workbook = (FIXTURES / "epb-jul-oct-2026.xlsx").read_bytes()
+    changed = _relabel(workbook, b"for September 2026", b"for Septmber 2026")
+    with pytest.raises(ValueError, match="month is unknown"):
+        module().parse_exports_workbook(changed)
+
+
+@pytest.mark.parametrize("label", [b"November 2026", b"June 2027"])
+def test_month_after_the_period_end_fails_closed(label):
+    # Period: July-October -> a "November" or "June" column is a mislabel; never
+    # store September's value under a later month in the append-only series.
+    workbook = (FIXTURES / "epb-jul-oct-2026.xlsx").read_bytes()
+    changed = _relabel(workbook, b"for September 2026", b"for " + label)
+    with pytest.raises(ValueError, match="period"):
+        module().parse_exports_workbook(changed)
+
+
+def test_missing_period_end_month_fails_closed():
+    # The October column relabelled as a comparator year leaves only September.
+    workbook = (FIXTURES / "epb-jul-oct-2026.xlsx").read_bytes()
+    changed = _relabel(workbook, b"for October 2026", b"for October 2025")
+    with pytest.raises(ValueError):
+        module().parse_exports_workbook(changed)
+
+
+def test_calendar_year_months_reconcile_with_fiscal_ytd_total():
+    rows = dict(module().parse_exports_workbook((FIXTURES / "epb-jul-oct-2026.xlsx").read_bytes()))
+    earlier = dict(module().parse_exports_workbook((FIXTURES / "epb-jul-aug-2026-a.xlsx").read_bytes()))
+    assert round(sum({**earlier, **rows}.values()), 2) == 17085.90  # the workbook's July-Oct. 2026-27 total
+
+
 def test_region_cumulative_workbook_cannot_be_spliced_into_goods_series():
     with pytest.raises(ValueError, match="summary"):
         module().parse_exports_workbook((FIXTURES / "epb-jul-aug-2026-b.xlsx").read_bytes())
