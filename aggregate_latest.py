@@ -120,9 +120,11 @@ _TRADING_DAY_SOURCES = frozenset({"dse_market"})
 # fixes the underlying as_of forgery.
 # dse_sector_heat left this set on 2026-10-01: its new JSON source carries the
 # trading-session date (session.sessionDate), so a miss from it is now signal.
+# html_call_money left this set on 2026-11-24: it now reads the page's own
+# date header (it never matched the live page before, so the LLM fallback
+# supplied undated values that #137 then dropped as "unavailable").
 _NEVER_DATED_PARSE_STRATEGIES = frozenset({
     "html_table_row",
-    "html_call_money",
 })
 
 STALE_THRESHOLD_HOURS = 24.0
@@ -1318,6 +1320,14 @@ def _build_source_as_of_map(domains: dict[str, dict[str, Any]]) -> dict[str, dat
     if mmrr_date is not None:
         for fanned_id in MONEY_MARKET_REF_RATE_FANOUT_IDS:
             result.setdefault(fanned_id, mmrr_date)
+
+    # Call-money fan-out dates: same class. ``_flatten_dict_indicators`` mints
+    # call_money_rate_<tenor> from the parent dict; every tenor is read from
+    # the same page_header date block, so they share the parent's date.
+    cm_date = result.get("call_money_rate")
+    if cm_date is not None:
+        for tenor in ("1d", "7d", "14d", "90d"):
+            result.setdefault(f"call_money_rate_{tenor}", cm_date)
 
     # DSE sector-heat fan-out dates: same landmine 26/47 class as above.
     # ``_flatten_dict_indicators`` mints ``dse_sector_heat_<sector>`` from the

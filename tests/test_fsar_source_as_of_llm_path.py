@@ -305,7 +305,7 @@ class TestUndatedQuarterlyWarns:
         ), "daily/monthly cadences must now warn too -- only the parser allow-list is silent"
 
     def test_live_scrape_parser_stays_silent_on_the_allow_list(self, caplog):
-        """html_table_row / html_call_money / dse_sector_heat scrape a LIVE
+        """html_table_row / dse_sector_heat scrape a LIVE
         page with no publication date printed anywhere to recover --
         source_as_of is legitimately always absent for these, so warning here
         would be pure noise on every single aggregate run (~9 registry
@@ -329,6 +329,25 @@ class TestUndatedQuarterlyWarns:
                     "_parse_strategy": "html_table_row",
                     "scraped_at": datetime.now(timezone.utc).isoformat(),
                 },
+            }
+        }
+        with caplog.at_level(logging.WARNING, logger="aggregate_latest"):
+            agg._build_source_as_of_map(domains)
+        for indicator_id in ("bill_bond_rates", "tbond_5y_yield"):
+            assert not any(indicator_id in r.getMessage() for r in caplog.records), (
+                f"{indicator_id} uses a live-scrape parser with no date to "
+                "recover -- must stay silent (allow-list)"
+            )
+
+    def test_undated_call_money_now_warns(self, caplog):
+        """html_call_money LEFT the allow-list (2026-11-24): the BB page prints
+        its value date and the parser now reads it. An undated call-money
+        reading is therefore a real failure -- silence here is what hid five
+        weeks of dropped readings (19 Oct -> 23 Nov 2026)."""
+        import aggregate_latest as agg
+
+        domains = {
+            "money_market": {
                 "call_money_rate": {
                     "value": 9.8,
                     "cadence": "daily",
@@ -339,11 +358,7 @@ class TestUndatedQuarterlyWarns:
         }
         with caplog.at_level(logging.WARNING, logger="aggregate_latest"):
             agg._build_source_as_of_map(domains)
-        for indicator_id in ("bill_bond_rates", "tbond_5y_yield", "call_money_rate"):
-            assert not any(indicator_id in r.getMessage() for r in caplog.records), (
-                f"{indicator_id} uses a live-scrape parser with no date to "
-                "recover -- must stay silent (allow-list)"
-            )
+        assert any("call_money_rate" in r.getMessage() for r in caplog.records)
 
 
 class TestUndatedWarningDiscordSplit:
