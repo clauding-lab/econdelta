@@ -1321,14 +1321,6 @@ def _build_source_as_of_map(domains: dict[str, dict[str, Any]]) -> dict[str, dat
         for fanned_id in MONEY_MARKET_REF_RATE_FANOUT_IDS:
             result.setdefault(fanned_id, mmrr_date)
 
-    # Call-money fan-out dates: same class. ``_flatten_dict_indicators`` mints
-    # call_money_rate_<tenor> from the parent dict; every tenor is read from
-    # the same page_header date block, so they share the parent's date.
-    cm_date = result.get("call_money_rate")
-    if cm_date is not None:
-        for tenor in ("1d", "7d", "14d", "90d"):
-            result.setdefault(f"call_money_rate_{tenor}", cm_date)
-
     # DSE sector-heat fan-out dates: same landmine 26/47 class as above.
     # ``_flatten_dict_indicators`` mints ``dse_sector_heat_<sector>`` from the
     # parent dict; only the parent carries the trading-session date, so copy

@@ -110,3 +110,29 @@ def test_legacy_fictional_shape_no_longer_matches(tmp_path):
     html = "<table><tr><td>1D</td><td>9.50</td></tr></table>"
     with pytest.raises(ParseError):
         _parse(_artifact(tmp_path, html))
+
+
+def test_live_path_dates_every_tenor():
+    """The live aggregate (_build_observations) fans the dict out into
+    call_money_rate_1d/_7d/_14d; each child must carry the page date and stay
+    eligible. Before 2026-11-24 they were undated -> 'unavailable' -> dropped,
+    which froze The Brief at 9.45% (19 Oct) for five weeks."""
+    import aggregate_latest as agg
+    from utils.observations import eligible
+
+    now = datetime(2026, 11, 23, 19, 30, tzinfo=timezone.utc)
+    domains = {"money_market": {"call_money_rate": {
+        "value": {"1D": 9.16, "7D": 9.31, "14D": 9.08},
+        "cadence": "daily",
+        "source_as_of": "2026-11-23",
+        "_parse_strategy": "html_call_money",
+        "_provenance": "deterministic",
+        "scraped_at": "2026-11-23T19:05:00+00:00",
+    }}}
+    obs = agg._build_observations({}, domains, {}, now=now, holidays=set(),
+                                  yield_values={}, yield_dates={})
+    for key, val in (("call_money_rate_1d", 9.16), ("call_money_rate_7d", 9.31),
+                     ("call_money_rate_14d", 9.08)):
+        assert obs[key].value == val, key
+        assert obs[key].as_of == date(2026, 11, 23), key
+        assert eligible(obs[key], today=now.date()), key

@@ -341,9 +341,10 @@ class TestUndatedQuarterlyWarns:
 
     def test_undated_call_money_now_warns(self, caplog):
         """html_call_money LEFT the allow-list (2026-11-24): the BB page prints
-        its value date and the parser now reads it. An undated call-money
-        reading is therefore a real failure -- silence here is what hid five
-        weeks of dropped readings (19 Oct -> 23 Nov 2026)."""
+        its value date and the parser now reads it, so an undated reading is a
+        real failure. NOTE: this function is not on the live aggregate path
+        (landmine 47 branch note) -- the live path is covered by
+        test_html_call_money.py::test_live_path_dates_every_tenor."""
         import aggregate_latest as agg
 
         domains = {
