@@ -124,12 +124,18 @@ class HtmlCallMoneyParser:
         return ParseResult(value=out, _parse_strategy="html_call_money", source_as_of=as_of)
 
     def recover_source_as_of(self, artifact: FetchResult) -> date | None:
-        """Value date for the LLM-fallback path (landmine 26). Never raises."""
+        """Value date for the LLM-fallback path (landmine 26). Never raises.
+
+        Returns a date ONLY when the deterministic parse succeeds on the same
+        page. The LLM path runs precisely when that parse failed (newest block
+        lacks a 1-Day row, a "-" or out-of-envelope average, a layout change),
+        and the LLM reads the whole page — every date block, any column. Its
+        numbers can therefore come from an OLDER block than the newest header
+        (adversarial review, 2026-11-24: 22 Nov's 9.21 stamped 23 Nov). An
+        undated LLM value is dropped downstream as unavailable: stale but
+        honest beats a wrong date on a banker's rate.
+        """
         try:
-            soup = BeautifulSoup(
-                artifact.artifact_path.read_text(encoding="utf-8"), "html.parser"
-            )
-            block = _newest_block(soup)
-            return block[0] if block else None
+            return self.parse(artifact, instruction="all_tenors").source_as_of
         except Exception:  # noqa: BLE001 — recovery is best-effort
             return None

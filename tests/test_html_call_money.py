@@ -72,6 +72,24 @@ def test_missing_overnight_refuses(tmp_path):
         _parse(_artifact(tmp_path, html))
 
 
+def test_llm_fallback_gets_no_date_when_the_deterministic_parse_fails(tmp_path):
+    """Adversarial review 2026-11-24: newest block (23 Nov) lacks a 1-Day row,
+    an older block (22 Nov) has one. The LLM fallback reads the whole page and
+    can return 22 Nov's 9.21 — it must NOT be stamped 23 Nov. No date means
+    the aggregate drops it as unavailable (stale-but-honest)."""
+    html = (_HEAD + _hdr("23 November, 2026") + _row("Short Notice", 7, "9.31")
+            + _hdr("22 November, 2026") + _row("Overnight", 1, "9.21") + _TAIL)
+    art = _artifact(tmp_path, html)
+    with pytest.raises(ParseError):
+        _parse(art)
+    assert get_parser("html_call_money").recover_source_as_of(art) is None
+
+
+def test_llm_fallback_gets_no_date_on_out_of_envelope_average(tmp_path):
+    html = _HEAD + _hdr("23 November, 2026") + _row("Overnight", 1, "4886.99") + _TAIL
+    assert get_parser("html_call_money").recover_source_as_of(_artifact(tmp_path, html)) is None
+
+
 def test_no_dated_header_refuses_and_recovers_none(tmp_path):
     art = _artifact(tmp_path, _HEAD + _row("Overnight", 1, "9.16") + _TAIL)
     with pytest.raises(ParseError):
