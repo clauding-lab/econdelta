@@ -947,7 +947,7 @@
       "fetch": {
         "type": "pdf",
         "url": "https://www.bb.org.bd/en/index.php/publication/publictn/3/11",
-        "task": "{\"table\":\"money_credit\",\"row\":\"B. Deposits of the banking system\",\"column\":\"latest_month\",\"unit\":\"BDT crore\"}",
+        "task": "{\"table\":\"money_credit\",\"row\":\"B. Deposits\",\"column\":\"latest_month\",\"unit\":\"BDT crore\"}",
         "discover": "latest_pdf_link"
       },
       "parse": {
