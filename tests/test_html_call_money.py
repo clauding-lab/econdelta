@@ -1,34 +1,138 @@
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 import pytest
 
 import parsers.html_call_money  # noqa: F401
 from fetchers.base import FetchResult
+from parsers.base import ParseError
 from parsers.registry import get_parser
 
-_HTML = """
-<table>
-<tr><th>Tenor</th><th>Rate (%)</th></tr>
-<tr><td>1D</td><td>9.50</td></tr>
-<tr><td>7D</td><td>9.75</td></tr>
-<tr><td>14D</td><td>10.10</td></tr>
-<tr><td>90D</td><td>10.50</td></tr>
-</table>
+_FIXTURE = Path(__file__).parent / "fixtures" / "bb_call_money.html"
+
+_HEAD = """
+<div class="page_header">Statement of Interbank Money Market Transactions</div>
+<table><thead><tr><th>Product</th><th>Maturity</th><th>Amount</th>
+<th>Highest</th><th>Lowest</th><th>Average</th><th>Number of Deals</th></tr></thead><tbody>
 """
+_TAIL = "</tbody></table>"
 
 
-@pytest.fixture
-def artifact(tmp_path: Path):
+def _row(product: str, days: int, avg: str) -> str:
+    return (f"<tr><td>{product}</td><td>{days} Day(/s)</td><td>100.00</td>"
+            f"<td>11.00</td><td>8.00</td><td>{avg}</td><td>5</td></tr>")
+
+
+def _hdr(text: str) -> str:
+    return f'<tr><td colspan="7" class="page_header">{text}</td></tr>'
+
+
+def _artifact(tmp_path: Path, html: str) -> FetchResult:
     p = tmp_path / "p.html"
-    p.write_text(_HTML)
+    p.write_text(html, encoding="utf-8")
     return FetchResult(
         indicator_id="call_money_rate", artifact_path=p, artifact_type="html",
-        fetched_at=datetime.now(timezone.utc), source_url="x", sha256="x"*64, cache_hit=False,
+        fetched_at=datetime.now(timezone.utc), source_url="x", sha256="x" * 64, cache_hit=False,
     )
 
 
-def test_extracts_all_tenors_as_dict(artifact):
-    p = get_parser("html_call_money")
-    r = p.parse(artifact, instruction="all_tenors")
-    assert r.value == {"1D": 9.50, "7D": 9.75, "14D": 10.10, "90D": 10.50}
+def _parse(art: FetchResult):
+    return get_parser("html_call_money").parse(art, instruction="all_tenors")
+
+
+def test_real_page_extracts_average_rates_and_page_date():
+    art = FetchResult(
+        indicator_id="call_money_rate", artifact_path=_FIXTURE, artifact_type="html",
+        fetched_at=datetime.now(timezone.utc), source_url="x", sha256="x" * 64, cache_hit=False,
+    )
+    r = _parse(art)
+    # 23 Nov 2026 live page: overnight avg 9.16, 7-day 9.31, 14-day 9.08; no 90-day row.
+    assert r.value == {"1D": 9.16, "7D": 9.31, "14D": 9.08}
+    assert r.source_as_of == date(2026, 11, 23)
+    assert get_parser("html_call_money").recover_source_as_of(art) == date(2026, 11, 23)
+
+
+def test_reads_only_the_newest_date_block(tmp_path):
+    html = (_HEAD + _hdr("22 November, 2026") + _row("Overnight", 1, "9.21") + _row("Short Notice", 7, "9.40")
+            + _hdr("23 November, 2026") + _row("Overnight", 1, "9.16") + _TAIL)
+    r = _parse(_artifact(tmp_path, html))
+    assert r.source_as_of == date(2026, 11, 23)
+    # The 22 Nov 7-day must NOT leak into the 23 Nov reading.
+    assert r.value == {"1D": 9.16}
+
+
+def test_ignores_other_maturities(tmp_path):
+    html = _HEAD + _hdr("23 November, 2026") + _row("Overnight", 1, "9.16") + _row("Short Notice", 3, "9.20") + _TAIL
+    assert _parse(_artifact(tmp_path, html)).value == {"1D": 9.16}
+
+
+def test_missing_overnight_refuses(tmp_path):
+    html = _HEAD + _hdr("23 November, 2026") + _row("Short Notice", 7, "9.31") + _TAIL
+    with pytest.raises(ParseError):
+        _parse(_artifact(tmp_path, html))
+
+
+def test_llm_fallback_gets_no_date_when_the_deterministic_parse_fails(tmp_path):
+    """Adversarial review 2026-11-24: newest block (23 Nov) lacks a 1-Day row,
+    an older block (22 Nov) has one. The LLM fallback reads the whole page and
+    can return 22 Nov's 9.21 — it must NOT be stamped 23 Nov. No date means
+    the aggregate drops it as unavailable (stale-but-honest)."""
+    html = (_HEAD + _hdr("23 November, 2026") + _row("Short Notice", 7, "9.31")
+            + _hdr("22 November, 2026") + _row("Overnight", 1, "9.21") + _TAIL)
+    art = _artifact(tmp_path, html)
+    with pytest.raises(ParseError):
+        _parse(art)
+    assert get_parser("html_call_money").recover_source_as_of(art) is None
+
+
+def test_llm_fallback_gets_no_date_on_out_of_envelope_average(tmp_path):
+    html = _HEAD + _hdr("23 November, 2026") + _row("Overnight", 1, "4886.99") + _TAIL
+    assert get_parser("html_call_money").recover_source_as_of(_artifact(tmp_path, html)) is None
+
+
+def test_no_dated_header_refuses_and_recovers_none(tmp_path):
+    art = _artifact(tmp_path, _HEAD + _row("Overnight", 1, "9.16") + _TAIL)
+    with pytest.raises(ParseError):
+        _parse(art)
+    assert get_parser("html_call_money").recover_source_as_of(art) is None
+
+
+def test_shifted_column_out_of_range_refuses(tmp_path):
+    # An inserted column putting the crore Amount in the Average slot must not
+    # publish 4886.99 as a percentage.
+    html = _HEAD + _hdr("23 November, 2026") + _row("Overnight", 1, "4886.99") + _TAIL
+    with pytest.raises(ParseError):
+        _parse(_artifact(tmp_path, html))
+
+
+def test_legacy_fictional_shape_no_longer_matches(tmp_path):
+    # The old parser's expected "1D | 9.50" rows never existed on the live page.
+    html = "<table><tr><td>1D</td><td>9.50</td></tr></table>"
+    with pytest.raises(ParseError):
+        _parse(_artifact(tmp_path, html))
+
+
+def test_live_path_dates_every_tenor():
+    """The live aggregate (_build_observations) fans the dict out into
+    call_money_rate_1d/_7d/_14d; each child must carry the page date and stay
+    eligible. Before 2026-11-24 they were undated -> 'unavailable' -> dropped,
+    which froze The Brief at 9.45% (19 Oct) for five weeks."""
+    import aggregate_latest as agg
+    from utils.observations import eligible
+
+    now = datetime(2026, 11, 23, 19, 30, tzinfo=timezone.utc)
+    domains = {"money_market": {"call_money_rate": {
+        "value": {"1D": 9.16, "7D": 9.31, "14D": 9.08},
+        "cadence": "daily",
+        "source_as_of": "2026-11-23",
+        "_parse_strategy": "html_call_money",
+        "_provenance": "deterministic",
+        "scraped_at": "2026-11-23T19:05:00+00:00",
+    }}}
+    obs = agg._build_observations({}, domains, {}, now=now, holidays=set(),
+                                  yield_values={}, yield_dates={})
+    for key, val in (("call_money_rate_1d", 9.16), ("call_money_rate_7d", 9.31),
+                     ("call_money_rate_14d", 9.08)):
+        assert obs[key].value == val, key
+        assert obs[key].as_of == date(2026, 11, 23), key
+        assert eligible(obs[key], today=now.date()), key
