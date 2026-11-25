@@ -30,6 +30,15 @@ _HEADINGS = {
 }
 
 
+# Unit captions as Bangladesh Bank actually prints them. The live MEI
+# (October 2026 edition) heads its tables "(Crore Taka)" and
+# "(Million USD)"; the "BDT in crore"/"USD in million" forms are kept for
+# older editions. Each list stays unit-specific: a crore marker never
+# proves USD million, and vice versa.
+_CRORE_MARKERS = ("bdt in crore", "crore taka")
+_USD_MILLION_MARKERS = ("usd in million", "million usd")
+
+
 def _norm(value: object) -> str:
     return " ".join(str(value or "").split()).casefold()
 
@@ -60,12 +69,37 @@ def _header_rows(table: list[list[object]]) -> list[tuple[int, list[object]]]:
     ]
 
 
+_DATA_CELL = re.compile(r"^\(?[-+]?\d")
+
+
+def _row_label(row: list[object]) -> str:
+    """The row's label text: its leading non-data cells, joined.
+
+    The live money-and-credit table splits a label across cells
+    (``['B.', 'Deposits', None, '2079903', ...]``), so matching only
+    ``row[0]`` sees just ``'b.'``. Reading stops at the first data cell
+    (a number or a ``(+8.51)`` growth figure), so a value is never read
+    as label text.
+    """
+    parts: list[str] = []
+    for cell in row:
+        text = _norm(cell)
+        if _DATA_CELL.match(text):
+            break
+        if text:
+            parts.append(text)
+    return " ".join(parts)
+
+
 def _row_index(table: list[list[object]], label: str, *, strategy: str | None = None) -> tuple[int, date | None]:
     needle = _norm(label)
     matches: list[tuple[int, date | None]] = []
     for index, row in enumerate(table):
         first = _norm(row[0]) if row else ""
-        next_first = _norm(table[index + 1][0]) if index + 1 < len(table) and table[index + 1] else ""
+        if strategy != "latest_fy":
+            first = _row_label(row) if row else ""
+        next_row = table[index + 1] if index + 1 < len(table) else None
+        next_first = _row_label(next_row) if next_row else ""
         joined = f"{first} {next_first}".strip()
         if strategy == "latest_fy":
             if not re.fullmatch(
@@ -84,7 +118,13 @@ def _row_index(table: list[list[object]], label: str, *, strategy: str | None = 
             else:
                 period = fy_month_end(fy, 6)
             matches.append((index, period))
-        elif first and (needle in first or needle in joined):
+        # A label may wrap onto the next row ("B. Deposits of the" /
+        # "banking system"), so the joined text can match. But a needle that
+        # sits wholly in the NEXT row belongs to that row, not this one
+        # ("banks" + "B. Deposits of the" must not match "B. Deposits").
+        elif first and (
+            needle in first or (needle in joined and needle not in next_first)
+        ):
             matches.append((index, None))
     if not matches:
         raise ParseError(f"MEI row {label!r} not found")
@@ -111,7 +151,7 @@ def _associated_unit_caption(page_text: str, table_kind: str) -> str:
             normalized = _norm(candidate)
             if re.match(r"\d+\.\s", normalized):
                 break
-            if "bdt in crore" in normalized or "usd in million" in normalized:
+            if any(marker in normalized for marker in (*_CRORE_MARKERS, *_USD_MILLION_MARKERS)):
                 caption_lines.append(candidate)
                 break
             if normalized:
@@ -129,9 +169,9 @@ def _unit_in_table(table: list[list[object]], unit: str, caption: str = "") -> b
         # table's balances are headed BDT crore.
         return "money multiplier" in text
     if unit == "BDT crore":
-        return "bdt in crore" in text
+        return any(marker in text for marker in _CRORE_MARKERS)
     if unit == "USD million":
-        return "usd in million" in text
+        return any(marker in text for marker in _USD_MILLION_MARKERS)
     return False
 
 
