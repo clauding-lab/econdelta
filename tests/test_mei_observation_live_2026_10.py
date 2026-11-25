@@ -95,3 +95,13 @@ def test_wrapped_label_tail_does_not_claim_the_next_row():
     ]
     assert _row_index(table, "B. Deposits")[0] == 2
     assert _row_index(table, "A. Currency outside banks")[0] == 0
+
+
+def test_money_credit_selector_never_reads_the_reserve_money_table():
+    # "B. Deposits" is a prefix of reserve money's "B. Deposits Held with BB*"
+    # (101114); without a table-identity check that value would be published
+    # as deposits of the banking system if both tables shared a page.
+    selector = _registry_selector("deposits_of_the_system")
+    section = FIXTURE["sections"]["reserve_money"]
+    with pytest.raises(ParseError, match="is not 'money_credit'"):
+        _select_observation(section["table"], selector=selector, caption="(Crore Taka)")

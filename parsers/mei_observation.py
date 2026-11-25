@@ -69,6 +69,10 @@ def _header_rows(table: list[list[object]]) -> list[tuple[int, list[object]]]:
     ]
 
 
+# A row only the money-and-credit table carries (June, July, Oct 2026
+# editions); the reserve-money table never has it.
+_TABLE_MARKERS = {"money_credit": "private sector"}
+
 _DATA_CELL = re.compile(r"^\(?[-+]?\d")
 
 
@@ -229,6 +233,14 @@ def _select_observation(
         period, row_index, column, header = _latest_lc_selection(table, column_selector)
     else:
         raise ParseError(f"unsupported MEI column selector {column_selector!r}")
+
+    # Table identity, checked last so header/row errors stay specific. The
+    # short "B. Deposits" selector is also a prefix of reserve money's
+    # "B. Deposits Held with BB*", so a money-and-credit read must prove it is
+    # on the money-and-credit table rather than rely on page layout.
+    marker = _TABLE_MARKERS.get(str(selector.get("table", "")))
+    if marker and marker not in _norm(" ".join(str(c or "") for r in table for c in r)):
+        raise ParseError(f"MEI table is not {selector.get('table')!r} (no {marker!r})")
 
     try:
         raw = table[row_index][column]
