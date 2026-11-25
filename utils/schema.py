@@ -108,6 +108,10 @@ class ForexSnapshot(BaseModel):
     date: date
     scraped_at: datetime
     rates: ForexRates
+    # Trading day the rates belong to (BB homepage inter-bank panel stamp,
+    # accepted only when its WAR matches). None on snapshots written before
+    # 2026-11-24 or when the panel could not be trusted.
+    rates_as_of: date | None = None
     reserves: ForexReserves | None = None
 
 

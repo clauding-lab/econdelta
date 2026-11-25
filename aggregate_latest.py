@@ -1395,6 +1395,16 @@ def _build_tier1_source_as_of_map(
         # succeeds on the BDT-local box: scraped_at's UTC calendar date would
         # then be a day behind the intended BDT reporting day.
         rates_date = forex.date
+        if forex.rates_as_of is not None:
+            # 2026-11-24: the scrape day is the MORNING AFTER the trading day
+            # (01:00 BDT chain), so `forex.date` stamped 23 Nov's WAR as
+            # 24 Nov. rates_as_of is the panel-verified trading date.
+            rates_date = forex.rates_as_of
+        else:
+            logger.warning(
+                "bb_forex snapshot %s has no rates_as_of; dating rates by scrape day",
+                forex.date,
+            )
         for rate_key in ("usd_bdt_mid", "usd_bdt_buy", "usd_bdt_sell", "eur_bdt", "gbp_bdt"):
             result[rate_key] = rates_date
         if bb_forex_ok:

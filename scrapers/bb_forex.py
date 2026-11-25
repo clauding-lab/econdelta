@@ -8,7 +8,7 @@ import os
 import re
 import sys
 import time
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from bs4 import BeautifulSoup
@@ -76,6 +76,8 @@ __all__ = [
     "load_previous_snapshot",
     "main",
     "parse_exchange_rates",
+    "parse_interbank_panel",
+    "rates_observation_date",
     "parse_reserves",
     "write_snapshot",
 ]
@@ -258,6 +260,88 @@ def parse_exchange_rates(html: str) -> ForexRates:
         gbp_bdt=gbp_bdt,
         source_url="",  # caller sets this via model_copy
     )
+
+
+# BB homepage "INTER-BANK EXCHANGE RATE (Previous working day)" panel. Its
+# "Last update: 23rd November, 2026" stamp is the trading day the WAR in the
+# panel belongs to (verified 2026-11-24 against archived homepages 16-23 Nov:
+# weekend fetches keep Thursday's stamp, and each stamp's WAR matches the
+# rate the exchange-rates page served on the following morning's scrape).
+HOMEPAGE_URL = "https://www.bb.org.bd/en/"
+_ORDINAL_DATE_RE = re.compile(
+    r"Last update:\s*(\d{1,2})(?:st|nd|rd|th)?\s+([A-Za-z]+),?\s*(\d{4})"
+)
+# Panel WAR must equal the exchange-rates page WAR to within this many taka
+# before its date is trusted; both are printed to 2-4dp from the same feed.
+_PANEL_WAR_TOLERANCE = 0.005
+# A trustworthy trading date is at most this many days before the scrape day
+# (covers Fri/Sat + the longest run of BB holidays, e.g. Eid). Landmine 39(c):
+# on 2026-08-03 this panel's stamp was MONTHS stale while its value was
+# current, so an old stamp must never be attached even if the WAR matches.
+_PANEL_MAX_AGE_DAYS = 10
+
+
+def parse_interbank_panel(html: str) -> tuple[float, date] | None:
+    """(USD WAR, trading date) from the homepage inter-bank panel, or None.
+
+    Never raises: the panel is a DATE source only, and a missing/changed
+    panel must degrade to "date unknown", never fail the rates scrape.
+    """
+    try:
+        soup = BeautifulSoup(html, "html.parser")
+        panel = soup.select_one("div.exchange")
+        if panel is None:
+            return None
+        war: float | None = None
+        war_col: int | None = None
+        for row in panel.select("div.display_table > div"):
+            cells = [c.get_text(strip=True) for c in row.find_all("div", recursive=False)]
+            upper = [c.upper() for c in cells]
+            if war_col is None:
+                # Locate WAR by its header text, not a fixed position, so an
+                # added/reordered column can't put Highest/Lowest in its place.
+                if "WAR" in upper:
+                    war_col = upper.index("WAR")
+                continue
+            if upper and upper[0] == "USD" and len(cells) > war_col:
+                war = parse_number(cells[war_col])
+                break
+        stamp = panel.select_one("p.last_update")
+        if war is None or stamp is None:
+            return None
+        m = _ORDINAL_DATE_RE.search(stamp.get_text(" ", strip=True))
+        if not m:
+            return None
+        day, month_name, year = m.groups()
+        return war, datetime.strptime(f"{day} {month_name} {year}", "%d %B %Y").date()
+    except Exception:  # noqa: BLE001 -- date recovery is best-effort
+        return None
+
+
+def rates_observation_date(
+    panel: tuple[float, date] | None, usd_war: float, scrape_day: date
+) -> date | None:
+    """The panel's trading date, but only when its WAR matches the scraped WAR
+    AND the date is plausible: within _PANEL_MAX_AGE_DAYS before scrape_day,
+    never after it.
+
+    A WAR mismatch means the two pages describe different days (one updated,
+    the other not yet). An old stamp means the panel is unmaintained again
+    (landmine 39(c)) — a flat WAR can match by coincidence. Either way no
+    date is attached and the aggregate falls back to the scrape day.
+    """
+    if panel is None:
+        return None
+    panel_war, panel_date = panel
+    if abs(panel_war - usd_war) > _PANEL_WAR_TOLERANCE:
+        return None
+    if not (scrape_day - timedelta(days=_PANEL_MAX_AGE_DAYS) <= panel_date <= scrape_day):
+        logger.warning(
+            "inter-bank panel stamp %s implausible for scrape day %s (max age %dd) -- ignored",
+            panel_date, scrape_day, _PANEL_MAX_AGE_DAYS,
+        )
+        return None
+    return panel_date
 
 
 def parse_reserves(html: str) -> ForexReserves:
@@ -584,6 +668,29 @@ def main() -> int:
         rates = parse_exchange_rates(rates_html)
         rates = rates.model_copy(update={"source_url": rates_url})
 
+        rates_as_of: date | None = None
+        try:
+            logger.info("Fetching inter-bank panel date from %s", HOMEPAGE_URL)
+            # One short attempt: this is a date source only, and the rates +
+            # reserves fetches must not wait up to ~195s behind it.
+            panel = parse_interbank_panel(
+                fetch_rendered_html(
+                    HOMEPAGE_URL,
+                    timeout_ms=20_000,
+                    wait_for_selector="div.exchange",
+                    max_attempts=1,
+                )
+            )
+            rates_as_of = rates_observation_date(panel, rates.usd_bdt_mid, date.today())
+        except Exception as e:  # noqa: BLE001 -- date source only, never fatal
+            logger.warning("inter-bank panel fetch failed: %s: %s", type(e).__name__, e)
+        if rates_as_of is None:
+            logger.warning(
+                "no trustworthy trading date for USD/BDT WAR %.4f (panel missing, "
+                "unparseable, or its WAR differs) -- rates_as_of left unset",
+                rates.usd_bdt_mid,
+            )
+
         logger.info("Fetching reserves from %s", reserves_url)
         reserves_html = fetch_rendered_html(
             reserves_url, wait_for_selector="table#sortableTable"
@@ -724,23 +831,26 @@ def main() -> int:
                 reserves_for_snapshot = prev_res
                 exit_code = 2
 
+    # rates_as_of (2026-11-24) is the real trading date of the rates, from the
+    # homepage panel cross-checked above; `date` stays the scrape day (file
+    # name / carry-forward key). The note below predates that and still holds
+    # for the exchange-rates page itself.
     # date=date.today() is intentional here, not an oversight: BB's exchange-
     # rates page (parse_exchange_rates, Currency/Bid/Ask/WAR table) carries no
     # date column or per-row timestamp of any kind for the rates leg -- unlike
     # reserves (reserves.reserves_date, parsed from the table's own period
     # label and already used for the reserves as_of override in
-    # aggregate_latest._build_tier1_source_as_of_map). Landmine 39 already
-    # ruled out the homepage panel's "Last update" stamp as a substitute (it
-    # was observed 5 months stale while the value itself was current) -- there
-    # is no OTHER date-bearing element on this source to recover from. If BB
-    # ever adds a genuine per-quote timestamp to this page, wire it in here
-    # the same way DseSnapshot.date / CommoditySnapshot.date now use their
-    # own source's real date instead of the run date.
+    # aggregate_latest._build_tier1_source_as_of_map). The homepage panel's
+    # "Last update" stamp was once observed months stale (landmine 39(c)), so
+    # it is used ONLY when its WAR matches this page's WAR to 0.005 AND the
+    # stamp is within _PANEL_MAX_AGE_DAYS of today (rates_observation_date);
+    # anything else leaves rates_as_of None and the scrape day stands.
     snapshot = ForexSnapshot(
         schema_version="1.0",
         date=date.today(),
         scraped_at=datetime.now(timezone.utc),
         rates=rates,
+        rates_as_of=rates_as_of,
         reserves=reserves_for_snapshot,
     )
     path = write_snapshot(snapshot)
