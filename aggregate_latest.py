@@ -120,9 +120,11 @@ _TRADING_DAY_SOURCES = frozenset({"dse_market"})
 # fixes the underlying as_of forgery.
 # dse_sector_heat left this set on 2026-10-01: its new JSON source carries the
 # trading-session date (session.sessionDate), so a miss from it is now signal.
+# html_call_money left this set on 2026-11-24: it now reads the page's own
+# date header (it never matched the live page before, so the LLM fallback
+# supplied undated values that #137 then dropped as "unavailable").
 _NEVER_DATED_PARSE_STRATEGIES = frozenset({
     "html_table_row",
-    "html_call_money",
 })
 
 STALE_THRESHOLD_HOURS = 24.0
